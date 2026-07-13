@@ -13,3 +13,16 @@ data class PromptConfig(
 	val framesCount: Int,
 	val framesInterval: Double
 )
+
+/** One entry in the downloadable on-device (LiteRT-LM) model catalog — see res/raw/offline_models.json. */
+data class OfflineModelInfo(
+	val id: String,
+	val displayName: String,
+	val family: String,
+	val description: String,
+	val sizeBytes: Long,
+	val downloadUrl: String,
+	val fileName: String,
+	val backend: String,
+	val supportsExplore: Boolean
+)

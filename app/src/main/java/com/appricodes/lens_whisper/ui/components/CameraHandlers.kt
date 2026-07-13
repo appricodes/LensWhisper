@@ -8,21 +8,18 @@ import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
 import androidx.camera.lifecycle.ProcessCameraProvider
-import androidx.camera.view.PreviewView
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
-import com.appricodes.lens_whisper.ui.screens.MediaSource
 
+/** Unbinds the camera on pause and rebinds on resume — shared by any headless-camera screen. */
 @Composable
 fun AppLifecycleCameraHandler(
     context: Context,
     lifecycleOwner: LifecycleOwner,
-    currentMediaSource: MediaSource,
-    previewView: PreviewView?,
     onPauseTasks: () -> Unit,
     onBindCamera: () -> Unit
 ) {

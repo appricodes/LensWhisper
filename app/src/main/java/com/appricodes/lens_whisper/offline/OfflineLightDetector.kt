@@ -7,99 +7,101 @@ import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
-import kotlin.math.sin
 import kotlin.math.PI
+import kotlin.math.exp
+import kotlin.math.pow
+import kotlin.math.sin
 
+/**
+ * Sonifies scene brightness as a musical tone: fully dark maps to ~200Hz, fully bright maps
+ * two octaves up (~800Hz), quantized to the 24 semitones in between so the result always
+ * lands on a real musical note rather than an arbitrary frequency.
+ */
 object OfflineLightDetector {
 
-	private fun playFrequency(freqOfTone: Double) {
-		val sampleRate = 44100
-		val duration = 0.15                      // 250 ms
-		val numSamples = (duration * sampleRate).toInt()
+    private const val BASE_FREQUENCY = 200.0
+    private const val OCTAVE_SPAN_SEMITONES = 24 // 2 octaves of 12-TET semitones
 
-		val fadeMs = 0.02                        // 20 ms fade
-		val fadeSamples = (fadeMs * sampleRate).toInt()
+    // Fundamental + a few decaying overtones, so the tone sounds like a struck bell/chime
+    // rather than a flat, clinical sine wave.
+    private val harmonics = listOf(
+        1.0 to 1.00,
+        2.0 to 0.45,
+        3.0 to 0.20,
+        4.0 to 0.10
+    )
+    private val harmonicAmplitudeSum = harmonics.sumOf { it.second }
 
-		val sample = DoubleArray(numSamples)
-		val generatedSnd = ByteArray(numSamples * 2)
+    private fun frequencyForBrightness(avgLuma: Int): Double {
+        val fraction = (avgLuma / 255.0).coerceIn(0.0, 1.0)
+        val semitone = Math.round(fraction * OCTAVE_SPAN_SEMITONES)
+        return BASE_FREQUENCY * 2.0.pow(semitone / 12.0)
+    }
 
-		// Generate raw sine wave
-		for (i in 0 until numSamples) {
-			sample[i] = sin(2 * PI * i / (sampleRate / freqOfTone))
-		}
+    private fun playFrequency(freqOfTone: Double) {
+        val sampleRate = 44100
+        val duration = 0.25 // 250 ms, long enough to let the tone "ring" and decay
+        val numSamples = (duration * sampleRate).toInt()
 
-		// Apply fade-in and fade-out
-		for (i in 0 until numSamples) {
-			var amp = 1.0
+        val attackSamples = (0.01 * sampleRate).toInt() // 10 ms quick attack
+        val decayRate = 6.0 // exponential decay coefficient, higher = shorter tail
 
-			// Fade-in
-			if (i < fadeSamples) {
-				amp = i.toDouble() / fadeSamples
-			}
+        val generatedSnd = ByteArray(numSamples * 2)
+        var idx = 0
+        for (i in 0 until numSamples) {
+            val t = i.toDouble() / sampleRate
 
-			// Fade-out
-			if (i > numSamples - fadeSamples) {
-				val pos = numSamples - i
-				amp = pos.toDouble() / fadeSamples
-			}
+            var raw = 0.0
+            for ((harmonicMultiple, amplitude) in harmonics) {
+                raw += amplitude * sin(2 * PI * freqOfTone * harmonicMultiple * t)
+            }
+            raw /= harmonicAmplitudeSum
 
-			sample[i] *= amp
-		}
+            val attack = if (i < attackSamples) i.toDouble() / attackSamples else 1.0
+            val envelope = attack * exp(-decayRate * t)
 
-		// Convert to PCM 16‑bit
-		var idx = 0
-		for (dVal in sample) {
-			val value = (dVal * 32767).toInt().toShort()
-			generatedSnd[idx++] = (value.toInt() and 0x00FF).toByte()
-			generatedSnd[idx++] = ((value.toInt() and 0xFF00) ushr 8).toByte()
-		}
+            val sample = (raw * envelope).coerceIn(-1.0, 1.0)
+            val value = (sample * 32767).toInt().toShort()
+            generatedSnd[idx++] = (value.toInt() and 0x00FF).toByte()
+            generatedSnd[idx++] = ((value.toInt() and 0xFF00) ushr 8).toByte()
+        }
 
-		try {
-			val audioTrack = AudioTrack(
-				AudioManager.STREAM_MUSIC,
-				sampleRate,
-				AudioFormat.CHANNEL_OUT_MONO,
-				AudioFormat.ENCODING_PCM_16BIT,
-				generatedSnd.size,
-				AudioTrack.MODE_STATIC
-			)
+        try {
+            val audioTrack = AudioTrack(
+                AudioManager.STREAM_MUSIC,
+                sampleRate,
+                AudioFormat.CHANNEL_OUT_MONO,
+                AudioFormat.ENCODING_PCM_16BIT,
+                generatedSnd.size,
+                AudioTrack.MODE_STATIC
+            )
 
-			audioTrack.write(generatedSnd, 0, generatedSnd.size)
-			audioTrack.play()
+            audioTrack.write(generatedSnd, 0, generatedSnd.size)
+            audioTrack.play()
 
-			Handler(Looper.getMainLooper()).postDelayed({
-				audioTrack.release()
-			}, 200)
+            Handler(Looper.getMainLooper()).postDelayed({
+                audioTrack.release()
+            }, (duration * 1000).toLong() + 100)
 
-		} catch (e: Exception) {
-			e.printStackTrace()
-		}
-	}
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+    }
 
-	fun detectAndPlayTone(bitmap: Bitmap) {
-		val scaled = Bitmap.createScaledBitmap(bitmap, 64, 64, true)
-		var sum = 0L
+    fun detectAndPlayTone(bitmap: Bitmap) {
+        val scaled = Bitmap.createScaledBitmap(bitmap, 64, 64, true)
+        var sum = 0L
 
-		for (x in 0 until 64) {
-			for (y in 0 until 64) {
-				val pixel = scaled.getPixel(x, y)
-				sum += (0.299 * Color.red(pixel) +
-						0.587 * Color.green(pixel) +
-						0.114 * Color.blue(pixel)).toInt()
-			}
-		}
+        for (x in 0 until 64) {
+            for (y in 0 until 64) {
+                val pixel = scaled.getPixel(x, y)
+                sum += (0.299 * Color.red(pixel) +
+                        0.587 * Color.green(pixel) +
+                        0.114 * Color.blue(pixel)).toInt()
+            }
+        }
 
-		val avg = (sum / (64 * 64)).toInt()
-
-		val freqsAll = listOf(
-			// octave #1
-			196.00, 220.00, 246.94,
-			// octave #2
-			261.63, 293.66, 329.63, 349.23, 392.00, 440.00, 493.88,
-			// octave #3
-			523.26, 587.32, 659.26, 698.46, 784.00, 880.00, 987.76, 1046.50
-		)
-
-		playFrequency(freqsAll[(avg / 15).coerceIn(0, freqsAll.size - 1)])
-	}
+        val avg = (sum / (64 * 64)).toInt()
+        playFrequency(frequencyForBrightness(avg))
+    }
 }

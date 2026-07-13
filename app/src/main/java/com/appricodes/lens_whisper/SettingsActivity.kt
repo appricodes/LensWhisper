@@ -8,11 +8,13 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -22,12 +24,14 @@ import androidx.compose.ui.unit.sp
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.offline.OfflineTranslator
+import com.appricodes.lens_whisper.ui.components.ModelCreditsHeader
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 
 class SettingsActivity : ComponentActivity() {
 
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
+		val prefs = PreferencesManager(this)
 		val appSettings = SettingsRepository(this).loadSettingsFromAssets()
 		val availableLanguages = appSettings.languages
 		val standardPersonas = listOf("Neutral", "Family", "Childish", "Technical", "explicit", "explicit and naughty", "Humorous", "poetry")
@@ -41,6 +45,7 @@ class SettingsActivity : ComponentActivity() {
 					color = MaterialTheme.colorScheme.background
 				) {
 					SettingsScreen(
+						prefs = prefs,
 						availableLanguages = availableLanguages,
 						availablePersonas = standardPersonas,
 						availableOcrLanguages = availableOcrLanguages,
@@ -66,6 +71,7 @@ class SettingsActivity : ComponentActivity() {
 
 @Composable
 fun SettingsScreen(
+	prefs: PreferencesManager,
 	availableLanguages: Map<String, String>,
 	availablePersonas: List<String>,
 	availableOcrLanguages: List<String>,
@@ -111,6 +117,12 @@ fun SettingsScreen(
 				modifier = Modifier.clearAndSetSemantics { contentDescription = "Close settings and return to layout panel." }
 			) { Text("Close", fontSize = 18.sp) }
 		}
+
+		ModelCreditsHeader(
+			prefs = prefs,
+			modifier = Modifier.clip(RoundedCornerShape(12.dp)),
+			backgroundColor = MaterialTheme.colorScheme.surfaceVariant
+		)
 
 		Card(
 			modifier = Modifier

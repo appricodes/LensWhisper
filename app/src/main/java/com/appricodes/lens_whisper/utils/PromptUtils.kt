@@ -5,9 +5,6 @@ import com.appricodes.lens_whisper.domain.PromptConfig
 /**
  * Shared utilities for building system prompts, especially for custom user questions
  * (Voice Query and Custom Prompts 1/2).
- *
- * This centralizes the logic so both MainActivity (player + camera) and WebBrowserActivity
- * use the exact same rules and improved system prompt.
  */
 object PromptUtils {
 

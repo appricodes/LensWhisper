@@ -4,6 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
 import android.util.Log
+import androidx.palette.graphics.Palette
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.label.ImageLabeling
@@ -12,7 +13,6 @@ import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
 import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
-import kotlin.math.sqrt
 
 object OfflineColorDetector {
 	// Set processing flag to prevent concurrent executions
@@ -64,7 +64,13 @@ object OfflineColorDetector {
 		}?.name ?: "Unknown"
 	}
 
-	fun detect(context: Context, bitmap: Bitmap, prefs: PreferencesManager) {
+	/**
+	 * Detects the main subject(s) and their colors in [bitmap]. If [onResult] is null (the
+	 * default), the result is spoken immediately via [OfflineTranslator]. If provided, [onResult]
+	 * receives the raw English sentence instead — used by continuous mode, which only speaks
+	 * when the text changes.
+	 */
+	fun detect(context: Context, bitmap: Bitmap, prefs: PreferencesManager, onResult: ((String) -> Unit)? = null) {
 		if (!isProcessing.compareAndSet(false, true)) return
 
 		try {
@@ -85,78 +91,94 @@ object OfflineColorDetector {
 
 			segmenter.process(image)
 				.addOnSuccessListener { result ->
-					val subjects = result.subjects.take(2)
+					// Guarded end-to-end: this callback (and everything it kicks off) runs on the
+					// main thread, and must never crash the app if a frame or ML Kit result is
+					// malformed — an uncaught exception here isn't caught by the try/catch below,
+					// since that only covers this function's synchronous setup, not callbacks that
+					// fire later.
+					try {
+						val subjects = result.subjects.take(2)
 
-					// Requirement 3: If no subjects found, apply K-Means on 10% center crop
-					if (subjects.isEmpty()) {
-						val cropWidth = (resizedBitmap.width * 0.1f).toInt().coerceAtLeast(1)
-						val cropHeight = (resizedBitmap.height * 0.1f).toInt().coerceAtLeast(1)
-						val startX = (resizedBitmap.width - cropWidth) / 2
-						val startY = (resizedBitmap.height - cropHeight) / 2
+						// Requirement 3: If no subjects found, apply Palette on 10% center crop
+						if (subjects.isEmpty()) {
+							val cropWidth = (resizedBitmap.width * 0.1f).toInt().coerceAtLeast(1)
+							val cropHeight = (resizedBitmap.height * 0.1f).toInt().coerceAtLeast(1)
+							val startX = (resizedBitmap.width - cropWidth) / 2
+							val startY = (resizedBitmap.height - cropHeight) / 2
 
-						val centerCrop = Bitmap.createBitmap(resizedBitmap, startX, startY, cropWidth, cropHeight)
+							val centerCrop = Bitmap.createBitmap(resizedBitmap, startX, startY, cropWidth, cropHeight)
 
-						// Get top 2 prominent colors
-						val prominentColors = findProminentColorsKMeans(centerCrop, k = 2)
-						val colorNames = prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
+							// Get top 2 prominent colors
+							val prominentColors = findProminentColorsPalette(centerCrop, k = 2)
+							val colorNames = prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
 
-						val finalResult = if (colorNames.isNotEmpty()) colorNames.joinToString(" and ") else "unknown colors"
-						finishProcessing(context, finalResult, prefs)
-						return@addOnSuccessListener
-					}
-
-					val subjectDescriptions = mutableListOf<String>()
-					var subjectsProcessedCount = 0
-
-					for (subject in subjects) {
-						val subjectBitmap = subject.bitmap
-						if (subjectBitmap == null) {
-							subjectsProcessedCount++
-							if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs)
-							continue
+							val finalResult = if (colorNames.isNotEmpty()) colorNames.joinToString(" and ") else "unknown colors"
+							finishProcessing(context, finalResult, prefs, onResult)
+							return@addOnSuccessListener
 						}
 
-						// Object labeler to determine type
-						val subImage = InputImage.fromBitmap(subjectBitmap, 0)
-						labeler.process(subImage)
-							.addOnSuccessListener { labels ->
-								// Requirement 1: "Unknown" if no label found
-								val labelName = labels.firstOrNull()?.text?.replaceFirstChar { it.uppercase() } ?: "Unknown"
+						val subjectDescriptions = mutableListOf<String>()
+						var subjectsProcessedCount = 0
 
-								// Requirement 2: K-Means already sorts by cluster size descending, ensuring dominant color is first.
-								val prominentColors = findProminentColorsKMeans(subjectBitmap, k = 2)
-								val colorNames = prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
-
-								// Format text
-								val colorString = if (colorNames.isNotEmpty()) colorNames.joinToString(" and ") else "unknown colors"
-								subjectDescriptions.add("$labelName: $colorString")
-
+						for (subject in subjects) {
+							val subjectBitmap = subject.bitmap
+							if (subjectBitmap == null) {
 								subjectsProcessedCount++
-								if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs)
+								if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs, onResult)
+								continue
 							}
-							.addOnFailureListener {
-								subjectsProcessedCount++
-								if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs)
-							}
+
+							// Object labeler to determine type
+							val subImage = InputImage.fromBitmap(subjectBitmap, 0)
+							labeler.process(subImage)
+								.addOnSuccessListener { labels ->
+									// Guarded: this callback runs on the main thread, and Palette/bitmap work
+									// here must never crash the whole app if a frame is malformed.
+									try {
+										// Requirement 1: "Unknown" if no label found
+										val labelName = labels.firstOrNull()?.text?.replaceFirstChar { it.uppercase() } ?: "Unknown"
+
+										// Palette swatches are sorted by population descending, so the dominant color is first.
+										val prominentColors = findProminentColorsPalette(subjectBitmap, k = 2)
+										val colorNames = prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
+
+										// Format text
+										val colorString = if (colorNames.isNotEmpty()) colorNames.joinToString(" and ") else "unknown colors"
+										subjectDescriptions.add("$labelName: $colorString")
+									} catch (e: Exception) {
+										Log.e("OfflineColorDetector", "Color analysis error", e)
+									}
+
+									subjectsProcessedCount++
+									if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs, onResult)
+								}
+								.addOnFailureListener {
+									subjectsProcessedCount++
+									if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs, onResult)
+								}
+						}
+					} catch (e: Exception) {
+						Log.e("OfflineColorDetector", "Subject processing error", e)
+						finishProcessing(context, "Could not analyze colors.", prefs, onResult)
 					}
 				}
 				.addOnFailureListener {
-					finishProcessing(context, "Failed to segment subjects.", prefs)
+					finishProcessing(context, "Failed to segment subjects.", prefs, onResult)
 				}
 
 		} catch (e: Exception) {
 			Log.e("OfflineColorDetector", "Processing Error", e)
-			finishProcessing(context, "Error analyzing colors.", prefs)
+			finishProcessing(context, "Error analyzing colors.", prefs, onResult)
 		}
 	}
 
-	private fun finalizeOutput(context: Context, descriptions: List<String>, prefs: PreferencesManager) {
+	private fun finalizeOutput(context: Context, descriptions: List<String>, prefs: PreferencesManager, onResult: ((String) -> Unit)?) {
 		val finalResult = if (descriptions.isNotEmpty()) descriptions.joinToString(", ") else "Could not identify subjects."
-		finishProcessing(context, finalResult, prefs)
+		finishProcessing(context, finalResult, prefs, onResult)
 	}
 
-	private fun finishProcessing(context: Context, finalResult: String, prefs: PreferencesManager) {
-		OfflineTranslator.translateAndSpeak(context, finalResult, prefs)
+	private fun finishProcessing(context: Context, finalResult: String, prefs: PreferencesManager, onResult: ((String) -> Unit)?) {
+		if (onResult != null) onResult(finalResult) else OfflineTranslator.translateAndSpeak(context, finalResult, prefs)
 		isProcessing.set(false)
 	}
 
@@ -166,8 +188,14 @@ object OfflineColorDetector {
 		return Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
 	}
 
-	private fun findProminentColorsKMeans(bitmap: Bitmap, k: Int): List<IntArray> {
-		val pixels = mutableListOf<IntArray>()
+	/**
+	 * Finds the top [k] dominant colors using androidx.palette. Segmented subject bitmaps carry
+	 * a transparent background (alpha=0), so we first sample only the opaque pixels and pack
+	 * them into a compact bitmap — this keeps the background out of Palette's quantization
+	 * regardless of how it treats partial alpha.
+	 */
+	private fun findProminentColorsPalette(bitmap: Bitmap, k: Int): List<IntArray> {
+		val opaquePixels = mutableListOf<Int>()
 
 		// Adjust step dynamically. If parsing the tiny 10% center crop, a step of 4 might skip too many pixels.
 		val step = if (bitmap.width < 20 || bitmap.height < 20) 1 else 4
@@ -175,63 +203,27 @@ object OfflineColorDetector {
 		for (x in 0 until bitmap.width step step) {
 			for (y in 0 until bitmap.height step step) {
 				val color = bitmap.getPixel(x, y)
-				// Ignore background points (Alpha > 0 for both Subject segmented maps and normal center crops)
 				if (Color.alpha(color) > 0) {
-					pixels.add(intArrayOf(Color.red(color), Color.green(color), Color.blue(color)))
+					opaquePixels.add(color or (0xFF shl 24))
 				}
 			}
 		}
 
-		if (pixels.isEmpty()) return listOf(intArrayOf(0, 0, 0))
-		if (pixels.size <= k) return pixels
+		if (opaquePixels.isEmpty()) return listOf(intArrayOf(0, 0, 0))
 
-		var centroids = pixels.shuffled().take(k)
-		var hasChanged = true
-		var iterations = 0
-		val maxIterations = 10
-		val clusters = Array(k) { mutableListOf<IntArray>() }
-
-		while (hasChanged && iterations < maxIterations) {
-			hasChanged = false
-			clusters.forEach { it.clear() }
-
-			for (pixel in pixels) {
-				var minDistance = Float.MAX_VALUE
-				var bestIndex = 0
-				for (i in 0 until k) {
-					val dist = colorDistance(pixel, centroids[i])
-					if (dist < minDistance) {
-						minDistance = dist
-						bestIndex = i
-					}
-				}
-				clusters[bestIndex].add(pixel)
-			}
-
-			val newCentroids = mutableListOf<IntArray>()
-			for (i in 0 until k) {
-				if (clusters[i].isNotEmpty()) {
-					var r = 0L; var g = 0L; var b = 0L
-					for (p in clusters[i]) {
-						r += p[0]; g += p[1]; b += p[2]
-					}
-					val count = clusters[i].size
-					val newC = intArrayOf((r / count).toInt(), (g / count).toInt(), (b / count).toInt())
-					newCentroids.add(newC)
-					if (colorDistance(newC, centroids[i]) > 1.0f) hasChanged = true
-				} else {
-					newCentroids.add(centroids[i])
-				}
-			}
-			centroids = newCentroids
-			iterations++
+		val side = kotlin.math.ceil(kotlin.math.sqrt(opaquePixels.size.toDouble())).toInt().coerceAtLeast(1)
+		val packed = Bitmap.createBitmap(side, side, Bitmap.Config.ARGB_8888)
+		for (i in opaquePixels.indices) {
+			packed.setPixel(i % side, i / side, opaquePixels[i])
 		}
 
-		// Requirement 2: Ensure the most dominant color is first by explicitly sorting clusters by size descending
-		return centroids.indices.sortedByDescending { clusters[it].size }.map { centroids[it] }.take(k)
-	}
+		val palette = Palette.from(packed).maximumColorCount(24).generate()
+		val topSwatches = palette.swatches.sortedByDescending { it.population }.take(k)
 
-	private fun colorDistance(c1: IntArray, c2: IntArray): Float {
-		return sqrt((c1[0] - c2[0]).toFloat().pow(2) + (c1[1] - c2[1]).toFloat().pow(2) + (c1[2] - c2[2]).toFloat().pow(2))
+		return if (topSwatches.isNotEmpty()) {
+			topSwatches.map { intArrayOf(Color.red(it.rgb), Color.green(it.rgb), Color.blue(it.rgb)) }
+		} else {
+			listOf(intArrayOf(0, 0, 0))
+		}
 	}
 }

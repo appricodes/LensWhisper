@@ -5,12 +5,17 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="com.android.vending.BILLING" />
 
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
     <application
+        android:name=".LensWhisperApplication"
         android:allowBackup="true"
         android:dataExtractionRules="@xml/data_extraction_rules"
         android:fullBackupContent="@xml/backup_rules"
@@ -20,8 +25,12 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.LensWhisper">
 
+        <!-- LiteRT-LM GPU backend for on-device model inference -->
+        <uses-native-library android:name="libOpenCL.so" android:required="false" />
+        <uses-native-library android:name="libvndksupport.so" android:required="false" />
+
         <activity
-            android:name=".MainActivity"
+            android:name=".SimpleCameraActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.LensWhisper"
@@ -31,6 +40,21 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+        </activity>
+
+        <activity
+            android:name=".AdvancedCameraActivity"
+            android:exported="false"
+            android:label="Advanced Camera Describer"
+            android:theme="@style/Theme.LensWhisper"
+            android:configChanges="orientation|keyboardHidden|screenSize" />
+
+        <activity
+            android:name=".MediaDescriberActivity"
+            android:exported="true"
+            android:label="Lens Whisper Media Player"
+            android:theme="@style/Theme.LensWhisper"
+            android:configChanges="orientation|keyboardHidden|screenSize">
 
             <intent-filter android:label="Lens Whisper Media Player">
                 <action android:name="android.intent.action.VIEW" />
@@ -52,11 +76,10 @@
         </activity>
 
         <activity
-            android:name=".WebBrowserActivity"
+            android:name=".ExploreActivity"
             android:exported="false"
-            android:label="Web Browser"
-            android:theme="@style/Theme.LensWhisper"
-            android:configChanges="orientation|keyboardHidden|screenSize"/>
+            android:label="Explore"
+            android:theme="@style/Theme.LensWhisper" />
 
         <activity
             android:name=".LoginActivity"
@@ -64,17 +87,34 @@
             android:label="Login"
             android:theme="@style/Theme.LensWhisper" />
 
+        <activity
+            android:name=".SettingsActivity"
+            android:exported="false"
+            android:label="Settings"
+            android:theme="@style/Theme.LensWhisper" />
+
+        <activity
+            android:name=".HelpActivity"
+            android:exported="false"
+            android:label="Help"
+            android:theme="@style/Theme.LensWhisper" />
+
+        <activity
+            android:name=".ModelManagementActivity"
+            android:exported="false"
+            android:label="Manage Advanced Models"
+            android:theme="@style/Theme.LensWhisper" />
+
+        <service
+            android:name=".service.ModelDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
         <receiver android:name="androidx.media.session.MediaButtonReceiver"
             android:exported="true">
             <intent-filter>
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
-
-        <activity
-            android:name=".SettingsActivity"
-            android:exported="false"
-            android:label="Settings"
-            android:theme="@style/Theme.LensWhisper" />
     </application>
 </manifest>

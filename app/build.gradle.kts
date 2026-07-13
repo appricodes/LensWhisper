@@ -33,6 +33,7 @@ android {
     }
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -53,6 +54,9 @@ dependencies {
 
     // for using crypto-secured preferences
     implementation(libs.androidx.security.crypto)
+
+    // Palette API for dominant color extraction
+    implementation(libs.androidx.palette)
 
     // Video Player
     implementation(libs.androidx.media3.exoplayer)
@@ -101,6 +105,11 @@ dependencies {
     // google signing
     implementation(libs.play.services.auth)
 
+    // LiteRT-LM on-device model inference (Manage Advanced Models)
+    implementation(libs.litertlm.android)
+
+    // RevenueCat: manages Google Play Billing purchases for credit packages
+    implementation("com.revenuecat.purchases:purchases:9.23.1")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

@@ -47,10 +47,6 @@ class PreferencesManager(val context: Context) {
 		get() = securePrefs.getString("google_id", null)
 		set(value) = securePrefs.edit().putString("google_id", value).apply()
 
-	var isOnlineMode: Boolean
-		get() = standardPrefs.getBoolean("is_online_mode", false)
-		set(value) = standardPrefs.edit().putBoolean("is_online_mode", value).apply()
-
 	var selectedLanguage: String
 		get() = standardPrefs.getString("selected_language", "English") ?: "English"
 		set(value) = standardPrefs.edit().putString("selected_language", value).apply()
@@ -79,6 +75,21 @@ class PreferencesManager(val context: Context) {
 	var volumeShortcutsEnabled: Boolean
 		get() = standardPrefs.getBoolean("volume_shortcuts_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("volume_shortcuts_enabled", value).apply()
+
+	/** "simple" or "advanced" — which camera mode to reopen into on the next cold app launch. */
+	var lastCameraMode: String
+		get() = standardPrefs.getString("last_camera_mode", "simple") ?: "simple"
+		set(value) = standardPrefs.edit().putString("last_camera_mode", value).apply()
+
+	/** "online" or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]. */
+	var selectedModelId: String
+		get() = standardPrefs.getString("selected_model_id", "online") ?: "online"
+		set(value) = standardPrefs.edit().putString("selected_model_id", value).apply()
+
+	/** "Small", "Medium", or "Large" — see [com.appricodes.lens_whisper.utils.OfflineImageSize]. */
+	var offlineImageSize: String
+		get() = standardPrefs.getString("offline_image_size", "Large") ?: "Large"
+		set(value) = standardPrefs.edit().putString("offline_image_size", value).apply()
 
 	var isLoggedIn: Boolean
 		get() = standardPrefs.getBoolean("is_logged_in", false)

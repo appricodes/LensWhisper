@@ -14,10 +14,20 @@ object OfflineObjectDetector {
 	// Concurrency lock to prevent stacking tasks if ML Kit is slow on an older device
 	private val isProcessing = AtomicBoolean(false)
 
-	fun detect(context: Context, bitmap: Bitmap, prefs: PreferencesManager) {
+	/**
+	 * Detects objects in [bitmap]. If [onResult] is null (the default), the result is spoken
+	 * immediately via [OfflineTranslator]. If provided, [onResult] receives the raw English
+	 * sentence instead — used by continuous mode, which only speaks when the text changes.
+	 */
+	fun detect(context: Context, bitmap: Bitmap, prefs: PreferencesManager, onResult: ((String) -> Unit)? = null) {
 		// If the previous frame is still being processed, ignore this new frame
 		if (!isProcessing.compareAndSet(false, true)) {
 			return
+		}
+
+		fun finish(text: String) {
+			if (onResult != null) onResult(text) else OfflineTranslator.translateAndSpeak(context, text, prefs)
+			isProcessing.set(false)
 		}
 
 		try {
@@ -34,19 +44,15 @@ object OfflineObjectDetector {
 						if (detectedObjects.isNotEmpty()) "${detectedObjects.joinToString(", ")}."
 						else "No distinct objects detected."
 					}
-
-					OfflineTranslator.translateAndSpeak(context, finalSentence, prefs)
-					isProcessing.set(false) // Release lock
+					finish(finalSentence)
 				}
 				.addOnFailureListener { e ->
 					Log.e("OfflineObjectDetector", "ML Kit Labeling failed", e)
-					OfflineTranslator.translateAndSpeak(context, "Failed to analyze image.", prefs)
-					isProcessing.set(false) // Release lock
+					finish("Failed to analyze image.")
 				}
 		} catch (e: Exception) {
 			Log.e("OfflineObjectDetector", "Image processing error", e)
-			OfflineTranslator.translateAndSpeak(context, "Error processing camera frame.", prefs)
-			isProcessing.set(false) // Release lock
+			finish("Error processing camera frame.")
 		}
 	}
 }

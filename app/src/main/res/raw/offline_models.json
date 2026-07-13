@@ -1,0 +1,101 @@
+{
+  "models": [
+    {
+      "id": "gemma4_multimodal_2b",
+      "displayName": "Gemma 4 (Multimodal), 2B",
+      "family": "Gemma 4",
+      "description": "2B-parameter (E2B) multimodal variant. Automatically uses a build tuned for your device's chipset when one is available.",
+      "supportsExplore": true,
+      "variants": [
+        {
+          "hardwareMatch": ["tensor g5", "gs525", "zumapro"],
+          "sizeBytes": 3113545589,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it_Google_Tensor_G5.litertlm",
+          "fileName": "gemma4_multimodal_2b_tensor_g5.litertlm",
+          "backend": "NPU"
+        },
+        {
+          "hardwareMatch": ["sm8750"],
+          "sizeBytes": 3016294400,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it_qualcomm_sm8750.litertlm",
+          "fileName": "gemma4_multimodal_2b_qualcomm_sm8750.litertlm",
+          "backend": "NPU"
+        },
+        {
+          "hardwareMatch": ["qcs8275"],
+          "sizeBytes": 3294593024,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it_qualcomm_qcs8275.litertlm",
+          "fileName": "gemma4_multimodal_2b_qualcomm_qcs8275.litertlm",
+          "backend": "NPU"
+        },
+        {
+          "hardwareMatch": ["lunarlake", "lunar lake", " lnl"],
+          "sizeBytes": 2960506880,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it_intel_LNL.litertlm",
+          "fileName": "gemma4_multimodal_2b_intel_lnl.litertlm",
+          "backend": "GPU"
+        },
+        {
+          "hardwareMatch": ["pantherlake", "panther lake", " ptl"],
+          "sizeBytes": 2948333568,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it_intel_PTL.litertlm",
+          "fileName": "gemma4_multimodal_2b_intel_ptl.litertlm",
+          "backend": "GPU"
+        },
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 2588147712,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E2B-it-litert-lm/resolve/main/gemma-4-E2B-it.litertlm",
+          "fileName": "gemma4_multimodal_2b.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
+      "id": "fastvlm_0_5b",
+      "displayName": "FastVLM 0.5B",
+      "family": "FastVLM",
+      "description": "Smallest, fastest FastVLM variant. Automatically uses a build tuned for your device's chipset when one is available.",
+      "supportsExplore": false,
+      "variants": [
+        {
+          "hardwareMatch": ["sm8750"],
+          "sizeBytes": 943226880,
+          "downloadUrl": "https://huggingface.co/litert-community/FastVLM-0.5B/resolve/main/FastVLM-0.5B.qualcomm.sm8750.litertlm",
+          "fileName": "fastvlm_0_5b_qualcomm_sm8750.litertlm",
+          "backend": "NPU"
+        },
+        {
+          "hardwareMatch": ["sm8850"],
+          "sizeBytes": 942374912,
+          "downloadUrl": "https://huggingface.co/litert-community/FastVLM-0.5B/resolve/main/FastVLM-0.5B.qualcomm.sm8850.litertlm",
+          "fileName": "fastvlm_0_5b_qualcomm_sm8850.litertlm",
+          "backend": "NPU"
+        },
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 1156342768,
+          "downloadUrl": "https://huggingface.co/litert-community/FastVLM-0.5B/resolve/main/FastVLM-0.5B.litertlm",
+          "fileName": "fastvlm_0_5b.litertlm",
+          "backend": "CPU"
+        }
+      ]
+    },
+    {
+      "id": "qwen_vl_2b",
+      "displayName": "Qwen-VL 2B",
+      "family": "Qwen-VL",
+      "description": "2B-parameter Qwen vision-language model.",
+      "supportsExplore": true,
+      "variants": [
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 1784096288,
+          "downloadUrl": "https://huggingface.co/litert-community/Qwen2-VL-2B/resolve/main/Qwen2-VL-2B.litertlm",
+          "fileName": "qwen_vl_2b.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    }
+  ]
+}

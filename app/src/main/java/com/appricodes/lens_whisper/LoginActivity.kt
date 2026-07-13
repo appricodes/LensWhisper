@@ -1,6 +1,7 @@
 ﻿package com.appricodes.lens_whisper
 
 import android.app.Activity
+import android.content.Intent
 import android.os.Bundle
 import android.util.Log
 import android.widget.Toast
@@ -76,6 +77,20 @@ class LoginActivity : ComponentActivity() {
 		}
 	}
 
+	/**
+	 * If this activity was launched with a "PENDING_INTENT" extra (e.g. from the More menu's
+	 * "Open file" action, or from "Advanced Camera Mode" while logged out), start that intent
+	 * now that login succeeded, instead of just returning to whatever was behind Login.
+	 */
+	private fun launchPendingIntentIfAny() {
+		val pending = if (android.os.Build.VERSION.SDK_INT >= 33) {
+			intent?.getParcelableExtra("PENDING_INTENT", Intent::class.java)
+		} else {
+			@Suppress("DEPRECATION") intent?.getParcelableExtra("PENDING_INTENT")
+		}
+		if (pending != null) startActivity(pending)
+	}
+
 	private fun verifyLogin(idToken: String) {
 		CoroutineScope(Dispatchers.IO).launch {
 			try {
@@ -111,8 +126,12 @@ class LoginActivity : ComponentActivity() {
 									prefs.googleId = googleId
 									prefs.freeCredits = freeCredits
 									prefs.purchasedCredits = purchasedCredits
+									// Ties RevenueCat's app_user_id to this account so the purchase
+									// webhook can credit the right user.
+									com.revenuecat.purchases.Purchases.sharedInstance.logIn(email)
 									AccessibilityUtils.announceToTalkBack(this@LoginActivity, "Login Successful.")
 									Toast.makeText(this@LoginActivity, "Login Successful! Credits updated.", Toast.LENGTH_SHORT).show()
+									launchPendingIntentIfAny()
 									finish()
 								}
 								return@launch

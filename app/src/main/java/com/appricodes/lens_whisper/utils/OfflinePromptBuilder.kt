@@ -1,0 +1,53 @@
+package com.appricodes.lens_whisper.utils
+
+/**
+ * Prompt text for on-device (LiteRT-LM) analysis. Wording is copied from the backend's own
+ * prompt construction (backend/process.php) so offline and online results read the same way —
+ * see that file if these ever need to be kept in sync.
+ */
+object OfflinePromptBuilder {
+
+    private val predefinedPrompts = mapOf(
+        "brief_narration" to "Describe this scene very briefly in a single short sentence. If the scene is totally empty, explicitly state that.",
+        "detailed_scene" to "Describe this scene in detail, including people, objects, settings, and overall atmosphere. If nothing distinct is visible, explicitly state that.",
+        "people_and_outfit" to "Describe the outfit, clothing, body appearance, and approximate age of the main people visible. If no people are visible, you MUST explicitly state 'No people are visible in this scene'.",
+        "emotions" to "Analyze and describe the facial expressions and emotions of each main visible person. If no people or faces are visible, state 'No people or faces are visible'.",
+        "objects" to "Identify and list the main physical objects visible and describe their layout or characteristics. Only list the distinct physical objects.",
+        "read_texts" to "Identify any visible signs, textual labels, documents, or screen characters and read the text precisely. If absolutely no text visible, state 'No text found'.",
+        "story_5" to "Tell the continuous story of what is happening across these sequence frames as a single fluid narrative. If no action, state 'No action detected'.",
+        "story_10" to "Tell the continuous story of what is happening across these sequence frames as a single fluid narrative. If no action, state 'No action detected'."
+    )
+
+    /** The user-facing instruction text for a predefined prompt id (not "custom" or "explore"). */
+    fun userPromptFor(promptId: String): String = predefinedPrompts[promptId] ?: "Describe the image."
+
+    /** The system instruction for a predefined prompt id, mirroring the backend's narration framing. */
+    fun buildSystemInstruction(language: String, persona: String, isMultiFrame: Boolean): String {
+        var instruction = "You MUST write your response ENTIRELY in the language: $language. " +
+            "Limit your entire description to a maximum of 100 words. " +
+            "Respond using a $persona narration style. You are an expert audio describer for the visually impaired."
+        if (isMultiFrame) {
+            instruction += " The user has sent multiple consecutive video frames capturing a timeline sequence. " +
+                "Describe the scene's movement and actions over time smoothly."
+        }
+        return instruction
+    }
+
+    /** System instruction for a "custom question" (Custom Prompt 1/2 or Voice Query). */
+    fun buildCustomQuestionInstruction(language: String, question: String): String =
+        "You MUST write your ENTIRE response in the language $language.\n" +
+            "You are a precise visual question-answering assistant for a visually impaired user.\n" +
+            "THE USER'S EXACT QUESTION IS: \"$question\"\n" +
+            "Answer ONLY the user's exact question above clearly and concisely. If the requested object is not in view, explicitly state that."
+
+    /** System instruction for the Explore spatial-grid analysis; expects a flat JSON response. */
+    fun buildExploreSystemInstruction(language: String, persona: String, gridSize: Int = 6): String =
+        "You are a precise spatial mapping AI for a visually impaired user's screen-reader app. " +
+            "CRITICAL COMPLIANCE: All descriptions assigned to grid keys MUST be written ENTIRELY in $language. " +
+            "Limit each description to a few words. " +
+            "You must divide the image into a mathematically strict ${gridSize}x${gridSize} physical grid. " +
+            "Respond using a $persona description style. " +
+            "You MUST respond ONLY with a flat JSON object where the keys are labeled exactly from 'row1_col1' through 'row${gridSize}_col${gridSize}'."
+
+    const val EXPLORE_USER_PROMPT = "Generate the JSON map spanning the entire image."
+}
