@@ -2,6 +2,14 @@
 
 This backend handles Google Sign-In verification and securely proxies AI requests to x.AI for the Android app "LensWhisper".
 
+## Desktop companion (local, offline analysis)
+
+`desktop/` is a separate, standalone Kotlin/JVM project (own Gradle build — not part of the
+Android app) that runs a small vision-language GGUF model locally via llama.cpp and exposes the
+same `/process.php` JSON contract as this backend, so the Android app can eventually point at a
+computer on the local network instead of (or in addition to) this server. See
+[desktop/README.md](desktop/README.md).
+
 ## Database Schema
 
 ```sql
