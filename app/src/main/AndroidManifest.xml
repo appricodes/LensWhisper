@@ -29,8 +29,15 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
+        <!-- Google Mobile Ads (rewarded "watch an ad for credits"). This is the real AdMob App ID
+             for this app, from the developer's own AdMob console — set 2026-08-24, replacing the
+             placeholder Google test App ID this used to hold. -->
+        <meta-data
+            android:name="com.google.android.gms.ads.APPLICATION_ID"
+            android:value="ca-app-pub-9386480260190622~9575982937" />
+
         <activity
-            android:name=".SimpleCameraActivity"
+            android:name=".CameraActivity"
             android:exported="true"
             android:label="@string/app_name"
             android:theme="@style/Theme.LensWhisper"
@@ -41,13 +48,6 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
-
-        <activity
-            android:name=".AdvancedCameraActivity"
-            android:exported="false"
-            android:label="Advanced Camera Describer"
-            android:theme="@style/Theme.LensWhisper"
-            android:configChanges="orientation|keyboardHidden|screenSize" />
 
         <activity
             android:name=".MediaDescriberActivity"

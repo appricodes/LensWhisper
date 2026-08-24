@@ -27,7 +27,6 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -39,6 +38,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -46,6 +46,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -53,13 +55,20 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
+import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.service.ModelDownloadService
 import com.appricodes.lens_whisper.service.ModelDownloadState
+import com.appricodes.lens_whisper.ui.components.CreditsDialog
+import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
+import com.appricodes.lens_whisper.ui.components.MemoryWarningDialog
+import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
 import com.appricodes.lens_whisper.utils.OfflineImageSize
+import kotlinx.coroutines.launch
 
-/** Lets the user pick the Online Describer or download/select an on-device model. */
+/** Lets the user pick MLKit, an on-device catalog model, or the Online Describer. */
 class ModelManagementActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -84,12 +93,18 @@ private fun formatSize(bytes: Long): String {
 @Composable
 private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val repository = remember { OfflineModelsRepository(context) }
+    // Smallest-first, matching ModelPickerPopup — listed below MLKit, above Online.
     val offlineModels = remember { repository.loadModels() }
 
     var selectedId by remember { mutableStateOf(prefs.selectedModelId) }
     var downloadedVersion by remember { mutableStateOf(0) }
     var modelPendingDelete by remember { mutableStateOf<OfflineModelInfo?>(null) }
+    var memoryWarningModel by remember { mutableStateOf<OfflineModelInfo?>(null) }
+    var showClearAllConfirm by remember { mutableStateOf(false) }
+    var isClearingAll by remember { mutableStateOf(false) }
+    var showCreditsDialog by remember { mutableStateOf(false) }
     var offlineImageSize by remember { mutableStateOf(prefs.offlineImageSize) }
     var imageSizeDropdownExpanded by remember { mutableStateOf(false) }
 
@@ -107,6 +122,38 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
 
     val activeDownload = downloadState as? ModelDownloadState.Downloading
 
+    fun selectMlkit() {
+        prefs.selectedModelId = "mlkit"
+        selectedId = "mlkit"
+        OfflineInferenceEngine.release()
+        AccessibilityUtils.announceToTalkBack(context, "MLKit selected.")
+    }
+
+    fun selectOnline() {
+        prefs.selectedModelId = "online"
+        selectedId = "online"
+        OfflineInferenceEngine.release()
+        AccessibilityUtils.announceToTalkBack(context, "Online Describer selected.")
+    }
+
+    // Selecting an on-device model starts loading it right away — see ModelLoadingObserver
+    // below, which shows a blocking "Loading…" alert until it's actually ready to use, instead
+    // of that ~10s cost surfacing as unexplained lag the first time a button is tapped.
+    fun selectOffline(model: OfflineModelInfo) {
+        prefs.selectedModelId = model.id
+        selectedId = model.id
+        AccessibilityUtils.announceToTalkBack(context, "${model.displayName} selected.")
+        coroutineScope.launch { OfflineInferenceEngine.preload(context, model) }
+    }
+
+    fun requestSelectOffline(model: OfflineModelInfo) {
+        if (DeviceMemoryDetector.mightNotRun(context, model) && !prefs.isMemoryWarningSuppressed(model.id)) {
+            memoryWarningModel = model
+        } else {
+            selectOffline(model)
+        }
+    }
+
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -119,23 +166,29 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(text = "Manage Advanced AI Models", fontSize = 24.sp, style = MaterialTheme.typography.titleLarge)
+            Text(
+                text = "Manage AI Models",
+                fontSize = 24.sp,
+                style = MaterialTheme.typography.titleLarge,
+                modifier = Modifier.semantics { heading() }
+            )
             TextButton(onClick = onClose) { Text("Close", fontSize = 18.sp) }
         }
 
-        val eligibleForOnline = prefs.isLoggedIn || prefs.freeCredits > 0 || prefs.purchasedCredits > 0
-        OnlineDescriberCard(
-            isSelected = selectedId == "online",
-            eligible = eligibleForOnline,
-            onSelect = {
-                prefs.selectedModelId = "online"
-                selectedId = "online"
-                OfflineInferenceEngine.release()
-                AccessibilityUtils.announceToTalkBack(context, "Online Describer selected.")
-            },
-            onLogin = { context.startActivity(Intent(context, LoginActivity::class.java)) },
-            onPurchase = { Toast.makeText(context, "Purchasing credits isn't available yet.", Toast.LENGTH_SHORT).show() }
-        )
+        val anyDownloaded = offlineModels.any { remember(it.id, downloadedVersion) { repository.isDownloaded(it) } }
+        if (anyDownloaded) {
+            OutlinedButton(
+                onClick = { showClearAllConfirm = true },
+                enabled = !isClearingAll,
+                colors = androidx.compose.material3.ButtonDefaults.outlinedButtonColors(contentColor = MaterialTheme.colorScheme.error)
+            ) {
+                Text(if (isClearingAll) "Clearing…" else "Clear All Downloaded Models")
+            }
+        }
+
+        // Order: MLKit (always available, no download) -> on-device catalog models, smallest to
+        // largest -> Online last (needs login/credits, separated by a divider below).
+        MlkitCard(isSelected = selectedId == "mlkit", onSelect = { selectMlkit() })
 
         // isDownloaded hits the filesystem (File.exists()/.length()), so it's memoized on
         // (model.id, downloadedVersion) rather than recomputed on every recomposition. It used
@@ -157,11 +210,8 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                 isDownloadingThis = isDownloadingThis,
                 downloadingOtherModel = downloadingOtherModel,
                 failureMessage = failure?.message,
-                onSelect = {
-                    prefs.selectedModelId = model.id
-                    selectedId = model.id
-                    AccessibilityUtils.announceToTalkBack(context, "${model.displayName} selected.")
-                },
+                mightNotRun = remember(model.id) { DeviceMemoryDetector.mightNotRun(context, model) },
+                onSelect = { requestSelectOffline(model) },
                 onDownload = {
                     requestNotificationPermissionIfNeeded()
                     ModelDownloadService.start(context, model)
@@ -171,16 +221,26 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         }
 
         HorizontalDivider()
+
+        val eligibleForOnline = prefs.freeCredits > 0 || prefs.purchasedCredits > 0
+        OnlineDescriberCard(
+            isSelected = selectedId == "online",
+            eligible = eligibleForOnline,
+            onSelect = { selectOnline() },
+            onPurchase = { showCreditsDialog = true }
+        )
+
+        HorizontalDivider()
         Text(
-            text = "The model selected here is used by Advanced Camera and Video/Image Describer's " +
-                "analysis and Explore. On-device models run slower to load the first time (up to ~10s) " +
-                "and use more memory than the Online Describer.",
+            text = "The model selected here is used by the Camera screen and Video/Image Describer's " +
+                "analysis and Explore. On-device models take a moment to load the first time after " +
+                "being selected, and use more memory than the Online Describer or MLKit.",
             fontSize = 13.sp,
             color = Color.Gray
         )
 
         Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(text = "On-Device Image Size", fontSize = 18.sp, color = Color.Gray)
+            Text(text = "On-Device Image Size", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -220,7 +280,14 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             confirmButton = {
                 Button(onClick = {
                     val freedBytes = pending.sizeBytes
-                    if (prefs.selectedModelId == pending.id) OfflineInferenceEngine.release()
+                    if (prefs.selectedModelId == pending.id) {
+                        // Falls back to MLKit, same as deleting the selected model via the More
+                        // menu on the Camera screen — there's nothing sensible to keep it
+                        // selected as once its file is gone.
+                        OfflineInferenceEngine.release()
+                        prefs.selectedModelId = "mlkit"
+                        selectedId = "mlkit"
+                    }
                     repository.deleteDownload(pending)
                     downloadedVersion++
                     modelPendingDelete = null
@@ -233,25 +300,71 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         )
     }
 
-    if (activeDownload != null) {
+    var downloadDialogHiddenHere by remember { mutableStateOf(false) }
+    LaunchedEffect(activeDownload?.modelId) { downloadDialogHiddenHere = false }
+    if (activeDownload != null && !downloadDialogHiddenHere) {
         val downloadingModel = offlineModels.find { it.id == activeDownload.modelId }
-        val progress = if (activeDownload.totalBytes > 0) {
-            (activeDownload.bytesDownloaded.toFloat() / activeDownload.totalBytes.toFloat()).coerceIn(0f, 1f)
-        } else 0f
-        AlertDialog(
-            onDismissRequest = { },
-            title = { Text("Downloading ${downloadingModel?.displayName ?: "model"}") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                    Text("${formatSize(activeDownload.bytesDownloaded)} of ${formatSize(activeDownload.totalBytes)}")
-                    LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = { ModelDownloadService.cancel(context) }) { Text("Cancel") }
-            }
+        DownloadProgressDialog(
+            activeDownload = activeDownload,
+            displayName = downloadingModel?.displayName ?: "model",
+            onCancel = { ModelDownloadService.cancel(context) },
+            onContinueInBackground = { downloadDialogHiddenHere = true }
         )
     }
+
+    memoryWarningModel?.let { model ->
+        MemoryWarningDialog(
+            model = model,
+            onContinue = { suppress ->
+                if (suppress) prefs.suppressMemoryWarning(model.id)
+                selectOffline(model)
+                memoryWarningModel = null
+            },
+            onCancel = { memoryWarningModel = null }
+        )
+    }
+
+    if (showClearAllConfirm) {
+        val downloadedModels = offlineModels.filter { remember(it.id, downloadedVersion) { repository.isDownloaded(it) } }
+        val totalFreed = downloadedModels.sumOf { it.sizeBytes }
+        AlertDialog(
+            onDismissRequest = { showClearAllConfirm = false },
+            title = { Text("Clear all downloaded models?") },
+            text = {
+                Text(
+                    "This deletes every downloaded on-device AI model (freeing ${formatSize(totalFreed)}) and any " +
+                        "downloaded MLKit translation language pack — including ones downloaded automatically for " +
+                        "the \"Translate Offline Results\" setting. You'll need to download them again to use them. " +
+                        "This doesn't affect MLKit's built-in object/text/color detection, which needs no download."
+                )
+            },
+            confirmButton = {
+                Button(onClick = {
+                    showClearAllConfirm = false
+                    isClearingAll = true
+                    coroutineScope.launch {
+                        if (downloadedModels.any { it.id == prefs.selectedModelId }) {
+                            OfflineInferenceEngine.release()
+                            prefs.selectedModelId = "mlkit"
+                            selectedId = "mlkit"
+                        }
+                        downloadedModels.forEach { repository.deleteDownload(it) }
+                        OfflineTranslator.deleteAllDownloadedModels()
+                        downloadedVersion++
+                        isClearingAll = false
+                        Toast.makeText(context, "Cleared ${formatSize(totalFreed)} of downloaded models.", Toast.LENGTH_SHORT).show()
+                    }
+                }) { Text("Clear All") }
+            },
+            dismissButton = { TextButton(onClick = { showClearAllConfirm = false }) { Text("Cancel") } }
+        )
+    }
+
+    if (showCreditsDialog) {
+        CreditsDialog(prefs = prefs, onDismiss = { showCreditsDialog = false })
+    }
+
+    ModelLoadingObserver(context = context, selectedModelId = selectedId, offlineModels = offlineModels)
 }
 
 @Composable
@@ -271,30 +384,52 @@ private fun SelectedLabel(name: String) {
     )
 }
 
+/**
+ * Groups a card's informational text (name, description, status lines) into a single TalkBack
+ * stop instead of one stop per `Text` — `mergeDescendants` concatenates the merged children's
+ * text automatically, in the order they're composed, so this needs no hand-written summary
+ * string to keep in sync. The action buttons stay outside this modifier so they remain
+ * individually reachable/actionable.
+ */
+private fun Modifier.mergedInfoBlock(): Modifier = this.semantics(mergeDescendants = true) {}
+
+@Composable
+private fun MlkitCard(isSelected: Boolean, onSelect: () -> Unit) {
+    ModelCard {
+        Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = "MLKit", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            Text(text = "Fully offline object, text, and color detection. Always available, nothing to download.", fontSize = 15.sp, color = Color.Gray)
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            if (isSelected) SelectedLabel("MLKit") else Button(onClick = onSelect) { Text("Select") }
+        }
+    }
+}
+
 @Composable
 private fun OnlineDescriberCard(
     isSelected: Boolean,
     eligible: Boolean,
     onSelect: () -> Unit,
-    onLogin: () -> Unit,
     onPurchase: () -> Unit
 ) {
     ModelCard {
-        Text(text = "Online Describer", fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        Text(text = "Sends photos to our server for AI analysis.", fontSize = 15.sp, color = Color.Gray)
-        if (!eligible) {
-            Text(
-                text = "You need to log in to receive free credits, or purchase credits without logging in.",
-                fontSize = 14.sp,
-                color = MaterialTheme.colorScheme.error
-            )
+        Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = "Online Describer", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            Text(text = "Sends photos to our server for AI analysis.", fontSize = 15.sp, color = Color.Gray)
+            if (!eligible) {
+                Text(
+                    text = "You need credits — watch a short ad to earn some.",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (eligible) {
                 if (isSelected) SelectedLabel("Online Describer") else Button(onClick = onSelect) { Text("Select") }
             } else {
-                Button(onClick = onLogin) { Text("Login") }
-                OutlinedButton(onClick = onPurchase) { Text("Purchase Credits") }
+                OutlinedButton(onClick = onPurchase) { Text("Get Credits") }
             }
         }
     }
@@ -308,39 +443,48 @@ private fun OfflineModelCard(
     isDownloadingThis: Boolean,
     downloadingOtherModel: Boolean,
     failureMessage: String?,
+    mightNotRun: Boolean,
     onSelect: () -> Unit,
     onDownload: () -> Unit,
     onDelete: () -> Unit
 ) {
     ModelCard {
-        Text(text = model.displayName, fontSize = 20.sp, fontWeight = FontWeight.Bold)
-        if (model.description.isNotBlank()) {
-            Text(text = model.description, fontSize = 15.sp, color = Color.Gray)
-        }
-        Text(
-            text = if (isDownloaded) "Downloaded — ${formatSize(model.sizeBytes)}" else "Download size: ${formatSize(model.sizeBytes)}",
-            fontSize = 14.sp
-        )
-        Text(
-            text = if (model.supportsExplore) "Supports Explore mode." else "Does not support Explore mode.",
-            fontSize = 13.sp,
-            color = Color.Gray
-        )
-        if (failureMessage != null) {
-            Text(text = "Download failed: $failureMessage", fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
-        }
-        if (isDownloadingThis) {
-            Text(text = "Downloading…", fontSize = 14.sp, color = Color.Gray)
-        } else if (downloadingOtherModel) {
-            Text(text = "Another model is downloading right now.", fontSize = 13.sp, color = Color.Gray)
-        }
-        if (isDownloaded && isSelected) {
-            Text(text = "Select a different model to delete this one.", fontSize = 13.sp, color = Color.Gray)
+        Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = model.displayName, fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            if (model.description.isNotBlank()) {
+                Text(text = model.description, fontSize = 15.sp, color = Color.Gray)
+            }
+            Text(
+                text = if (isDownloaded) "Downloaded — ${formatSize(model.sizeBytes)}" else "Download size: ${formatSize(model.sizeBytes)}",
+                fontSize = 14.sp
+            )
+            if (mightNotRun) {
+                Text(
+                    text = "⚠ This model may not run well on your device's memory.",
+                    fontSize = 13.sp,
+                    color = MaterialTheme.colorScheme.error
+                )
+            }
+            Text(
+                text = if (model.supportsExplore) "Supports Explore mode." else "Does not support Explore mode.",
+                fontSize = 13.sp,
+                color = Color.Gray
+            )
+            if (failureMessage != null) {
+                Text(text = "Download failed: $failureMessage", fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
+            }
+            if (isDownloadingThis) {
+                Text(text = "Downloading…", fontSize = 14.sp, color = Color.Gray)
+            } else if (downloadingOtherModel) {
+                Text(text = "Another model is downloading right now.", fontSize = 13.sp, color = Color.Gray)
+            }
         }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
             if (isDownloaded) {
                 if (isSelected) SelectedLabel(model.displayName) else Button(onClick = onSelect) { Text("Select") }
-                if (!isSelected) OutlinedButton(onClick = onDelete) { Text("Delete") }
+                // Deleting the currently-selected model is allowed — the caller falls back the
+                // selection to MLKit afterward (see ModelManagementScreen's delete handler).
+                OutlinedButton(onClick = onDelete) { Text("Delete") }
             } else {
                 Button(onClick = onDownload, enabled = !downloadingOtherModel && !isDownloadingThis) { Text("Download") }
             }

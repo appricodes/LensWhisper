@@ -76,14 +76,9 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("volume_shortcuts_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("volume_shortcuts_enabled", value).apply()
 
-	/** "simple" or "advanced" — which camera mode to reopen into on the next cold app launch. */
-	var lastCameraMode: String
-		get() = standardPrefs.getString("last_camera_mode", "simple") ?: "simple"
-		set(value) = standardPrefs.edit().putString("last_camera_mode", value).apply()
-
-	/** "online" or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]. */
+	/** "mlkit", "online", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]. */
 	var selectedModelId: String
-		get() = standardPrefs.getString("selected_model_id", "online") ?: "online"
+		get() = standardPrefs.getString("selected_model_id", "mlkit") ?: "mlkit"
 		set(value) = standardPrefs.edit().putString("selected_model_id", value).apply()
 
 	/** "Small", "Medium", or "Large" — see [com.appricodes.lens_whisper.utils.OfflineImageSize]. */
@@ -110,6 +105,60 @@ class PreferencesManager(val context: Context) {
 	var offlineTranslationEnabled: Boolean
 		get() = standardPrefs.getBoolean("offline_translation_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("offline_translation_enabled", value).apply()
+
+	/** Speak each sentence as it's generated instead of waiting for the whole response — see
+	 *  `AnalysisSessionController`'s streaming path (both on-device models and, when this is on,
+	 *  the Online Describer). Off by default: most of this app's actual usage is a single short
+	 *  sentence anyway, where streaming buys nothing but adds a network-protocol edge (NDJSON, see
+	 *  backend/readme.md) that's simplest to keep opt-in until it's had more field use. */
+	var streamingEnabled: Boolean
+		get() = standardPrefs.getBoolean("streaming_enabled", false)
+		set(value) = standardPrefs.edit().putBoolean("streaming_enabled", value).apply()
+
+	/** Pipe-delimited [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]s the user has
+	 *  dismissed the low-memory warning for, via [MemoryWarningDialog]'s "don't warn me again"
+	 *  checkbox. Per-model (not global) so suppressing a small model's warning never silently
+	 *  suppresses a much larger model added to the catalog later. */
+	private var suppressedMemoryWarningModelIds: String
+		get() = standardPrefs.getString("suppressed_memory_warning_model_ids", "") ?: ""
+		set(value) = standardPrefs.edit().putString("suppressed_memory_warning_model_ids", value).apply()
+
+	fun isMemoryWarningSuppressed(modelId: String): Boolean =
+		suppressedMemoryWarningModelIds.split("|").filter { it.isNotEmpty() }.contains(modelId)
+
+	fun suppressMemoryWarning(modelId: String) {
+		val ids = suppressedMemoryWarningModelIds.split("|").filter { it.isNotEmpty() }.toMutableSet()
+		ids.add(modelId)
+		suppressedMemoryWarningModelIds = ids.joinToString("|")
+	}
+
+	/** Random per-install identifier, generated once on first access and persisted forever after
+	 *  (an app reinstall/data-clear gets a new one). Never derived from any hardware/Play Services
+	 *  identifier and never sent to Google's ad SDK — only this app's own backend sees it, to tie
+	 *  anonymous ad-earned credits (see [com.appricodes.lens_whisper.ads.AdCreditsSession]) to a
+	 *  `install_credits` row server-side. See backend/get_credits.php. */
+	val installId: String
+		get() {
+			standardPrefs.getString("install_id", null)?.let { return it }
+			val generated = java.util.UUID.randomUUID().toString()
+			standardPrefs.edit().putString("install_id", generated).apply()
+			return generated
+		}
+
+	/** Which delegate ([com.appricodes.lens_whisper.inference.OfflineInferenceEngine] reads this as
+	 *  "CPU" or absent-meaning-GPU) an on-device model's *vision* encoder should use on *this*
+	 *  device — auto-detected, not user-facing. GPU is tried first for every model on every device;
+	 *  if that ever fails (some model/GPU-driver combos genuinely can't compile a given vision
+	 *  encoder — confirmed on Exynos 2100/Mali with `lfm2_5_vl_450m`, 2026-08-24), the engine falls
+	 *  back to CPU and calls [setVisionBackendOverride] so every later load skips straight to CPU
+	 *  instead of re-failing on GPU every time. Per (model, device) rather than a static per-model
+	 *  flag, since the whole point is that the same model can work fine on GPU elsewhere. */
+	fun getVisionBackendOverride(modelId: String): String? =
+		standardPrefs.getString("vision_backend_override_$modelId", null)
+
+	fun setVisionBackendOverride(modelId: String, backend: String) {
+		standardPrefs.edit().putString("vision_backend_override_$modelId", backend).apply()
+	}
 
 	fun getUrlHistoryList(): List<String> = urlHistory.split("|").filter { it.isNotEmpty() }
 

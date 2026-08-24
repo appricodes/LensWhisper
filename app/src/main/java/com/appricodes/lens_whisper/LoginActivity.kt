@@ -99,7 +99,7 @@ class LoginActivity : ComponentActivity() {
 					.build()
 
 				val request = Request.Builder()
-					.url("https://www.wikiponder.com/lense_whisper/login_verification.php")
+					.url("https://lw.wikiponder.com/login_verification.php")
 					.post(requestBody)
 					.build()
 

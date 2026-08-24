@@ -2,7 +2,7 @@
   "models": [
     {
       "id": "gemma4_multimodal_2b",
-      "displayName": "Gemma 4 (Multimodal), 2B",
+      "displayName": "Gemma4 2000M",
       "family": "Gemma 4",
       "description": "2B-parameter (E2B) multimodal variant. Automatically uses a build tuned for your device's chipset when one is available.",
       "supportsExplore": true,
@@ -52,38 +52,56 @@
       ]
     },
     {
-      "id": "fastvlm_0_5b",
-      "displayName": "FastVLM 0.5B",
-      "family": "FastVLM",
-      "description": "Smallest, fastest FastVLM variant. Automatically uses a build tuned for your device's chipset when one is available.",
+      "id": "lfm2_5_vl_450m",
+      "displayName": "LFM2.5-VL 450M",
+      "family": "LFM2.5-VL",
+      "description": "Light, quick model — good for quick captions, simple questions, and reading large text. Less reliable on object counting or subjects near the top of the frame; only takes one image per prompt (no Story mode, which the on-device catalog doesn't offer anyway).",
       "supportsExplore": false,
       "variants": [
         {
-          "hardwareMatch": ["sm8750"],
-          "sizeBytes": 943226880,
-          "downloadUrl": "https://huggingface.co/litert-community/FastVLM-0.5B/resolve/main/FastVLM-0.5B.qualcomm.sm8750.litertlm",
-          "fileName": "fastvlm_0_5b_qualcomm_sm8750.litertlm",
-          "backend": "NPU"
-        },
-        {
-          "hardwareMatch": ["sm8850"],
-          "sizeBytes": 942374912,
-          "downloadUrl": "https://huggingface.co/litert-community/FastVLM-0.5B/resolve/main/FastVLM-0.5B.qualcomm.sm8850.litertlm",
-          "fileName": "fastvlm_0_5b_qualcomm_sm8850.litertlm",
-          "backend": "NPU"
-        },
+          "hardwareMatch": [],
+          "sizeBytes": 406820224,
+          "downloadUrl": "https://huggingface.co/litert-community/LFM2.5-VL-450M/resolve/main/LFM2.5-VL-450M_int4.litertlm",
+          "fileName": "lfm2_5_vl_450m_int4.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
+      "id": "smolvlm2_500m",
+      "displayName": "SmolVLM2 500M",
+      "family": "SmolVLM2",
+      "description": "Smallest, lightest model in the catalog — good for quick captions and simple questions. Keep questions brief; can be repetitive on longer requests. Only takes one image per prompt (no Story mode, which the on-device catalog doesn't offer anyway).",
+      "supportsExplore": false,
+      "variants": [
         {
           "hardwareMatch": [],
-          "sizeBytes": 1156342768,
-          "downloadUrl": "https://huggingface.co/litert-community/FastVLM-0.5B/resolve/main/FastVLM-0.5B.litertlm",
-          "fileName": "fastvlm_0_5b.litertlm",
-          "backend": "CPU"
+          "sizeBytes": 361052336,
+          "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-500M/resolve/main/SmolVLM2-500M.litertlm",
+          "fileName": "smolvlm2_500m.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
+      "id": "smolvlm2_2200m",
+      "displayName": "SmolVLM2 2200M",
+      "family": "SmolVLM2",
+      "description": "Larger SmolVLM2 variant — better quality than the 500M version, at a bigger download size and noticeably slower generation (several seconds per word on a mid-range chipset, tested 2026-08-24). Only takes one image per prompt (no Story mode, which the on-device catalog doesn't offer anyway).",
+      "supportsExplore": false,
+      "variants": [
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 1511353264,
+          "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-2.2B/resolve/main/SmolVLM2-2.2B.litertlm",
+          "fileName": "smolvlm2_2200m.litertlm",
+          "backend": "GPU"
         }
       ]
     },
     {
       "id": "qwen_vl_2b",
-      "displayName": "Qwen-VL 2B",
+      "displayName": "Qwen-VL 2000M",
       "family": "Qwen-VL",
       "description": "2B-parameter Qwen vision-language model.",
       "supportsExplore": true,

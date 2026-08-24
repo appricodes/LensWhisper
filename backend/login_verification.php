@@ -106,9 +106,15 @@ $googleId  = $verifiedData['google_id'];
 
 try {
     $pdo = get_pdo_connection();
-    $stmt = $pdo->prepare('SELECT email, verified, free_credits, purchased_credits FROM users WHERE email = :email LIMIT 1');
+    $stmt = $pdo->prepare('SELECT email, verified, blocked, free_credits, purchased_credits FROM users WHERE email = :email LIMIT 1');
     $stmt->execute([':email' => $email]);
     $user = $stmt->fetch();
+
+    if ($user && (int)($user['blocked'] ?? 0) > 0) {
+        // Admin-blocked account (see backend/admin/users.php) — reject outright, don't silently
+        // re-verify it the way the branch below would.
+        json_response(['success' => false, 'verified' => 0, 'message' => 'This account has been blocked.'], 403);
+    }
 
     $freeCredits = 0;
     $purchasedCredits = 0;

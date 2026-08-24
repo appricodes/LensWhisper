@@ -6,10 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import android.os.Bundle
-import android.speech.RecognitionListener
-import android.speech.RecognizerIntent
-import android.speech.SpeechRecognizer
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -17,9 +13,6 @@ import androidx.compose.foundation.gestures.forEachGesture
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.Button
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -36,7 +29,6 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
-import androidx.compose.ui.unit.sp
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
@@ -46,16 +38,20 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.domain.PromptConfig
-import com.appricodes.lens_whisper.inference.runSelectedModelAnalysis
 import com.appricodes.lens_whisper.network.XaiVisionEngine
+import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
+import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.ActionButtonGrid
+import com.appricodes.lens_whisper.ui.components.CreditsDialog
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.components.MediaPreviewArea
-import com.appricodes.lens_whisper.ui.components.ModelCreditsHeader
-import com.appricodes.lens_whisper.ui.components.MoreMenu
+import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
+import com.appricodes.lens_whisper.ui.components.ModelTopBar
+import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
+import com.appricodes.lens_whisper.ui.models.ModelButtonContext
+import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ImageScaling
-import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -65,9 +61,12 @@ import java.io.File
 import java.io.FileOutputStream
 
 /**
- * Online AI description for a video/image file. The button grid is fully transparent — the
- * user watches the media undisturbed; touching the screen lets TalkBack read a button's label
- * (via its semantics), and tapping runs it.
+ * Describes a video/image file with the same model-driven top bar + 3-row grid as
+ * [com.appricodes.lens_whisper.CameraActivity], but the bottom row shows video transport controls
+ * + Microphone instead of camera-switch/flash (there's no live camera here) — see
+ * [buildBottomRow]. The button grid is fully transparent — the user watches the media
+ * undisturbed; touching the screen lets TalkBack read a button's label (via its semantics), and
+ * tapping runs it.
  */
 @Composable
 fun MediaDescriberScreen(
@@ -77,6 +76,7 @@ fun MediaDescriberScreen(
     initialFileUri: Uri?,
     exoPlayer: ExoPlayer,
     onVoiceTriggerReady: (() -> Unit) -> Unit,
+    onMicStopReady: (() -> Unit) -> Unit,
     onPlayPauseReady: (() -> Unit) -> Unit,
     onRepeatReady: (() -> Unit) -> Unit
 ) {
@@ -84,6 +84,17 @@ fun MediaDescriberScreen(
     val coroutineScope = rememberCoroutineScope()
     val density = LocalDensity.current
     val offlineModelsRepository = remember { OfflineModelsRepository(context) }
+    val offlineModels = remember { offlineModelsRepository.loadModels() }
+    val controller = rememberAnalysisSessionController(context, prefs)
+    // No live camera here, so MLKit (capturePhoto = null) resolves to an empty grid if ever
+    // selected — the model picker hides the MLKit option entirely (showMlkitOption = false below).
+    val mlkitProvider = remember { MlkitButtonProvider(context, coroutineScope, capturePhoto = null) }
+
+    var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
+    val (provider, selectedOfflineModel) = remember(selectedModelId) {
+        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
+    }
+    fun gate(action: () -> Unit) = controller.gateForSelectedModel(selectedModelId, selectedOfflineModel, action)
 
     var currentFileUri by remember { mutableStateOf(initialFileUri) }
     var isImageMode by remember { mutableStateOf(false) }
@@ -95,33 +106,14 @@ fun MediaDescriberScreen(
     var nativeMediaWidth by remember { mutableStateOf(1f) }
     var nativeMediaHeight by remember { mutableStateOf(1f) }
 
-    var customPrompt1Text by remember { mutableStateOf("") }
-    var customPrompt1Title by remember { mutableStateOf("Custom Prompt 1") }
-    var customPrompt2Text by remember { mutableStateOf("") }
-    var customPrompt2Title by remember { mutableStateOf("Custom Prompt 2") }
-    var lastPrompt by remember { mutableStateOf<PromptConfig?>(null) }
-
-    var volKeysEnabled by remember { mutableStateOf(prefs.volumeShortcutsEnabled) }
-    var activeNetworkJob by remember { mutableStateOf<Job?>(null) }
-    var activeAudioFeedbackJob by remember { mutableStateOf<Job?>(null) }
-    var isAnalyzing by remember { mutableStateOf(false) }
-    var dialogState by remember { mutableStateOf<Pair<String, String>?>(null) }
-    var showMoreMenu by remember { mutableStateOf(false) }
-    var showExploreUnsupportedDialog by remember { mutableStateOf(false) }
-
-    fun announceBusy() {
-        AccessibilityUtils.announceToTalkBack(context, "Please wait for the current analysis to finish.")
-    }
-
-    val speechRecognizer = remember { SpeechRecognizer.createSpeechRecognizer(context) }
-    DisposableEffect(speechRecognizer) { onDispose { speechRecognizer.destroy() } }
-
     val togglePlayPauseAction = {
         if (!isImageMode) {
             if (exoPlayer.isPlaying) { exoPlayer.pause(); AccessibilityUtils.announceToTalkBack(context, "Paused") }
             else { exoPlayer.play(); AccessibilityUtils.announceToTalkBack(context, "Playing") }
         }
     }
+
+    LaunchedEffect(Unit) { onPlayPauseReady(togglePlayPauseAction) }
 
     DisposableEffect(exoPlayer) {
         val listener = object : Player.Listener {
@@ -159,8 +151,6 @@ fun MediaDescriberScreen(
 
     LaunchedEffect(currentFileUri) {
         currentFileUri?.let { uri ->
-            activeNetworkJob?.cancel(); activeAudioFeedbackJob?.cancel(); isAnalyzing = false
-            customPrompt1Text = ""; customPrompt1Title = "Custom Prompt 1"; customPrompt2Text = ""; customPrompt2Title = "Custom Prompt 2"
             val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true || uri.toString().endsWith(".jpg")
             if (isImage) {
                 isImageMode = true; exoPlayer.stop()
@@ -182,17 +172,6 @@ fun MediaDescriberScreen(
         }
     }
 
-    fun handleResponse(response: String) {
-        activeAudioFeedbackJob?.cancel()
-        if (response.startsWith("ERROR:")) {
-            AccessibilityUtils.announceToTalkBack(context, "Error occurred.")
-            dialogState = "Error" to response.removePrefix("ERROR:").trim()
-        } else {
-            AccessibilityUtils.announceToTalkBack(context, response)
-            if (prefs.showResultsInDialog) dialogState = "AI Description" to response
-        }
-    }
-
     suspend fun extractVideoFrameBitmaps(uri: Uri, positionMs: Long, config: PromptConfig): List<Bitmap> =
         withContext(Dispatchers.IO) {
             val frames = mutableListOf<Bitmap>()
@@ -211,50 +190,27 @@ fun MediaDescriberScreen(
             frames
         }
 
-    fun runAnalysis(config: PromptConfig, label: String) {
+    val captureFrames: suspend (PromptConfig) -> CapturedBundle? = { config ->
         val uri = currentFileUri
         if (uri == null) {
             AccessibilityUtils.announceToTalkBack(context, "No media source loaded")
-            return
-        }
-        if (isAnalyzing) {
-            announceBusy()
-            return
-        }
-        isAnalyzing = true
-        AccessibilityUtils.announceToTalkBack(context, "Analyzing $label")
-
-        activeAudioFeedbackJob = coroutineScope.launch(Dispatchers.IO) {
-            while (true) {
-                ProcessingSoundPlayer.playChime()
-                delay(1100)
-            }
-        }
-
-        val currentPlaybackPosition = exoPlayer.currentPosition
-        activeNetworkJob = coroutineScope.launch {
-            try {
-                val offlineImages = if (prefs.selectedModelId == "online") {
-                    emptyList()
-                } else if (isImageMode) {
-                    listOfNotNull(runtimeLoadedImageBitmap)
-                } else {
-                    extractVideoFrameBitmaps(uri, currentPlaybackPosition, config)
+            null
+        } else {
+            AccessibilityUtils.announceToTalkBack(context, "Analyzing ${config.title}")
+            controller.startProcessingChime()
+            val currentPlaybackPosition = exoPlayer.currentPosition
+            val offlineImages = if (isImageMode) listOfNotNull(runtimeLoadedImageBitmap) else extractVideoFrameBitmaps(uri, currentPlaybackPosition, config)
+            CapturedBundle(
+                offlineImages,
+                onlineCall = {
+                    if (isImageMode) apiClient.analyzeStaticImageFile(context, uri, config, prefs)
+                    else apiClient.analyzeVideoFrame(context, uri, currentPlaybackPosition, config, prefs)
+                },
+                onlineCallStreaming = {
+                    if (isImageMode) apiClient.analyzeStaticImageFileStreaming(context, uri, config, prefs)
+                    else apiClient.analyzeVideoFrameStreaming(context, uri, currentPlaybackPosition, config, prefs)
                 }
-                val response = runSelectedModelAnalysis(
-                    context = context,
-                    prefs = prefs,
-                    config = config,
-                    offlineImages = offlineImages,
-                    onlineCall = {
-                        if (isImageMode) apiClient.analyzeStaticImageFile(context, uri, config, prefs)
-                        else apiClient.analyzeVideoFrame(context, uri, currentPlaybackPosition, config, prefs)
-                    }
-                )
-                handleResponse(response)
-            } finally {
-                isAnalyzing = false
-            }
+            )
         }
     }
 
@@ -276,51 +232,6 @@ fun MediaDescriberScreen(
         }
     }
 
-    val startVoiceRecognition = {
-        val rawCode = prefs.selectedLanguageCode
-        val localeCode = if (rawCode.startsWith("fa", ignoreCase = true) || prefs.selectedLanguage.equals("Persian", ignoreCase = true)) "fa-IR" else rawCode
-        if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
-        AccessibilityUtils.announceToTalkBack(context, "Listening... Please speak your question now.")
-
-        val intent = Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH).apply {
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-            putExtra(RecognizerIntent.EXTRA_LANGUAGE, localeCode)
-        }
-
-        speechRecognizer.setRecognitionListener(object : RecognitionListener {
-            override fun onReadyForSpeech(params: Bundle?) {}
-            override fun onBeginningOfSpeech() {}
-            override fun onRmsChanged(rmsd: Float) {}
-            override fun onBufferReceived(buffer: ByteArray?) {}
-            override fun onEndOfSpeech() {}
-            override fun onError(error: Int) {}
-            override fun onResults(results: Bundle?) {
-                val recognizedQuery = results?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull()
-                if (!recognizedQuery.isNullOrBlank()) {
-                    customPrompt2Text = customPrompt1Text; customPrompt2Title = customPrompt1Title
-                    customPrompt1Text = recognizedQuery
-                    customPrompt1Title = if (recognizedQuery.length > 20) recognizedQuery.take(17) + "..." else recognizedQuery
-                    val config = PromptConfig("custom", "Voice Query", recognizedQuery, 1, 0.5)
-                    lastPrompt = config
-                    runAnalysis(config, "Voice Query")
-                }
-            }
-            override fun onPartialResults(partialResults: Bundle?) {}
-            override fun onEvent(eventType: Int, params: Bundle?) {}
-        })
-        speechRecognizer.startListening(intent)
-    }
-
-    LaunchedEffect(Unit) {
-        onVoiceTriggerReady(startVoiceRecognition)
-        onPlayPauseReady(togglePlayPauseAction)
-        onRepeatReady {
-            val prompt = lastPrompt
-            if (prompt != null) runAnalysis(prompt, prompt.title)
-            else AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
-        }
-    }
-
     // Resume playback unconditionally when Explore finishes, matching the original in-place
     // Explore overlay's behavior (it always resumed, regardless of whether it was playing
     // before Explore paused it).
@@ -328,68 +239,42 @@ fun MediaDescriberScreen(
         if (!isImageMode) exoPlayer.play()
     }
 
-    fun onExplore() {
-        if (isAnalyzing) {
-            announceBusy()
-            return
-        }
-        if (!offlineModelsRepository.isExploreSupported(prefs.selectedModelId)) {
-            showExploreUnsupportedDialog = true
-            return
-        }
-        isAnalyzing = true
-        coroutineScope.launch {
-            try {
+    val ctx = ModelButtonContext(
+        prefs = prefs,
+        settings = settings,
+        selectedOfflineModel = selectedOfflineModel,
+        customPromptTexts = controller.customPromptTexts,
+        customPromptTitles = controller.customPromptTitles,
+        onRunPrompt = { config, label -> gate { coroutineScope.launch { controller.runAnalysis(config, label, captureFrames) } } },
+        onExplore = {
+            gate {
                 if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
-                AccessibilityUtils.announceToTalkBack(context, "Entering exploration mode. Analyzing elements.")
-                val exploreUri = extractCurrentFrameUri()
-                if (exploreUri == null) {
-                    AccessibilityUtils.announceToTalkBack(context, "Could not capture the current frame.")
-                    return@launch
-                }
-                exploreLauncher.launch(Intent(context, ExploreActivity::class.java).putExtra("IMAGE_URI", exploreUri.toString()))
-            } finally {
-                isAnalyzing = false
+                controller.onExplore(
+                    selectedModelId = selectedModelId,
+                    captureFrame = { extractCurrentFrameUri() },
+                    launchExplore = { uri -> exploreLauncher.launch(Intent(context, ExploreActivity::class.java).putExtra("IMAGE_URI", uri.toString())) }
+                )
+            }
+        },
+        onRepeat = { gate { coroutineScope.launch { controller.onRepeat(selectedModelId, captureFrames) } } },
+        onRecordCustomPrompt = { slotIndex ->
+            gate {
+                if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
+                controller.startVoiceRecognition(targetCustomSlot = slotIndex, captureFrames = captureFrames)
             }
         }
-    }
+    )
 
-    fun onGridAction(cellLabel: String) {
-        when (cellLabel) {
-            "Microphone" -> startVoiceRecognition()
-            "Explore" -> onExplore()
-            "Vol Keys: On", "Vol Keys: Off" -> {
-                val newState = !volKeysEnabled
-                volKeysEnabled = newState
-                prefs.volumeShortcutsEnabled = newState
-                AccessibilityUtils.announceToTalkBack(context, if (newState) "Volume shortcuts enabled" else "Volume shortcuts disabled")
-            }
-            "Repeat" -> {
-                val prompt = lastPrompt
-                if (prompt != null) runAnalysis(prompt, prompt.title)
-                else AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
-            }
-            "Play", "Pause" -> togglePlayPauseAction()
-            else -> {
-                val config = when (cellLabel) {
-                    "Brief Narration" -> settings.prompts.find { it.id == "brief_narration" }
-                    "Detailed Scene" -> settings.prompts.find { it.id == "detailed_scene" }
-                    "People and Outfit" -> settings.prompts.find { it.id == "people_and_outfit" }
-                    "Emotions" -> settings.prompts.find { it.id == "emotions" }
-                    "Objects" -> settings.prompts.find { it.id == "objects" }
-                    "Read Texts" -> settings.prompts.find { it.id == "read_texts" }
-                    "Story (5 seconds)" -> settings.prompts.find { it.id == "story_5" }
-                    "Story (10 seconds)" -> settings.prompts.find { it.id == "story_10" }
-                    customPrompt1Title -> PromptConfig("custom", customPrompt1Title, customPrompt1Text, 1, 0.5)
-                    customPrompt2Title -> PromptConfig("custom", customPrompt2Title, customPrompt2Text, 1, 0.5)
-                    else -> null
-                }
-                if (config != null) {
-                    lastPrompt = config
-                    runAnalysis(config, cellLabel)
-                }
+    // Re-registers whenever the selected model changes — see the identical note in CameraActivity.
+    LaunchedEffect(selectedModelId) {
+        onVoiceTriggerReady {
+            gate {
+                if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
+                controller.startVoiceRecognition(captureFrames = captureFrames)
             }
         }
+        onMicStopReady { controller.stopVoiceListening() }
+        onRepeatReady { ctx.onRepeat() }
     }
 
     Box(
@@ -403,98 +288,86 @@ fun MediaDescriberScreen(
             screenWidthPx = screenWidthPx, screenHeightPx = screenHeightPx, isRotated = isRotated, density = density
         )
 
-        val volKeysLabel = if (volKeysEnabled) "Vol Keys: On" else "Vol Keys: Off"
-        val rows = buildList {
-            add(
-                listOf(
-                    GridCell("Brief Narration", onClick = { onGridAction("Brief Narration") }),
-                    GridCell("Detailed Scene", onClick = { onGridAction("Detailed Scene") }),
-                    GridCell("People and Outfit", onClick = { onGridAction("People and Outfit") }),
-                    GridCell("Emotions", onClick = { onGridAction("Emotions") })
-                )
-            )
-            add(
-                listOf(
-                    GridCell("Objects", onClick = { onGridAction("Objects") }),
-                    GridCell("Read Texts", onClick = { onGridAction("Read Texts") }),
-                    GridCell("Story (5 seconds)", onClick = { onGridAction("Story (5 seconds)") }),
-                    GridCell("Story (10 seconds)", onClick = { onGridAction("Story (10 seconds)") })
-                )
-            )
-            add(
-                listOf(
-                    GridCell(customPrompt1Title, onClick = { onGridAction(customPrompt1Title) }),
-                    GridCell(customPrompt2Title, onClick = { onGridAction(customPrompt2Title) }),
-                    GridCell("Explore", contentDescription = "Explore. Analyze the layout of the current view in a grid.", onClick = { onGridAction("Explore") }),
-                    GridCell(
-                        "More",
-                        contentDescription = "More options: open a file, settings, or help.",
-                        onClick = { showMoreMenu = true },
-                        trailingContent = { MoreMenu(expanded = showMoreMenu, onDismiss = { showMoreMenu = false }, prefs = prefs, showOpenCameraOption = true) }
-                    )
-                )
-            )
-            add(
-                listOf(
-                    GridCell("Microphone", contentDescription = "Microphone. Ask a question about what you're watching.", onClick = { onGridAction("Microphone") }),
-                    GridCell(volKeysLabel, contentDescription = "Volume key shortcuts are ${if (volKeysEnabled) "on" else "off"}. Double tap to toggle.", onClick = { onGridAction(volKeysLabel) }),
-                    GridCell("Repeat", contentDescription = "Repeat the last action.", onClick = { onGridAction("Repeat") }),
-                    null
-                )
-            )
-            if (!isImageMode) {
-                val playPauseLabel = if (isVideoPlayingState) "Pause" else "Play"
-                add(
-                    listOf(
-                        GridCell(
-                            "Rewind",
-                            contentDescription = "Rewind. Tap to go back 10 seconds, hold to keep rewinding.",
-                            customModifier = seekGestureModifier(direction = -1, label = "Rewind", exoPlayer = exoPlayer, context = context)
-                        ),
-                        GridCell(playPauseLabel, contentDescription = playPauseLabel, onClick = { onGridAction(playPauseLabel) }),
-                        GridCell(
-                            "Fast Forward",
-                            contentDescription = "Fast forward. Tap to jump ahead 10 seconds, hold to keep advancing.",
-                            customModifier = seekGestureModifier(direction = 1, label = "Fast Forward", exoPlayer = exoPlayer, context = context)
-                        ),
-                        null
-                    )
-                )
+        val bottomRow = buildBottomRow(
+            isImageMode = isImageMode,
+            isVideoPlaying = isVideoPlayingState,
+            exoPlayer = exoPlayer,
+            context = context,
+            onPlayPause = togglePlayPauseAction,
+            onMicrophone = {
+                gate {
+                    if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
+                    controller.startVoiceRecognition(captureFrames = captureFrames)
+                }
             }
-        }
+        )
 
         // Header sits above the grid (not layered under it) so its clickable name/credits
         // aren't shadowed by the grid's full-screen transparent touch cells; MediaPreviewArea
         // still fills the whole Box behind both.
         Column(modifier = Modifier.fillMaxSize()) {
-            ModelCreditsHeader(prefs = prefs, backgroundColor = Color.Black.copy(alpha = 0.55f))
-            ActionButtonGrid(rows = rows, transparent = true, modifier = Modifier.weight(1f))
+            ModelTopBar(
+                prefs = prefs,
+                controller = controller,
+                selectedModelId = selectedModelId,
+                onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id },
+                showMoreMenuOpenCameraOption = true,
+                showMoreMenuVolumeKeyToggle = true,
+                showMlkitOption = false,
+                backgroundColor = Color.Black.copy(alpha = 0.55f)
+            )
+            ActionButtonGrid(rows = provider.rows(ctx) + listOf(bottomRow), transparent = true, modifier = Modifier.weight(1f))
         }
     }
 
-    dialogState?.let { (title, msg) ->
-        AlertDialog(
-            onDismissRequest = { dialogState = null },
-            title = { Text(title) },
-            text = { Text(msg, fontSize = 18.sp) },
-            confirmButton = { Button(onClick = { dialogState = null }) { Text("OK") } }
-        )
+    controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })
+    var showCreditsDialog by remember { mutableStateOf(false) }
+    controller.OnlineGateDialog(onGetCredits = { showCreditsDialog = true })
+    if (showCreditsDialog) {
+        CreditsDialog(prefs = prefs, onDismiss = { showCreditsDialog = false })
     }
+    controller.ObserveDownloads()
+    ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels)
+}
 
-    if (showExploreUnsupportedDialog) {
-        AlertDialog(
-            onDismissRequest = { showExploreUnsupportedDialog = false },
-            title = { Text("Explore Not Supported") },
-            text = { Text("The selected model can't be used for the Explore feature. Choose a different model to use Explore.", fontSize = 18.sp) },
-            confirmButton = {
-                Button(onClick = {
-                    showExploreUnsupportedDialog = false
-                    context.startActivity(Intent(context, ModelManagementActivity::class.java))
-                }) { Text("Open Model Manager") }
-            },
-            dismissButton = { Button(onClick = { showExploreUnsupportedDialog = false }) { Text("Cancel") } }
-        )
-    }
+/**
+ * Video mode: Rewind, Play/Pause, Fast Forward, Microphone — matching the accepted resolution
+ * that this row shows video controls + mic instead of camera-switch/flash (no live camera here).
+ * Image mode: just Microphone (no transport controls apply to a still image). Volume-key-shortcut
+ * toggle lives in [com.appricodes.lens_whisper.ui.components.MoreMenu] on this screen instead of
+ * a persistent button, since Rewind/Play/FF + Mic + Vol-Keys doesn't fit one 4-cell row.
+ */
+@Composable
+private fun buildBottomRow(
+    isImageMode: Boolean,
+    isVideoPlaying: Boolean,
+    exoPlayer: ExoPlayer,
+    context: Context,
+    onPlayPause: () -> Unit,
+    onMicrophone: () -> Unit
+): List<GridCell?> {
+    val micCell = GridCell(
+        label = "Microphone",
+        contentDescription = "Microphone. Ask a question about what you're watching.",
+        onClick = onMicrophone
+    )
+    if (isImageMode) return listOf(micCell, null, null, null)
+
+    val playPauseLabel = if (isVideoPlaying) "Pause" else "Play"
+    return listOf(
+        GridCell(
+            "Rewind",
+            contentDescription = "Rewind. Tap to go back 10 seconds, hold to keep rewinding.",
+            customModifier = seekGestureModifier(direction = -1, label = "Rewind", exoPlayer = exoPlayer, context = context)
+        ),
+        GridCell(playPauseLabel, contentDescription = playPauseLabel, onClick = onPlayPause),
+        GridCell(
+            "Fast Forward",
+            contentDescription = "Fast forward. Tap to jump ahead 10 seconds, hold to keep advancing.",
+            customModifier = seekGestureModifier(direction = 1, label = "Fast Forward", exoPlayer = exoPlayer, context = context)
+        ),
+        micCell
+    )
 }
 
 /** Tap = seek 10s, press-and-hold = continuous 30s/sec scrubbing, matching the original seek gesture. */

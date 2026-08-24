@@ -46,6 +46,8 @@ class OfflineModelsRepository(private val context: Context) {
                 stream.readBytes().toString(Charsets.UTF_8)
             }
             val array = JSONObject(jsonString).getJSONArray("models")
+            // Smallest first — the model picker/management screen list MLKit, then these (in this
+            // order), then the online model last, so on-device size is what orders this segment.
             (0 until array.length()).mapNotNull { i ->
                 val obj = array.getJSONObject(i)
                 val variantsArray = obj.getJSONArray("variants")
@@ -76,7 +78,7 @@ class OfflineModelsRepository(private val context: Context) {
                     backend = chosen.backend,
                     supportsExplore = obj.optBoolean("supportsExplore", true)
                 )
-            }
+            }.sortedBy { it.sizeBytes }
         }.getOrElse { e ->
             Log.e("OfflineModelsRepository", "Failed to parse offline_models.json", e)
             emptyList()

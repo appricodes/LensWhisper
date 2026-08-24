@@ -1,15 +1,29 @@
 <?php
 declare(strict_types=1);
 
-$debug = true;
+/**
+ * Also serves anonymous (no Google login) requests identified by install_id — see the
+ * install_id/$identity handling below and get_credits.php. Requires these schema additions on top
+ * of the original CREATE TABLE in readme.md:
+ *   ALTER TABLE purchase_log MODIFY email VARCHAR(254) NULL, ADD COLUMN install_id VARCHAR(64) NULL AFTER email;
+ * (plus the install_credits table — see get_credits.php's docblock.)
+ */
+
+// SECURITY: this must be false on any deployed server — it was found hardcoded to `true` in the
+// live file (2026-08-24). With it on, PHP errors and raw PDO error info are echoed straight into
+// the HTTP response to whoever sent the request (see the print_r($pdo->errorInfo()) below and
+// display_errors), and every request's raw body gets written to a fixed local path. Flip it on
+// only temporarily on your own machine while debugging, never in a commit/deploy.
+$debug = false;
 
 if (!$debug)
     error_reporting(E_ALL & ~E_NOTICE & ~E_WARNING);
 ini_set('display_errors', ($debug ? '1' : '0'));
 ini_set('log_errors', '1');
 
-if (!$debug)
-    header('Content-Type: application/json; charset=utf-8');
+header('Content-Type: application/json; charset=utf-8');
+header('X-Content-Type-Options: nosniff');
+header('X-Frame-Options: DENY');
 
 require_once __DIR__ . '/config.php';
 
@@ -17,6 +31,65 @@ function json_response(array $data, int $httpCode = 200): void {
     http_response_code($httpCode);
     echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
     exit;
+}
+
+/** One line of NDJSON (the streaming response format — see the module docblock at the bottom of
+ *  this file... actually see readme.md's "Streaming" section), flushed immediately so nginx/php-fpm
+ *  don't sit on it waiting for more output (see the buffering-disable calls right before this is
+ *  first used). */
+function ndjson_line(array $data): void {
+    echo json_encode($data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) . "\n";
+    if (ob_get_level() > 0) { @ob_flush(); }
+    @flush();
+}
+
+/**
+ * Deducts $cost from the caller's credit balance (purchased first, then free — same split logic
+ * for both the streaming and non-streaming paths, factored out here so it can't drift between
+ * them) and logs the request to purchase_log. Returns the post-deduction balances.
+ */
+function deduct_credits_and_log(
+    PDO $pdo, string $identity, string $email, string $install_id, string $prompt_id,
+    int $cost, int $free_credits, int $purchased_credits,
+    string $returned_model_name, int $input_tokens, int $output_tokens, ?string $stats_json, float $cogs
+): array {
+    $cost_purchased = 0;
+    $cost_free = 0;
+    if ($purchased_credits >= $cost) {
+        $cost_purchased = $cost;
+        $purchased_credits -= $cost;
+    } else {
+        $cost_purchased = $purchased_credits;
+        $cost_free = $cost - $purchased_credits;
+        $purchased_credits = 0;
+        $free_credits -= $cost_free;
+    }
+
+    $pdo->beginTransaction();
+    if ($identity === 'account') {
+        $updateStmt = $pdo->prepare('UPDATE users SET free_credits = :fc, purchased_credits = :pc, updated_at = CURRENT_TIMESTAMP WHERE email = :email');
+        $updateStmt->execute([':fc' => $free_credits, ':pc' => $purchased_credits, ':email' => $email]);
+    } else {
+        $updateStmt = $pdo->prepare('UPDATE install_credits SET credits = :fc, updated_at = CURRENT_TIMESTAMP WHERE install_id = :install_id');
+        $updateStmt->execute([':fc' => $free_credits, ':install_id' => $install_id]);
+    }
+
+    $logStmt = $pdo->prepare('INSERT INTO purchase_log (email, install_id, prompt_id, cost_free, cost_purchased, model_name, input_tokens, output_tokens, stats_json, cogs) VALUES (:email, :install_id, :prompt_id, :cf, :cp, :model_name, :input_tokens, :output_tokens, :stats_json, :cogs)');
+    $logStmt->execute([
+        ':email' => $identity === 'account' ? $email : null,
+        ':install_id' => $identity === 'anon' ? $install_id : null,
+        ':prompt_id' => $prompt_id,
+        ':cf' => $cost_free,
+        ':cp' => $cost_purchased,
+        ':model_name' => $returned_model_name,
+        ':input_tokens' => $input_tokens,
+        ':output_tokens' => $output_tokens,
+        ':stats_json' => $stats_json,
+        ':cogs' => $cogs
+    ]);
+    $pdo->commit();
+
+    return ['free_credits' => $free_credits, 'purchased_credits' => $purchased_credits];
 }
 
 if ($_SERVER['REQUEST_METHOD'] !== 'POST') {
@@ -37,12 +110,21 @@ if (!$input) {
 // 1. Extract & Sanitize Inputs
 $email = filter_var($input['email'] ?? '', FILTER_SANITIZE_EMAIL);
 $google_id = preg_replace('/[^a-zA-Z0-9\-_]/', '', $input['google_id'] ?? '');
+// Anonymous (no-login) identity — see get_credits.php. The app currently has no login UI at all,
+// so in practice $email/$google_id above are always empty and every request takes this path; that
+// code is kept intact rather than deleted so logging back in can be re-wired later without redoing
+// the credit-deduction logic. See LOGIN_AND_PURCHASES_REMOVED.md at the repo root.
+$install_id = preg_replace('/[^a-zA-Z0-9\-]/', '', $input['install_id'] ?? '');
 $prompt_id = preg_replace('/[^a-zA-Z0-9_]/', '', $input['prompt_id'] ?? '');
 $language = htmlspecialchars(trim($input['language'] ?? 'en-US'), ENT_QUOTES, 'UTF-8');
 $persona = htmlspecialchars(trim($input['persona'] ?? 'Neutral'), ENT_QUOTES, 'UTF-8');
 $quality = htmlspecialchars(trim($input['quality'] ?? 'standard'), ENT_QUOTES, 'UTF-8');
 $frames = is_array($input['frames'] ?? null) ? $input['frames'] : [];
 $custom_question = isset($input['custom_question']) ? substr(htmlspecialchars(trim($input['custom_question']), ENT_QUOTES, 'UTF-8'), 0, 200) : '';
+// Client opt-in (Settings, default off — see PreferencesManager.streamingEnabled). Ignored (forced
+// false) for Explore below once $expect_json is known — a JSON grid response isn't sentence-shaped
+// and streaming it token-by-token would just hand the client a stream of un-parseable fragments.
+$streaming = filter_var($input['streaming'] ?? false, FILTER_VALIDATE_BOOLEAN);
 
 // 2. Validate Persona
 $allowed_personas = ['Neutral', 'Family', 'Childish', 'Technical', 'explicit', 'explicit and naughty', 'Humorous', 'poetry'];
@@ -88,17 +170,18 @@ try {
     }
 
     // 5. Verify User and Credits
-    $stmt = $pdo->prepare('SELECT verified, free_credits, purchased_credits FROM users WHERE email = :email AND google_id = :google_id LIMIT 1');
-    $stmt->execute([':email' => $email, ':google_id' => $google_id]);
-    $user = $stmt->fetch();
-
-    if (!$user || (int)$user['verified'] <= 0) {
-        json_response(['error' => true, 'model_response' => 'Unauthorized or unverified user. Please log in again.', 'cost' => 0], 401);
+    // Two mutually-exclusive identity paths: a logged-in `users` row (email+google_id — dormant
+    // while the app has no login UI, see install_id comment above) or an anonymous
+    // `install_credits` row (install_id, the only path currently reachable from the app). Shared
+    // with get_credits.php via resolve_identity() (config.php) so the two can't drift apart.
+    $resolved = resolve_identity($pdo, $email, $google_id, $install_id);
+    if ($resolved === null) {
+        json_response(['error' => true, 'model_response' => 'Unauthorized. Please log in again or retry in a moment.', 'cost' => 0], 401);
     }
+    $identity = $resolved['type']; // 'account' | 'anon'
+    $free_credits = $resolved['free_credits'];
+    $purchased_credits = $resolved['purchased_credits'];
 
-    $free_credits = (int)$user['free_credits'];
-    $purchased_credits = (int)$user['purchased_credits'];
-    
     // Check dynamic cost
     if (($free_credits + $purchased_credits) < $cost) {
         json_response(['error' => true, 'model_response' => "Insufficient credits. You need at least $cost credits to execute this action.", 'cost' => 0, 'free_credits' => $free_credits, 'purchased_credits' => $purchased_credits], 403);
@@ -112,6 +195,7 @@ try {
 
     if ($prompt_id === 'explore') {
         $expect_json = true;
+        $streaming = false; // structured grid JSON, not sentence-shaped — see the docblock above.
         $gridSize = 6;
         $system_prompt = "You are a precise spatial mapping AI for a visually impaired user's screen-reader app. " .
                 "CRITICAL COMPLIANCE: All descriptions assigned to grid keys MUST be written ENTIRELY in $language. " .
@@ -174,6 +258,104 @@ try {
         $payload["reasoning_effort"] = "low";
     }
 
+    // Shared token->$ rate lookup, used by both paths below to compute cogs from whatever usage
+    // stats we end up with.
+    $rateFor = function (string $returnedModelName) use ($token_rates_per_m, $model_name): array {
+        foreach ($token_rates_per_m as $key => $rates) {
+            // Match string dynamically in case API appends version suffixes (e.g. gemini-2.5-flash-lite-02-14)
+            if (strpos(strtolower($returnedModelName), $key) !== false || $model_name === $key) {
+                return [$rates['in'], $rates['out']];
+            }
+        }
+        return [0, 0];
+    };
+
+    if ($streaming) {
+        // --- Streaming path: relay the upstream SSE stream to our own client as NDJSON, one
+        // `{"delta": "..."}` line per content fragment, flushed immediately. Credits are still
+        // deducted and logged exactly once, after the stream finishes — the flat per-frame $cost
+        // above never depended on token usage, only $cogs (analytics only) does, and that's
+        // computed from whatever `usage` the last SSE chunk carried (best-effort: some providers
+        // omit it even with stream_options.include_usage requested, in which case cogs is 0 — same
+        // as the non-streaming path already tolerates via `$usage = $res_json['usage'] ?? []`).
+        header('Content-Type: application/x-ndjson; charset=utf-8');
+        header('X-Accel-Buffering: no'); // tells nginx not to buffer this response
+        header('Cache-Control: no-cache');
+        while (ob_get_level() > 0) { @ob_end_flush(); }
+        ini_set('output_buffering', 'off');
+        ini_set('implicit_flush', '1');
+        ob_implicit_flush(true);
+
+        $payload['stream'] = true;
+        $payload['stream_options'] = ['include_usage' => true];
+
+        $sseBuffer = '';
+        $accumulated = '';
+        $capturedUsage = null;
+        $capturedModelName = null;
+
+        $ch = curl_init($api_endpoint);
+        curl_setopt_array($ch, [
+            CURLOPT_POST => true,
+            CURLOPT_POSTFIELDS => json_encode($payload),
+            CURLOPT_HTTPHEADER => [
+                "Authorization: Bearer " . $api_key,
+                "Content-Type: application/json"
+            ],
+            CURLOPT_TIMEOUT => 90,
+            // Called repeatedly as bytes arrive from upstream — this is what makes it a relay
+            // instead of a buffer-then-forward. Must return the byte count consumed, or curl
+            // treats a short return as an abort.
+            CURLOPT_WRITEFUNCTION => function ($curlHandle, $chunk) use (&$sseBuffer, &$accumulated, &$capturedUsage, &$capturedModelName) {
+                $sseBuffer .= $chunk;
+                while (($nlPos = strpos($sseBuffer, "\n")) !== false) {
+                    $line = trim(substr($sseBuffer, 0, $nlPos));
+                    $sseBuffer = substr($sseBuffer, $nlPos + 1);
+                    if ($line === '' || strpos($line, 'data:') !== 0) continue;
+                    $data = trim(substr($line, 5));
+                    if ($data === '[DONE]') continue;
+                    $chunkJson = json_decode($data, true);
+                    if (!is_array($chunkJson)) continue;
+                    if (isset($chunkJson['usage']) && is_array($chunkJson['usage'])) $capturedUsage = $chunkJson['usage'];
+                    if (isset($chunkJson['model'])) $capturedModelName = $chunkJson['model'];
+                    $delta = $chunkJson['choices'][0]['delta']['content'] ?? null;
+                    if (is_string($delta) && $delta !== '') {
+                        $accumulated .= $delta;
+                        ndjson_line(['delta' => $delta]);
+                    }
+                }
+                return strlen($chunk);
+            },
+        ]);
+        $curlOk = curl_exec($ch);
+        $http_code = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        curl_close($ch);
+
+        if ($curlOk === false || $http_code !== 200) {
+            // If some deltas already went out, the client still gets a clean error line telling it
+            // to stop and treat what it received as incomplete/discard it — see
+            // OfflineInferenceEngine.analyzeStreaming's client-side doc for the equivalent contract.
+            ndjson_line(['error' => true, 'model_response' => 'Error communicating with AI server. Please try again.']);
+            exit;
+        }
+
+        $returned_model_name = $capturedModelName ?? $model_name;
+        $usage = $capturedUsage ?? [];
+        $input_tokens = (int)($usage['prompt_tokens'] ?? 0);
+        $output_tokens = (int)($usage['completion_tokens'] ?? 0);
+        $stats_json = empty($usage) ? null : json_encode($usage);
+        [$rate_in, $rate_out] = $rateFor($returned_model_name);
+        $cogs = (($input_tokens / 1000000) * $rate_in) + (($output_tokens / 1000000) * $rate_out);
+
+        $balances = deduct_credits_and_log(
+            $pdo, $identity, $email, $install_id, $prompt_id, $cost, $free_credits, $purchased_credits,
+            $returned_model_name, $input_tokens, $output_tokens, $stats_json, $cogs
+        );
+        ndjson_line(['done' => true, 'cost' => $cost, 'free_credits' => $balances['free_credits'], 'purchased_credits' => $balances['purchased_credits']]);
+        exit;
+    }
+
+    // --- Non-streaming path (unchanged behavior) ---
     $ch = curl_init($api_endpoint);
     curl_setopt_array($ch, [
         CURLOPT_RETURNTRANSFER => true,
@@ -196,7 +378,7 @@ try {
 
     if ($debug)
         file_put_contents('/home/wikipond/lense_whisper/output.json', $response);
-        
+
     $res_json = json_decode($response, true);
     $model_response = $res_json['choices'][0]['message']['content'] ?? 'Error parsing AI response.';
 
@@ -210,62 +392,28 @@ try {
     $stats_json = empty($usage) ? null : json_encode($usage);
 
     // Calculate actual COGS based on returned model and token usage
-    $rate_in = 0;
-    $rate_out = 0;
-    foreach ($token_rates_per_m as $key => $rates) {
-        // Match string dynamically in case API appends version suffixes (e.g. gemini-2.5-flash-lite-02-14)
-        if (strpos(strtolower($returned_model_name), $key) !== false || $model_name === $key) {
-            $rate_in = $rates['in'];
-            $rate_out = $rates['out'];
-            break;
-        }
-    }
+    [$rate_in, $rate_out] = $rateFor($returned_model_name);
     $cogs = (($input_tokens / 1000000) * $rate_in) + (($output_tokens / 1000000) * $rate_out);
 
-    // 9. Deduct Credits & Log
-    $cost_purchased = 0;
-    $cost_free = 0;
+    // 9. Deduct Credits & Log — email is NULL for anonymous requests, install_id stored instead
+    // (see deduct_credits_and_log) so usage is still traceable per-device.
+    $balances = deduct_credits_and_log(
+        $pdo, $identity, $email, $install_id, $prompt_id, $cost, $free_credits, $purchased_credits,
+        $returned_model_name, $input_tokens, $output_tokens, $stats_json, $cogs
+    );
 
-    if ($purchased_credits >= $cost) {
-        $cost_purchased = $cost;
-        $purchased_credits -= $cost;
-    } else {
-        $cost_purchased = $purchased_credits;
-        $cost_free = $cost - $purchased_credits;
-        $purchased_credits = 0;
-        $free_credits -= $cost_free;
-    }
-
-    $pdo->beginTransaction();
-    $updateStmt = $pdo->prepare('UPDATE users SET free_credits = :fc, purchased_credits = :pc, updated_at = CURRENT_TIMESTAMP WHERE email = :email');
-    $updateStmt->execute([':fc' => $free_credits, ':pc' => $purchased_credits, ':email' => $email]);
-
-    // Insert purchase log including actual returned model name and calculated cogs
-    $logStmt = $pdo->prepare('INSERT INTO purchase_log (email, prompt_id, cost_free, cost_purchased, model_name, input_tokens, output_tokens, stats_json, cogs) VALUES (:email, :prompt_id, :cf, :cp, :model_name, :input_tokens, :output_tokens, :stats_json, :cogs)');
-    $logStmt->execute([
-        ':email' => $email,
-        ':prompt_id' => $prompt_id,
-        ':cf' => $cost_free,
-        ':cp' => $cost_purchased,
-        ':model_name' => $returned_model_name,
-        ':input_tokens' => $input_tokens,
-        ':output_tokens' => $output_tokens,
-        ':stats_json' => $stats_json,
-        ':cogs' => $cogs
-    ]);
-    $pdo->commit();
-    
     json_response([
         'error' => false,
         'model_response' => $model_response,
         'cost' => $cost,
-        'free_credits' => $free_credits,
-        'purchased_credits' => $purchased_credits
+        'free_credits' => $balances['free_credits'],
+        'purchased_credits' => $balances['purchased_credits']
     ]);
 
-} catch (Exception $e) {
+} catch (Throwable $e) {
     if (isset($pdo) && $pdo->inTransaction()) { $pdo->rollBack(); }
-    if ($debug)
+    error_log('process.php error: ' . $e->getMessage());
+    if ($debug && isset($pdo))
         print_r($pdo->errorInfo());
     json_response(['error' => true, 'model_response' => 'Internal server database error.', 'cost' => 0], 500);
 }

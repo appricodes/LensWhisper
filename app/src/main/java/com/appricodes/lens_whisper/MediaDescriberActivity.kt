@@ -1,6 +1,5 @@
 package com.appricodes.lens_whisper
 
-import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.view.KeyEvent
@@ -17,7 +16,8 @@ import com.appricodes.lens_whisper.network.XaiVisionEngine
 import com.appricodes.lens_whisper.ui.screens.MediaDescriberScreen
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
-import com.appricodes.lens_whisper.utils.VolumeShortcuts
+import com.appricodes.lens_whisper.utils.VolumeKeyGestureHandler
+import androidx.lifecycle.lifecycleScope
 
 /**
  * Online AI description for a video/image file. Registered to open shared video/image files
@@ -32,24 +32,25 @@ class MediaDescriberActivity : ComponentActivity() {
     private var exoPlayer: ExoPlayer? = null
 
     private var globalVoiceTrigger: (() -> Unit)? = null
+    private var globalMicStop: (() -> Unit)? = null
     private var globalPlayPause: (() -> Unit)? = null
     private var globalRepeatAction: (() -> Unit)? = null
     private var wasVideoPlaying = false
+    private lateinit var volumeKeyHandler: VolumeKeyGestureHandler
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = PreferencesManager(this)
+        volumeKeyHandler = VolumeKeyGestureHandler(
+            context = this,
+            scope = lifecycleScope,
+            prefs = prefs,
+            onRepeat = { globalRepeatAction?.invoke() ?: AccessibilityUtils.announceToTalkBack(this, "No previous action to repeat.") },
+            onMicStart = { globalVoiceTrigger?.invoke() },
+            onMicStop = { globalMicStop?.invoke() }
+        )
 
-        if (!prefs.isLoggedIn) {
-            val pending = Intent(this, MediaDescriberActivity::class.java).apply {
-                data = intent?.data
-                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            }
-            startActivity(Intent(this, LoginActivity::class.java).putExtra("PENDING_INTENT", pending))
-            finish()
-            return
-        }
-
+        // A login gate used to sit here — see LOGIN_AND_PURCHASES_REMOVED.md at the repo root.
         appSettings = SettingsRepository(this).loadSettingsFromAssets()
         apiClient = XaiVisionEngine()
 
@@ -94,6 +95,7 @@ class MediaDescriberActivity : ComponentActivity() {
                     initialFileUri = initialFileUri,
                     exoPlayer = player,
                     onVoiceTriggerReady = { globalVoiceTrigger = it },
+                    onMicStopReady = { globalMicStop = it },
                     onPlayPauseReady = { globalPlayPause = it },
                     onRepeatReady = { globalRepeatAction = it }
                 )
@@ -110,11 +112,10 @@ class MediaDescriberActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        val consumed = VolumeShortcuts.onKeyDown(
-            this, prefs, keyCode,
-            onRepeat = { globalRepeatAction?.invoke() ?: AccessibilityUtils.announceToTalkBack(this, "No previous action to repeat.") },
-            onPrimary = { globalVoiceTrigger?.invoke() }
-        )
-        return if (consumed) true else super.onKeyDown(keyCode, event)
+        return if (volumeKeyHandler.onKeyDown(keyCode)) true else super.onKeyDown(keyCode, event)
+    }
+
+    override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
+        return if (volumeKeyHandler.onKeyUp(keyCode)) true else super.onKeyUp(keyCode, event)
     }
 }

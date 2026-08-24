@@ -14,9 +14,16 @@ import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.UseCase
 import androidx.camera.lifecycle.ProcessCameraProvider
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import com.appricodes.lens_whisper.utils.ImageScaling
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -25,6 +32,8 @@ import java.io.FileOutputStream
 import java.util.concurrent.Executors
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+
+private const val TORCH_AUTO_OFF_MS = 60_000L
 
 /** A captured still photo: the decoded/scaled bitmap plus a cache-file Uri for network upload. */
 data class CapturedFrame(val bitmap: Bitmap, val uri: Uri)
@@ -48,8 +57,42 @@ class CameraController(private val context: Context) {
     var activeCamera: Camera? = null
         private set
 
-    var lensFacing = CameraSelector.LENS_FACING_BACK
+    // mutableStateOf (not a plain var) so screens can read it reactively to announce which
+    // camera is current/was just switched to, without threading a separate tracking var.
+    var lensFacing by mutableStateOf(CameraSelector.LENS_FACING_BACK)
         private set
+
+    var torchOn by mutableStateOf(false)
+        private set
+    private var torchAutoOffJob: Job? = null
+
+    /** Toggles the flashlight, auto-turning it off after [TORCH_AUTO_OFF_MS] if left on.
+     *  [onAutoOff] is invoked (on the main thread) only when the auto-off timer — not a manual
+     *  toggle — is what turned it off, so the caller can announce it via TalkBack. */
+    fun toggleTorch(scope: CoroutineScope, onAutoOff: () -> Unit = {}) {
+        val camera = activeCamera ?: return
+        torchAutoOffJob?.cancel()
+        val turningOn = !torchOn
+        torchOn = turningOn
+        camera.cameraControl.enableTorch(turningOn)
+        if (turningOn) {
+            torchAutoOffJob = scope.launch {
+                delay(TORCH_AUTO_OFF_MS)
+                torchOn = false
+                activeCamera?.cameraControl?.enableTorch(false)
+                onAutoOff()
+            }
+        }
+    }
+
+    /** Forces the torch off with no auto-off announcement — used before lens switches, when
+     *  Light Level activates, and on lifecycle pause, where a stray timer must never survive. */
+    fun forceTorchOff() {
+        torchAutoOffJob?.cancel()
+        torchAutoOffJob = null
+        torchOn = false
+        activeCamera?.cameraControl?.enableTorch(false)
+    }
 
     /** Binds ImageCapture (always) and, if [onAnalysisFrame] is provided, a continuous ImageAnalysis feed. */
     suspend fun bind(
@@ -85,15 +128,22 @@ class CameraController(private val context: Context) {
     }
 
     fun unbind() {
+        forceTorchOff()
         provider?.unbindAll()
         activeCamera = null
     }
 
-    /** Returns the new lens facing; caller should re-[bind] to apply it. */
+    /** Returns the new lens facing; caller should re-[bind] to apply it. Forces the torch off
+     *  first — the front lens usually has no torch hardware, and a stray auto-off timer must
+     *  never outlive the camera it was bound to. */
     fun toggleLensFacing(): Int {
+        forceTorchOff()
         lensFacing = if (lensFacing == CameraSelector.LENS_FACING_BACK) CameraSelector.LENS_FACING_FRONT else CameraSelector.LENS_FACING_BACK
         return lensFacing
     }
+
+    /** Whether the currently bound camera has flash/torch hardware at all (usually false for the front lens). */
+    fun hasFlashUnit(): Boolean = activeCamera?.cameraInfo?.hasFlashUnit() == true
 
     /** Takes a photo, scales it to [maxDim] (never upscaling), and returns the bitmap. */
     suspend fun capturePhoto(maxDim: Int = 2500): Bitmap = capturePhotoInternal(maxDim).bitmap

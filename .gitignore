@@ -17,5 +17,7 @@ local.properties
 # Secrets - contain live DB/API credentials and admin password, never commit
 config.php
 backend/config.php
+backend/config.production.php
 modir.php
 backend/modir.php
+/Credentials/

@@ -108,8 +108,29 @@ dependencies {
     // LiteRT-LM on-device model inference (Manage Advanced Models)
     implementation(libs.litertlm.android)
 
+    // Forces kotlinx-coroutines-core/-android to 1.11.0+ instead of whatever transitive
+    // resolution would otherwise pick (1.9.0, as of writing — see litertlm-android's own POM,
+    // which is what actually drives that). This isn't a version *preference*, it's a hard
+    // requirement: litertlm-android's compiled Kotlin (Conversation.kt, the
+    // sendMessageAsync(): Flow<Message> streaming path specifically) calls
+    // `SendChannel.close$default(...)` as a *static interface method declared directly on
+    // SendChannel* — the newer `-Xjvm-default=all`-style ABI. Versions through 1.9.0 (and 1.10.x,
+    // unconfirmed) instead put that dispatcher on a separate `SendChannel$DefaultImpls` class, so
+    // the call fails at runtime with NoSuchMethodError — not caught anywhere, so it crashes the
+    // whole app — the instant a streamed on-device response finishes (confirmed via crash log,
+    // 2026-08-24: `Conversation$sendMessageAsync$1$1.onDone`). Verified 1.11.0 puts it on the
+    // interface directly (decompiled both sides to confirm before landing this). If a future
+    // litertlm-android release fixes this on their end, this pin can likely be relaxed back to
+    // whatever they declare — but don't lower it without re-checking both sides again.
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
+
     // RevenueCat: manages Google Play Billing purchases for credit packages
     implementation("com.revenuecat.purchases:purchases:9.23.1")
+
+    // Google Mobile Ads: rewarded ads let users earn free credits without paying — see
+    // ads/RewardedAdManager.kt and REVENUECAT_SETUP.md-style setup notes there.
+    implementation("com.google.android.gms:play-services-ads:23.6.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

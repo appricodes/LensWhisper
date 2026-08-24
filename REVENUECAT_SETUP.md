@@ -13,7 +13,8 @@ it can be done from code.
   and lets the user buy a package; it does **not** grant credits itself.
 - **Server**: `backend/revenuecat_webhook.php` is the source of truth for granting credits — it's
   called by RevenueCat, not by the app, so a purchase can't be spoofed by a modified client.
-  `backend/sync_credits.php` lets the app poll for the updated total right after a purchase
+  `backend/get_credits.php` (shared with the anonymous ad-credit system, see
+  LOGIN_AND_PURCHASES_REMOVED.md) lets the app poll for the updated total right after a purchase
   (the webhook can lag the client's purchase callback by a few seconds).
 
 ## 1. Create a RevenueCat project
@@ -73,8 +74,8 @@ let you activate in-app products.
 3. In RevenueCat: **Project Settings → Integrations → Webhooks**, add:
    - URL: `https://www.wikiponder.com/lense_whisper/revenuecat_webhook.php`
    - Authorization header value: the same secret from step 2
-4. Deploy `backend/revenuecat_webhook.php`, `backend/sync_credits.php`, and the updated
-   `backend/config.php` to the server.
+4. Deploy `backend/revenuecat_webhook.php` and the updated `backend/config.php` to the server
+   (`backend/get_credits.php` is already deployed/in use for the ad-credit system either way).
 
 ## 6. Test it
 
