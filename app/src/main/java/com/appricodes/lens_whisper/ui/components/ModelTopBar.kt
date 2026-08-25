@@ -65,6 +65,7 @@ fun ModelTopBar(
         selectedModelName = when (selectedModelId) {
             "mlkit" -> "MLKit (Offline)"
             "online" -> "Online Describer"
+            "local_server" -> "Local Server"
             else -> offlineModelsRepository.loadModels().find { it.id == selectedModelId }?.displayName ?: "No Model Selected"
         }
         totalCredits = prefs.freeCredits + prefs.purchasedCredits

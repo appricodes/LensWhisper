@@ -9,6 +9,9 @@ import java.nio.file.Path
 import java.nio.file.StandardCopyOption
 import java.time.Duration
 
+/** Called as a download progresses: (fileLabel, bytesDownloaded, totalBytes). */
+typealias DownloadProgress = (String, Long, Long) -> Unit
+
 object ModelDownloader {
 
     private val client: HttpClient = HttpClient.newBuilder()
@@ -17,13 +20,14 @@ object ModelDownloader {
         .build()
 
     /** Downloads [spec]'s model + mmproj files into [modelsDir] if not already present, printing
-     * simple progress to stdout. Returns the local (model, mmproj) paths. */
-    fun ensureDownloaded(spec: ModelSpec, modelsDir: Path): Pair<Path, Path> {
+     * simple progress to stdout and optionally reporting byte-level progress via [onProgress].
+     * Returns the local (model, mmproj) paths. */
+    fun ensureDownloaded(spec: ModelSpec, modelsDir: Path, onProgress: DownloadProgress? = null): Pair<Path, Path> {
         Files.createDirectories(modelsDir)
         val modelPath = modelsDir.resolve(spec.modelFile)
         val mmprojPath = modelsDir.resolve(spec.mmprojFile)
-        downloadIfMissing(spec.modelUrl, modelPath, spec.modelSizeBytes)
-        downloadIfMissing(spec.mmprojUrl, mmprojPath, spec.mmprojSizeBytes)
+        downloadIfMissing(spec.modelUrl, modelPath, spec.modelSizeBytes, onProgress)
+        downloadIfMissing(spec.mmprojUrl, mmprojPath, spec.mmprojSizeBytes, onProgress)
         return modelPath to mmprojPath
     }
 
@@ -40,18 +44,33 @@ object ModelDownloader {
         return actual > expectedSizeBytes * 9 / 10
     }
 
-    private fun downloadIfMissing(url: String, dest: Path, expectedSizeBytes: Long) {
+    private fun downloadIfMissing(url: String, dest: Path, expectedSizeBytes: Long, onProgress: DownloadProgress?) {
+        val label = dest.fileName.toString()
         if (looksComplete(dest, expectedSizeBytes)) {
-            println("  already have ${dest.fileName} (${humanSize(Files.size(dest))})")
+            println("  already have $label (${humanSize(Files.size(dest))})")
+            onProgress?.invoke(label, expectedSizeBytes, expectedSizeBytes)
             return
         }
-        println("  downloading ${dest.fileName} from $url")
-        val partial = dest.resolveSibling("${dest.fileName}.part")
+        println("  downloading $label from $url")
+        val partial = dest.resolveSibling("$label.part")
         val request = HttpRequest.newBuilder(URI.create(url)).GET().build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofFile(partial))
+        val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
         if (response.statusCode() !in 200..299) {
-            Files.deleteIfExists(partial)
             throw RuntimeException("Download failed (HTTP ${response.statusCode()}) for $url")
+        }
+        val totalBytes = response.headers().firstValueAsLong("content-length").orElse(expectedSizeBytes)
+        var downloaded = 0L
+        val buffer = ByteArray(64 * 1024)
+        Files.newOutputStream(partial).use { out ->
+            response.body().use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    out.write(buffer, 0, read)
+                    downloaded += read
+                    onProgress?.invoke(label, downloaded, totalBytes)
+                }
+            }
         }
         val actualSize = Files.size(partial)
         if (actualSize < expectedSizeBytes / 2) {
@@ -61,7 +80,8 @@ object ModelDownloader {
             )
         }
         Files.move(partial, dest, StandardCopyOption.REPLACE_EXISTING)
-        println("  done: ${dest.fileName} (${humanSize(actualSize)})")
+        println("  done: $label (${humanSize(actualSize)})")
+        onProgress?.invoke(label, actualSize, expectedSizeBytes)
     }
 
     private fun humanSize(bytes: Long): String {

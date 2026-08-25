@@ -36,8 +36,9 @@ class AnalysisService(private val baseUrl: String) {
         maxTokens: Int = 400,
         temperature: Double = 0.7,
         expectJson: Boolean = false,
+        onUsage: ((promptTokens: Int, completionTokens: Int) -> Unit)? = null,
     ): String {
-        val requestBody = buildRequestJson(systemInstruction, userPrompt, frameJpegBase64, maxTokens, temperature, stream = false, expectJson = expectJson)
+        val requestBody = buildRequestJson(systemInstruction, userPrompt, frameJpegBase64, maxTokens, temperature, stream = false, expectJson = expectJson, includeUsage = false)
         val request = HttpRequest.newBuilder(URI.create("$baseUrl/v1/chat/completions"))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(120))
@@ -48,20 +49,24 @@ class AnalysisService(private val baseUrl: String) {
             throw RuntimeException("llama-server returned HTTP ${response.statusCode()}: ${response.body().take(500)}")
         }
         val parsed = json.decodeFromString(ChatCompletionResponse.serializer(), response.body())
+        parsed.usage?.let { onUsage?.invoke(it.prompt_tokens, it.completion_tokens) }
         return parsed.choices.firstOrNull()?.message?.content
             ?: throw RuntimeException("llama-server response had no message content: ${response.body().take(500)}")
     }
 
     /** Streams response deltas as they arrive over SSE. Emits raw text fragments; the caller
-     * concatenates them for the full response. */
+     * concatenates them for the full response. When [onUsage] is supplied, requests
+     * `stream_options.include_usage` (same trick backend/process.php uses) so token counts are
+     * available from the final chunk even in streaming mode. */
     fun analyzeStreaming(
         systemInstruction: String,
         userPrompt: String,
         frameJpegBase64: List<String>,
         maxTokens: Int = 400,
         temperature: Double = 0.7,
+        onUsage: ((promptTokens: Int, completionTokens: Int) -> Unit)? = null,
     ): Flow<String> = flow {
-        val requestBody = buildRequestJson(systemInstruction, userPrompt, frameJpegBase64, maxTokens, temperature, stream = true, expectJson = false)
+        val requestBody = buildRequestJson(systemInstruction, userPrompt, frameJpegBase64, maxTokens, temperature, stream = true, expectJson = false, includeUsage = onUsage != null)
         val request = HttpRequest.newBuilder(URI.create("$baseUrl/v1/chat/completions"))
             .header("Content-Type", "application/json")
             .timeout(Duration.ofSeconds(120))
@@ -80,6 +85,7 @@ class AnalysisService(private val baseUrl: String) {
                 if (payload == "[DONE]") break
                 if (payload.isEmpty()) continue
                 val chunk = json.decodeFromString(ChatCompletionResponse.serializer(), payload)
+                chunk.usage?.let { onUsage?.invoke(it.prompt_tokens, it.completion_tokens) }
                 val delta = chunk.choices.firstOrNull()?.delta?.content
                 if (!delta.isNullOrEmpty()) emit(delta)
             }
@@ -94,6 +100,7 @@ class AnalysisService(private val baseUrl: String) {
         temperature: Double,
         stream: Boolean,
         expectJson: Boolean,
+        includeUsage: Boolean,
     ): String {
         val isMultiFrame = frameJpegBase64.size > 1
         // Text part first, then one image_url part per frame — same order as backend/process.php.
@@ -128,6 +135,7 @@ class AnalysisService(private val baseUrl: String) {
             put("temperature", temperature)
             put("stream", stream)
             if (expectJson) put("response_format", buildJsonObject { put("type", "json_object") })
+            if (includeUsage) put("stream_options", buildJsonObject { put("include_usage", true) })
         }
         return requestObj.toString()
     }

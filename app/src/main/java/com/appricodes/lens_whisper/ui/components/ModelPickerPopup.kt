@@ -49,6 +49,7 @@ fun ModelPickerPopup(
     // (small -> large), then Online last — same order as `ModelManagementActivity`.
     val offlineModels = remember { repository.loadModels() }
     var memoryWarningModel by remember { mutableStateOf<OfflineModelInfo?>(null) }
+    var showLocalServerInfo by remember { mutableStateOf(false) }
 
     fun selectModel(id: String) {
         onModelSelected(id)
@@ -91,6 +92,17 @@ fun ModelPickerPopup(
                 if (eligible) onModelSelected("online") else onNeedCredits()
             }
         )
+        DropdownMenuItem(
+            text = { Text("Local Server" + if (selectedModelId == "local_server") " ✓" else "") },
+            onClick = {
+                onDismiss()
+                onModelSelected("local_server")
+                if (!prefs.hasSeenLocalServerIntro) {
+                    prefs.hasSeenLocalServerIntro = true
+                    showLocalServerInfo = true
+                }
+            }
+        )
         HorizontalDivider()
         DropdownMenuItem(text = { Text("Manage models…") }, onClick = { onDismiss(); onOpenModelManager() })
     }
@@ -105,5 +117,9 @@ fun ModelPickerPopup(
             },
             onCancel = { memoryWarningModel = null }
         )
+    }
+
+    if (showLocalServerInfo) {
+        LocalServerInfoDialog(onDismiss = { showLocalServerInfo = false })
     }
 }

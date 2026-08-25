@@ -1,0 +1,54 @@
+{
+  "models": [
+    {
+      "id": "smolvlm2-500m",
+      "displayName": "SmolVLM2 500M",
+      "description": "Smallest, fastest local model — good for quick captions and simple questions.",
+      "hfRepo": "ggml-org/SmolVLM2-500M-Video-Instruct-GGUF",
+      "modelFile": "SmolVLM2-500M-Video-Instruct-Q8_0.gguf",
+      "mmprojFile": "mmproj-SmolVLM2-500M-Video-Instruct-f16.gguf",
+      "modelSizeBytes": 437000000,
+      "mmprojSizeBytes": 199000000
+    },
+    {
+      "id": "lfm2-vl-450m",
+      "displayName": "LFM2-VL 450M",
+      "description": "Compact vision-language model, smaller download than SmolVLM2.",
+      "hfRepo": "LiquidAI/LFM2-VL-450M-GGUF",
+      "modelFile": "LFM2-VL-450M-Q4_0.gguf",
+      "mmprojFile": "mmproj-LFM2-VL-450M-Q8_0.gguf",
+      "modelSizeBytes": 219000000,
+      "mmprojSizeBytes": 104000000
+    },
+    {
+      "id": "smolvlm2-2200m",
+      "displayName": "SmolVLM2 2.2B",
+      "description": "Larger SmolVLM2 variant — better quality than the 500M version, slower and a bigger download.",
+      "hfRepo": "ggml-org/SmolVLM2-2.2B-Instruct-GGUF",
+      "modelFile": "SmolVLM2-2.2B-Instruct-Q4_K_M.gguf",
+      "mmprojFile": "mmproj-SmolVLM2-2.2B-Instruct-Q8_0.gguf",
+      "modelSizeBytes": 1110000000,
+      "mmprojSizeBytes": 593000000
+    },
+    {
+      "id": "qwen-vl-2b",
+      "displayName": "Qwen2-VL 2B",
+      "description": "2B-parameter Qwen vision-language model — supports structured/spatial (Explore-style) analysis.",
+      "hfRepo": "bartowski/Qwen2-VL-2B-Instruct-GGUF",
+      "modelFile": "Qwen2-VL-2B-Instruct-Q4_K_M.gguf",
+      "mmprojFile": "mmproj-Qwen2-VL-2B-Instruct-f16.gguf",
+      "modelSizeBytes": 986000000,
+      "mmprojSizeBytes": 1330000000
+    },
+    {
+      "id": "gemma4-e2b",
+      "displayName": "Gemma 4 E2B",
+      "description": "Largest, highest-quality model in this catalog — best results, biggest download and slowest to run.",
+      "hfRepo": "ggml-org/gemma-4-E2B-it-GGUF",
+      "modelFile": "gemma-4-E2B-it-Q4_0.gguf",
+      "mmprojFile": "mmproj-gemma-4-E2B-it-Q8_0.gguf",
+      "modelSizeBytes": 2840000000,
+      "mmprojSizeBytes": 557000000
+    }
+  ]
+}

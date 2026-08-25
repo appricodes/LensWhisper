@@ -14,6 +14,14 @@ class LlamaServerManager(
     private val modelPath: Path,
     private val mmprojPath: Path,
     private val logFile: Path,
+    /** Number of model layers to offload to the GPU (`-ngl`), or null to run CPU-only. Only takes
+     * effect if [serverExecutable] was actually built with GPU support (Vulkan/Metal/etc). */
+    private val nGpuLayers: Int? = null,
+    /** Token budget for a reasoning model's internal "thinking" (`--reasoning-budget`), or null to
+     * leave it at llama-server's own default (unrestricted). 0 disables thinking entirely. Only
+     * meaningful for models whose chat template actually supports reasoning — harmless no-op
+     * otherwise. See the GUI's "Thinking budget" control (server/HttpApi.kt, gui/AppController.kt). */
+    private val reasoningBudget: Int? = null,
 ) : AutoCloseable {
 
     private var process: Process? = null
@@ -32,15 +40,19 @@ class LlamaServerManager(
         port = findFreePort()
         java.nio.file.Files.createDirectories(logFile.parent)
 
-        val command = listOf(
-            serverExecutable.toAbsolutePath().toString(),
-            "-m", modelPath.toAbsolutePath().toString(),
-            "--mmproj", mmprojPath.toAbsolutePath().toString(),
-            "--host", "127.0.0.1",
-            "--port", port.toString(),
-            "-c", "4096",
-        )
-        println("  starting llama-server on port $port (log: $logFile)")
+        val command = buildList {
+            add(serverExecutable.toAbsolutePath().toString())
+            add("-m"); add(modelPath.toAbsolutePath().toString())
+            add("--mmproj"); add(mmprojPath.toAbsolutePath().toString())
+            add("--host"); add("127.0.0.1")
+            add("--port"); add(port.toString())
+            add("-c"); add("4096")
+            if (nGpuLayers != null) { add("-ngl"); add(nGpuLayers.toString()) }
+            if (reasoningBudget != null) { add("--reasoning-budget"); add(reasoningBudget.toString()) }
+        }
+        val backendNote = if (nGpuLayers != null) " (GPU, -ngl $nGpuLayers)" else " (CPU)"
+        val reasoningNote = if (reasoningBudget != null) ", thinking budget $reasoningBudget" else ""
+        println("  starting llama-server$backendNote$reasoningNote on port $port (log: $logFile)")
         val builder = ProcessBuilder(command)
             .redirectOutput(logFile.toFile())
             .redirectErrorStream(true)
@@ -48,7 +60,14 @@ class LlamaServerManager(
 
         Runtime.getRuntime().addShutdownHook(Thread { stopQuietly() })
 
-        waitForHealthy(healthTimeout)
+        try {
+            waitForHealthy(healthTimeout)
+        } catch (e: Exception) {
+            // Don't leak a half-started/unhealthy process on failure — matters most for GPU
+            // attempts, which callers may retry on CPU right after catching this.
+            stopQuietly()
+            throw e
+        }
     }
 
     private fun waitForHealthy(timeout: Duration) {

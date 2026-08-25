@@ -91,7 +91,9 @@ class OfflineModelsRepository(private val context: Context) {
 
     fun deleteDownload(model: OfflineModelInfo): Boolean = localFileFor(model).delete()
 
-    /** The Online Describer always supports Explore; an offline model must declare it via supportsExplore. */
+    /** The Online Describer and Local Server always support Explore; an offline model must declare
+     *  it via supportsExplore. */
     fun isExploreSupported(selectedModelId: String): Boolean =
-        selectedModelId == "online" || loadModels().find { it.id == selectedModelId }?.supportsExplore ?: true
+        selectedModelId == "online" || selectedModelId == "local_server" ||
+            loadModels().find { it.id == selectedModelId }?.supportsExplore ?: true
 }

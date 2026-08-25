@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LensWhisper — Local Server</title>
+<style>
+  :root { color-scheme: light dark; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    font-size: 18px;
+    line-height: 1.6;
+    max-width: 40rem;
+    margin: 0 auto;
+    padding: 1.5rem;
+  }
+  h1 { font-size: 1.6rem; }
+  h2 { font-size: 1.25rem; margin-top: 2rem; }
+  code, pre {
+    background: rgba(127,127,127,0.15);
+    border-radius: 4px;
+    padding: 0.15rem 0.4rem;
+    font-size: 0.95em;
+  }
+  pre { padding: 0.8rem; overflow-x: auto; }
+  pre code { padding: 0; background: none; }
+  .note {
+    border-left: 4px solid currentColor;
+    padding: 0.6rem 1rem;
+    margin: 1.5rem 0;
+    opacity: 0.9;
+  }
+  a { color: inherit; }
+</style>
+</head>
+<body>
+
+<h1>LensWhisper Desktop — Local Server</h1>
+
+<p>
+  <strong>Local Server</strong> is a way to run LensWhisper's image analysis on a computer you
+  own, on your own home network, instead of sending photos to our cloud servers.
+</p>
+
+<h2>Why use it?</h2>
+<ul>
+  <li><strong>Private.</strong> Your photos never leave your home network.</li>
+  <li><strong>Free.</strong> No credits, no limits — it runs entirely on your own computer.</li>
+  <li><strong>No cloud wait.</strong> Once it's running, there's no round trip to a server you
+      don't control.</li>
+</ul>
+
+<p>
+  Once the desktop app is running on a computer on your Wi-Fi network, the LensWhisper phone app
+  finds it automatically — just select <strong>Local Server</strong> as your model.
+</p>
+
+<div class="note">
+  <strong>Early access note:</strong> a ready-to-run installer isn't published yet. For now,
+  setting this up means building and running the companion app from source, below. This page
+  will be updated with a one-click installer without changing this link, so it's safe to bookmark
+  or share.
+</div>
+
+<h2>Requirements</h2>
+<ul>
+  <li>Windows, macOS, or Linux computer on the same Wi-Fi network as your phone</li>
+  <li>A <a href="https://adoptium.net/">Java 17+ runtime</a> (JDK)</li>
+  <li>~500 MB–3 GB free disk space, depending on which AI model you choose</li>
+</ul>
+
+<h2>Setup</h2>
+<ol>
+  <li>Get the <code>desktop/</code> project from the LensWhisper source repository.</li>
+  <li>Open a terminal in that folder and run:
+    <pre><code>./gradlew run</code></pre>
+    (on Windows: <code>gradlew.bat run</code>)
+  </li>
+  <li>A control panel opens in your browser. Pick a model, download it, choose CPU or GPU, and
+      press <strong>Start server</strong>.</li>
+  <li>On your phone, open LensWhisper, select <strong>Local Server</strong> as the model — it
+      finds your computer automatically as long as both are on the same Wi-Fi network.</li>
+</ol>
+
+<p>See the project's <code>desktop/README.md</code> for full details, troubleshooting, and GPU setup.</p>
+
+</body>
+</html>

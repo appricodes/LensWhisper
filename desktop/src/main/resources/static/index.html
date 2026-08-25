@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LensWhisper Desktop — Control Panel</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header>
+    <h1>LensWhisper Desktop</h1>
+    <p>Local image analysis control panel — runs entirely on this computer.</p>
+  </header>
+
+  <main>
+    <section aria-labelledby="model-heading">
+      <h2 id="model-heading">1. Model</h2>
+      <fieldset>
+        <legend>Choose a model</legend>
+        <div role="radiogroup" aria-label="Available models" id="model-list">
+          <p>Loading models…</p>
+        </div>
+      </fieldset>
+    </section>
+
+    <section aria-labelledby="backend-heading">
+      <h2 id="backend-heading">2. Backend</h2>
+      <div class="field-row">
+        <label for="backend-select">Choose CPU or GPU</label>
+        <select id="backend-select">
+          <option value="cpu" selected>CPU (always works, no extra download beyond the model)</option>
+          <option value="gpu">GPU (faster on capable hardware; needs the Vulkan engine downloaded first)</option>
+        </select>
+      </div>
+      <p id="gpu-hint" aria-live="polite" class="hint"></p>
+    </section>
+
+    <section aria-labelledby="thinking-heading">
+      <h2 id="thinking-heading">3. Thinking budget</h2>
+      <div class="field-row">
+        <label for="thinking-budget-select">How many tokens a reasoning model may "think" before answering</label>
+        <select id="thinking-budget-select">
+          <option value="0">0 (no thinking)</option>
+          <option value="50" selected>50 (default)</option>
+          <option value="100">100</option>
+          <option value="150">150</option>
+          <option value="200">200</option>
+          <option value="400">400</option>
+          <option value="500">500</option>
+        </select>
+      </div>
+      <p class="hint">
+        Reasoning models (e.g. Gemma 4) think internally before writing their answer. Too low a
+        budget can cut that off before an answer is produced at all; too high wastes time. Only
+        applies to models whose template supports reasoning — ignored by others.
+      </p>
+    </section>
+
+    <section aria-labelledby="password-heading">
+      <h2 id="password-heading">4. Password (required)</h2>
+      <div class="field-row">
+        <label for="password-input">Password the phone app must enter to use this server (leave it as-is to keep whatever's already set)</label>
+        <input type="password" id="password-input" autocomplete="off">
+      </div>
+      <p>
+        <button id="set-password-btn" type="button">Set password</button>
+        <button id="clear-password-btn" type="button">Remove password</button>
+      </p>
+      <p id="password-status" aria-live="polite" class="hint">Checking…</p>
+      <p class="hint">
+        Required — the server can't start without one. Every analysis request and response
+        between the phone and this computer is encrypted using it, so only a phone with the
+        matching password entered in Settings can read or send anything. Only the password's
+        token is ever stored here or on the phone — never the password itself — but that token
+        doubles as the encryption key, so it's just as sensitive as the password. Removing it
+        requires stopping the server first.
+      </p>
+    </section>
+
+    <section aria-labelledby="control-heading">
+      <h2 id="control-heading">5. Server control</h2>
+      <p>
+        <button id="start-btn" type="button" aria-pressed="false" disabled>Start server</button>
+        <button id="stop-btn" type="button" disabled>Stop server</button>
+        <button id="quit-btn" type="button">Quit application</button>
+      </p>
+      <p id="error-region" role="alert"></p>
+    </section>
+
+    <section aria-labelledby="stats-heading">
+      <h2 id="stats-heading">Live status &amp; stats</h2>
+      <dl id="stats-panel" aria-live="polite">
+        <dt>Status</dt><dd id="stat-status">Stopped</dd>
+        <dt>Model / backend</dt><dd id="stat-model">—</dd>
+        <dt>Thinking budget</dt><dd id="stat-thinking-budget">—</dd>
+        <dt>Address</dt><dd id="stat-address">—</dd>
+        <dt>Uptime</dt><dd id="stat-uptime">—</dd>
+        <dt>Requests (succeeded / failed)</dt><dd id="stat-requests">0 / 0</dd>
+        <dt>Total generation time</dt><dd id="stat-gen-time">0s</dd>
+        <dt>Tokens (prompt / completion)</dt><dd id="stat-tokens">0 / 0</dd>
+        <dt>Tokens per second</dt><dd id="stat-tps">0</dd>
+      </dl>
+    </section>
+  </main>
+
+  <script src="/app.js"></script>
+</body>
+</html>

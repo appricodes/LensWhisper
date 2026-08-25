@@ -2,6 +2,7 @@ package com.appricodes.lenswhisper.desktop.llama
 
 import com.appricodes.lenswhisper.desktop.config.AppConfig
 import com.appricodes.lenswhisper.desktop.config.OsFamily
+import com.appricodes.lenswhisper.desktop.models.DownloadProgress
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
@@ -21,23 +22,49 @@ object LlamaDownloader {
 
     /** Downloads and extracts the pinned llama.cpp release into [binDir] if `llama-server` isn't
      * already present there, then makes it executable on Unix-like systems. */
-    fun ensureInstalled(binDir: Path) {
+    fun ensureInstalled(binDir: Path, onProgress: DownloadProgress? = null) {
+        val os = AppConfig.detectOs()
+        installArchive(binDir, url = LlamaBinaries.downloadUrlFor(os), assetName = LlamaBinaries.assetNameFor(os), onProgress)
+    }
+
+    /** Same as [ensureInstalled] but for the Vulkan (GPU) build. Throws on macOS, where GPU
+     * support is already part of the standard build handled by [ensureInstalled]. */
+    fun ensureVulkanInstalled(binDir: Path, onProgress: DownloadProgress? = null) {
+        val os = AppConfig.detectOs()
+        val url = LlamaBinaries.vulkanDownloadUrlFor(os)
+            ?: throw IllegalStateException("No separate Vulkan build exists for macOS — Metal GPU support is already included in the standard build.")
+        installArchive(binDir, url = url, assetName = LlamaBinaries.vulkanAssetNameFor(os)!!, onProgress)
+    }
+
+    private fun installArchive(binDir: Path, url: String, assetName: String, onProgress: DownloadProgress?) {
         if (LlamaBinaries.isInstalled(binDir)) {
             println("  llama-server already installed under $binDir")
+            onProgress?.invoke(assetName, 1, 1)
             return
         }
         Files.createDirectories(binDir)
         val os = AppConfig.detectOs()
-        val url = LlamaBinaries.downloadUrlFor(os)
-        val assetName = LlamaBinaries.assetNameFor(os)
         val archivePath = binDir.resolve(assetName)
 
         println("  downloading llama.cpp ($assetName) from $url")
         val request = HttpRequest.newBuilder(URI.create(url)).GET().build()
-        val response = client.send(request, HttpResponse.BodyHandlers.ofFile(archivePath))
+        val response = client.send(request, HttpResponse.BodyHandlers.ofInputStream())
         if (response.statusCode() !in 200..299) {
-            Files.deleteIfExists(archivePath)
             throw RuntimeException("Download failed (HTTP ${response.statusCode()}) for $url")
+        }
+        val totalBytes = response.headers().firstValueAsLong("content-length").orElse(-1)
+        var downloaded = 0L
+        val buffer = ByteArray(64 * 1024)
+        Files.newOutputStream(archivePath).use { out ->
+            response.body().use { input ->
+                while (true) {
+                    val read = input.read(buffer)
+                    if (read == -1) break
+                    out.write(buffer, 0, read)
+                    downloaded += read
+                    if (totalBytes > 0) onProgress?.invoke(assetName, downloaded, totalBytes)
+                }
+            }
         }
         println("  extracting $assetName")
         when {

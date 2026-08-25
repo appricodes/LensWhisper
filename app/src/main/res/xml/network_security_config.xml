@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Local Server (see network/LocalServerDiscovery.kt, network/XaiVisionEngine.kt) talks to a
+  user's own desktop app over plain http:// on the local network — it has no TLS certificate,
+  since it's addressed by a dynamic LAN IP, not a domain name. Android blocks all cleartext
+  (non-HTTPS) traffic by default for this app's targetSdk, which would silently break every
+  Local Server request. Allow cleartext by default (there's no way to scope it to "only local
+  IPs" — Network Security Config only matches hostnames, not IP ranges — but every other network
+  call this app makes already targets HTTPS, so this doesn't relax anything else the app does)
+  while explicitly re-locking the one known cloud domain to HTTPS-only as defense in depth.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+    <domain-config cleartextTrafficPermitted="false">
+        <domain includeSubdomains="true">lw.wikiponder.com</domain>
+    </domain-config>
+</network-security-config>

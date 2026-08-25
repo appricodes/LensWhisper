@@ -60,6 +60,7 @@ import com.appricodes.lens_whisper.service.ModelDownloadService
 import com.appricodes.lens_whisper.service.ModelDownloadState
 import com.appricodes.lens_whisper.ui.components.CreditsDialog
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
+import com.appricodes.lens_whisper.ui.components.LocalServerInfoDialog
 import com.appricodes.lens_whisper.ui.components.MemoryWarningDialog
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
@@ -105,6 +106,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     var showClearAllConfirm by remember { mutableStateOf(false) }
     var isClearingAll by remember { mutableStateOf(false) }
     var showCreditsDialog by remember { mutableStateOf(false) }
+    var showLocalServerInfo by remember { mutableStateOf(false) }
     var offlineImageSize by remember { mutableStateOf(prefs.offlineImageSize) }
     var imageSizeDropdownExpanded by remember { mutableStateOf(false) }
 
@@ -134,6 +136,20 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         selectedId = "online"
         OfflineInferenceEngine.release()
         AccessibilityUtils.announceToTalkBack(context, "Online Describer selected.")
+    }
+
+    // Selection itself is never gated behind the dialog — it always happens immediately; the
+    // dialog is a one-time companion popup shown alongside the first selection, not a gate on it.
+    // Reopenable afterward any time via MoreMenu's "About Local Server" item.
+    fun selectLocalServer() {
+        prefs.selectedModelId = "local_server"
+        selectedId = "local_server"
+        OfflineInferenceEngine.release()
+        AccessibilityUtils.announceToTalkBack(context, "Local Server selected.")
+        if (!prefs.hasSeenLocalServerIntro) {
+            prefs.hasSeenLocalServerIntro = true
+            showLocalServerInfo = true
+        }
     }
 
     // Selecting an on-device model starts loading it right away — see ModelLoadingObserver
@@ -228,6 +244,11 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             eligible = eligibleForOnline,
             onSelect = { selectOnline() },
             onPurchase = { showCreditsDialog = true }
+        )
+
+        LocalServerCard(
+            isSelected = selectedId == "local_server",
+            onSelect = { selectLocalServer() }
         )
 
         HorizontalDivider()
@@ -364,6 +385,10 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         CreditsDialog(prefs = prefs, onDismiss = { showCreditsDialog = false })
     }
 
+    if (showLocalServerInfo) {
+        LocalServerInfoDialog(onDismiss = { showLocalServerInfo = false })
+    }
+
     ModelLoadingObserver(context = context, selectedModelId = selectedId, offlineModels = offlineModels)
 }
 
@@ -431,6 +456,25 @@ private fun OnlineDescriberCard(
             } else {
                 OutlinedButton(onClick = onPurchase) { Text("Get Credits") }
             }
+        }
+    }
+}
+
+@Composable
+private fun LocalServerCard(isSelected: Boolean, onSelect: () -> Unit) {
+    ModelCard {
+        Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(text = "Local Server", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            Text(
+                text = "Analyzes photos on a computer of yours on the same network instead of the cloud " +
+                    "— private, free, and no waiting on a server you don't control. Requires setting up " +
+                    "the LensWhisper Desktop companion app first (see \"About Local Server\" in the More menu).",
+                fontSize = 15.sp,
+                color = Color.Gray
+            )
+        }
+        Row(modifier = Modifier.fillMaxWidth()) {
+            if (isSelected) SelectedLabel("Local Server") else Button(onClick = onSelect) { Text("Select") }
         }
     }
 }

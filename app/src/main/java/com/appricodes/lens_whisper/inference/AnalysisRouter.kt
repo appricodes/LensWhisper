@@ -11,10 +11,11 @@ import com.appricodes.lens_whisper.utils.OfflinePromptBuilder
 import kotlinx.coroutines.flow.Flow
 
 /**
- * Routes one analysis request to either the Online Describer or the currently selected
- * on-device model, based on [PreferencesManager.selectedModelId]. [onlineCall] performs the
- * existing [com.appricodes.lens_whisper.network.XaiVisionEngine] request (it already has the
- * right Uri(s) for that path); [offlineImages] are the same frame(s) already decoded as
+ * Routes one analysis request to the Online Describer, a Local Server (see
+ * [com.appricodes.lens_whisper.network.LocalServerDiscovery]), or the currently selected
+ * on-device model, based on [PreferencesManager.selectedModelId]. [onlineCall]/[localServerCall]
+ * perform the existing [com.appricodes.lens_whisper.network.XaiVisionEngine] request (each already
+ * has the right Uri(s) for that path); [offlineImages] are the same frame(s) already decoded as
  * bitmaps, reused directly for on-device inference so nothing is captured/decoded twice.
  */
 suspend fun runSelectedModelAnalysis(
@@ -22,9 +23,11 @@ suspend fun runSelectedModelAnalysis(
     prefs: PreferencesManager,
     config: PromptConfig,
     offlineImages: List<Bitmap>,
-    onlineCall: suspend () -> String
+    onlineCall: suspend () -> String,
+    localServerCall: suspend () -> String
 ): String {
     if (prefs.selectedModelId == "online") return onlineCall()
+    if (prefs.selectedModelId == "local_server") return localServerCall()
 
     val repository = OfflineModelsRepository(context)
     val model = repository.loadModels().find { it.id == prefs.selectedModelId }

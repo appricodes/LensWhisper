@@ -56,6 +56,7 @@ fun MoreMenu(
     val repository = remember { OfflineModelsRepository(context) }
     var confirmDeleteVisible by remember { mutableStateOf(false) }
     var volKeysEnabled by remember { mutableStateOf(prefs.volumeShortcutsEnabled) }
+    var showLocalServerInfo by remember { mutableStateOf(false) }
 
     val selectedOfflineModel = remember(selectedModelId) {
         if (selectedModelId == null || selectedModelId == "mlkit" || selectedModelId == "online") null
@@ -117,6 +118,12 @@ fun MoreMenu(
             onDismiss()
             context.startActivity(Intent(context, HelpActivity::class.java))
         })
+        if (selectedModelId == "local_server") {
+            DropdownMenuItem(text = { Text("About Local Server") }, onClick = {
+                onDismiss()
+                showLocalServerInfo = true
+            })
+        }
         selectedOfflineModel?.let { model ->
             DropdownMenuItem(text = { Text("Delete ${model.displayName}") }, onClick = {
                 onDismiss()
@@ -141,5 +148,9 @@ fun MoreMenu(
             },
             dismissButton = { TextButton(onClick = { confirmDeleteVisible = false }) { Text("Cancel") } }
         )
+    }
+
+    if (showLocalServerInfo) {
+        LocalServerInfoDialog(onDismiss = { showLocalServerInfo = false })
     }
 }

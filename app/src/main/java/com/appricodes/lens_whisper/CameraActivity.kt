@@ -36,6 +36,7 @@ import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.domain.PromptConfig
+import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.XaiVisionEngine
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
@@ -205,7 +206,13 @@ private fun CameraScreen(
         return CapturedBundle(
             listOf(frame.bitmap),
             onlineCall = { apiClient.analyzeStaticImageFile(context, frame.uri, config, prefs) },
-            onlineCallStreaming = { apiClient.analyzeStaticImageFileStreaming(context, frame.uri, config, prefs) }
+            onlineCallStreaming = { apiClient.analyzeStaticImageFileStreaming(context, frame.uri, config, prefs) },
+            localServerCall = {
+                LocalServerDiscovery.callOrError(context, prefs) { it.analyzeStaticImageFile(context, frame.uri, config, prefs) }
+            },
+            localServerCallStreaming = {
+                LocalServerDiscovery.callOrErrorStreaming(context, prefs) { it.analyzeStaticImageFileStreaming(context, frame.uri, config, prefs) }
+            }
         )
     }
 
@@ -235,6 +242,18 @@ private fun CameraScreen(
             onlineCallStreaming = {
                 if (frames.size > 1) apiClient.analyzeMultipleStaticImagesStreaming(context, frames.map { it.uri }, config, prefs)
                 else apiClient.analyzeStaticImageFileStreaming(context, frames.first().uri, config, prefs)
+            },
+            localServerCall = {
+                LocalServerDiscovery.callOrError(context, prefs) {
+                    if (frames.size > 1) it.analyzeMultipleStaticImages(context, frames.map { f -> f.uri }, config, prefs)
+                    else it.analyzeStaticImageFile(context, frames.first().uri, config, prefs)
+                }
+            },
+            localServerCallStreaming = {
+                LocalServerDiscovery.callOrErrorStreaming(context, prefs) {
+                    if (frames.size > 1) it.analyzeMultipleStaticImagesStreaming(context, frames.map { f -> f.uri }, config, prefs)
+                    else it.analyzeStaticImageFileStreaming(context, frames.first().uri, config, prefs)
+                }
             }
         )
     }

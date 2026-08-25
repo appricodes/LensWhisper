@@ -41,7 +41,13 @@ object AppConfig {
         }
     }
 
+    /** Holds the CPU-only llama.cpp build. On macOS this is also used for GPU runs — the standard
+     * macOS release already has Metal support baked in, no separate asset exists. */
     fun binDir(dataDir: Path): Path = dataDir.resolve("bin").resolve(LLAMA_RELEASE_TAG)
+
+    /** Holds the Vulkan (GPU) llama.cpp build, Windows/Linux only — see LlamaBinaries. */
+    fun gpuBinDir(dataDir: Path): Path = dataDir.resolve("bin").resolve("$LLAMA_RELEASE_TAG-vulkan")
+
     fun modelsDir(dataDir: Path): Path = dataDir.resolve("models")
     fun logsDir(dataDir: Path): Path = dataDir.resolve("logs")
 }

@@ -45,13 +45,15 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 /** What a screen-specific frame source hands back to [AnalysisSessionController.runAnalysis].
- *  [onlineCallStreaming] is null wherever streaming isn't offered for that capture (Explore) —
- *  [AnalysisSessionController] falls back to [onlineCall] in that case regardless of the user's
- *  streaming setting. */
+ *  [onlineCallStreaming]/[localServerCallStreaming] are null wherever streaming isn't offered for
+ *  that capture (Explore) — [AnalysisSessionController] falls back to [onlineCall]/[localServerCall]
+ *  in that case regardless of the user's streaming setting. */
 data class CapturedBundle(
     val offlineImages: List<Bitmap>,
     val onlineCall: suspend () -> String,
-    val onlineCallStreaming: (() -> Flow<String>)? = null
+    val onlineCallStreaming: (() -> Flow<String>)? = null,
+    val localServerCall: suspend () -> String = { "ERROR: Local Server isn't available for this action." },
+    val localServerCallStreaming: (() -> Flow<String>)? = null
 )
 
 /** Index of the first sentence-terminating character in [sb] that's actually a sentence boundary —
@@ -141,9 +143,10 @@ class AnalysisSessionController(
     /** True for the on-device VLM catalog (Gemma4/FastVLM/Qwen-VL/...) — those models are asked
      *  to answer in the target language via their system instruction, but small on-device models
      *  frequently ignore that, so [OfflineTranslator.translate] is applied as a fallback. Not
-     *  MLKit (which never routes through here — see `MlkitButtonProvider`) or Online (the server
-     *  already answers in the target language). */
-    private fun isOfflineVlmSelected(): Boolean = prefs.selectedModelId != "online" && prefs.selectedModelId != "mlkit"
+     *  MLKit (which never routes through here — see `MlkitButtonProvider`), Online, or Local
+     *  Server (both already answer in the target language via the same system instruction). */
+    private fun isOfflineVlmSelected(): Boolean =
+        prefs.selectedModelId != "online" && prefs.selectedModelId != "mlkit" && prefs.selectedModelId != "local_server"
 
     private suspend fun handleResponse(response: String) {
         activeAudioFeedbackJob?.cancel()
@@ -204,6 +207,8 @@ class AnalysisSessionController(
                     runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages)
                 prefs.selectedModelId == "online" && prefs.streamingEnabled && config.id != "explore" ->
                     bundle.onlineCallStreaming?.invoke()
+                prefs.selectedModelId == "local_server" && prefs.streamingEnabled && config.id != "explore" ->
+                    bundle.localServerCallStreaming?.invoke()
                 else -> null
             }
             if (streamingFlow != null) {
@@ -214,7 +219,8 @@ class AnalysisSessionController(
                     prefs = prefs,
                     config = config,
                     offlineImages = bundle.offlineImages,
-                    onlineCall = bundle.onlineCall
+                    onlineCall = bundle.onlineCall,
+                    localServerCall = bundle.localServerCall
                 )
                 handleResponse(response)
             }
@@ -291,7 +297,7 @@ class AnalysisSessionController(
         val prompt = lastPrompt
         when {
             prompt == null -> AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
-            selectedModelId != "online" && prompt.framesCount > 1 ->
+            selectedModelId != "online" && selectedModelId != "local_server" && prompt.framesCount > 1 ->
                 AccessibilityUtils.announceToTalkBack(context, "Story mode isn't available for on-device models.")
             else -> runAnalysis(prompt, prompt.title, captureFrames)
         }
@@ -447,7 +453,8 @@ class AnalysisSessionController(
 
     /** The one gate every model-specific button (prompt tap, Explore, Repeat) should run
      *  through, regardless of which provider is active: online eligibility for the online model,
-     *  download-redirect for an on-device catalog model, or straight through for MLKit. */
+     *  download-redirect for an on-device catalog model, or straight through for MLKit/Local
+     *  Server (no credits needed for the latter — its server doesn't meter usage). */
     fun gateForSelectedModel(selectedModelId: String, selectedOfflineModel: OfflineModelInfo?, action: () -> Unit) {
         when {
             selectedModelId == "online" -> checkOnlineEligibleOrGate(action)

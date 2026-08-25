@@ -76,10 +76,31 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("volume_shortcuts_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("volume_shortcuts_enabled", value).apply()
 
-	/** "mlkit", "online", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]. */
+	/** "mlkit", "online", "local_server", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]. */
 	var selectedModelId: String
 		get() = standardPrefs.getString("selected_model_id", "mlkit") ?: "mlkit"
 		set(value) = standardPrefs.edit().putString("selected_model_id", value).apply()
+
+	/** Base URL (e.g. "http://192.168.1.42:8765") of the user's LensWhisper Desktop companion app
+	 *  on the local network — discovered automatically or entered manually in Settings, see
+	 *  [com.appricodes.lens_whisper.network.LocalServerDiscovery]. Empty if never found. */
+	var localServerBaseUrl: String
+		get() = standardPrefs.getString("local_server_base_url", "") ?: ""
+		set(value) = standardPrefs.edit().putString("local_server_base_url", value).apply()
+
+	/** Whether the one-time "About Local Server" explainer dialog has already been shown — see
+	 *  `ModelManagementActivity`'s Local Server card. */
+	var hasSeenLocalServerIntro: Boolean
+		get() = standardPrefs.getBoolean("has_seen_local_server_intro", false)
+		set(value) = standardPrefs.edit().putBoolean("has_seen_local_server_intro", value).apply()
+
+	/** SHA-256 token derived from the Local Server's optional password (see
+	 *  [com.appricodes.lens_whisper.network.LocalServerAuth.tokenFor]) — sent as an `Authorization:
+	 *  Bearer` header, never the password itself, which is never stored anywhere. Empty when no
+	 *  password has been entered (matching a server with no password protection set). */
+	var localServerPasswordToken: String
+		get() = standardPrefs.getString("local_server_password_token", "") ?: ""
+		set(value) = standardPrefs.edit().putString("local_server_password_token", value).apply()
 
 	/** "Small", "Medium", or "Large" — see [com.appricodes.lens_whisper.utils.OfflineImageSize]. */
 	var offlineImageSize: String

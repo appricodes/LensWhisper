@@ -19,14 +19,18 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.data.SettingsRepository
+import com.appricodes.lens_whisper.network.LocalServerAuth
+import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
+import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
 
@@ -92,6 +96,16 @@ fun SettingsScreen(
 	var showResultsInDialog by remember { mutableStateOf(sharedPrefs.getBoolean("show_results_in_dialog", false)) }
 	var offlineTranslationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("offline_translation_enabled", false)) }
 	var streamingEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("streaming_enabled", false)) }
+
+	var localServerAddress by remember { mutableStateOf(sharedPrefs.getString("local_server_base_url", "") ?: "") }
+	var showLocalServerEditDialog by remember { mutableStateOf(false) }
+	var localServerEditText by remember { mutableStateOf(localServerAddress) }
+
+	var hasLocalServerPassword by remember { mutableStateOf(sharedPrefs.getString("local_server_password_token", "")?.isNotBlank() == true) }
+	var showPasswordEditDialog by remember { mutableStateOf(false) }
+	var passwordEditText by remember { mutableStateOf("") }
+	var isScanningForLocalServer by remember { mutableStateOf(false) }
+	val coroutineScope = rememberCoroutineScope()
 
 	var langDropdownExpanded by remember { mutableStateOf(false) }
 	var ocrDropdownExpanded by remember { mutableStateOf(false) }
@@ -356,5 +370,133 @@ fun SettingsScreen(
 				sharedPrefs.edit().putBoolean("streaming_enabled", targetState).apply()
 			})
 		}
+
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Local Server Address", fontSize = 18.sp, color = Color.Gray)
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { localServerEditText = localServerAddress; showLocalServerEditDialog = true }
+					.padding(16.dp)
+					.clearAndSetSemantics {
+						contentDescription = if (localServerAddress.isBlank())
+							"Local Server address not found yet. Double tap to enter one manually."
+						else "Local Server address is $localServerAddress. Double tap to edit."
+					},
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = localServerAddress.ifBlank { "Not found — tap to enter manually" }, fontSize = 18.sp)
+			}
+			Text(
+				text = "Auto-detected when you select Local Server and it's reachable on your Wi-Fi network. " +
+					"Only needed here if auto-detection doesn't find it (e.g. a different subnet).",
+				fontSize = 13.sp,
+				color = Color.Gray
+			)
+			TextButton(
+				onClick = {
+					isScanningForLocalServer = true
+					coroutineScope.launch {
+						val found = LocalServerDiscovery.discover(context)
+						if (found != null) {
+							localServerAddress = found
+							sharedPrefs.edit().putString("local_server_base_url", found).apply()
+						}
+						isScanningForLocalServer = false
+					}
+				},
+				enabled = !isScanningForLocalServer
+			) {
+				Text(if (isScanningForLocalServer) "Scanning…" else "Rescan Network")
+			}
+		}
+
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Local Server Password", fontSize = 18.sp, color = Color.Gray)
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { passwordEditText = ""; showPasswordEditDialog = true }
+					.padding(16.dp)
+					.clearAndSetSemantics {
+						contentDescription = if (hasLocalServerPassword)
+							"Local Server password is set. Double tap to change or remove it."
+						else "No Local Server password set. Double tap to set one."
+					},
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = if (hasLocalServerPassword) "Password set" else "Not set — tap to set a password", fontSize = 18.sp)
+			}
+			Text(
+				text = "Required to use Local Server mode — must match the password set on the computer. " +
+					"Every request and response between this phone and that computer is encrypted using " +
+					"it; only the password's token is ever stored here, never the password itself.",
+				fontSize = 13.sp,
+				color = Color.Gray
+			)
+		}
+	}
+
+	if (showLocalServerEditDialog) {
+		AlertDialog(
+			onDismissRequest = { showLocalServerEditDialog = false },
+			title = { Text("Local Server Address") },
+			text = {
+				OutlinedTextField(
+					value = localServerEditText,
+					onValueChange = { localServerEditText = it },
+					label = { Text("e.g. http://192.168.1.42:8765") },
+					singleLine = true
+				)
+			},
+			confirmButton = {
+				TextButton(onClick = {
+					localServerAddress = localServerEditText.trim()
+					sharedPrefs.edit().putString("local_server_base_url", localServerAddress).apply()
+					showLocalServerEditDialog = false
+				}) { Text("Save") }
+			},
+			dismissButton = {
+				TextButton(onClick = { showLocalServerEditDialog = false }) { Text("Cancel") }
+			}
+		)
+	}
+
+	if (showPasswordEditDialog) {
+		AlertDialog(
+			onDismissRequest = { showPasswordEditDialog = false },
+			title = { Text("Local Server Password") },
+			text = {
+				OutlinedTextField(
+					value = passwordEditText,
+					onValueChange = { passwordEditText = it },
+					label = { Text("New password") },
+					visualTransformation = PasswordVisualTransformation(),
+					singleLine = true
+				)
+			},
+			confirmButton = {
+				TextButton(onClick = {
+					val token = LocalServerAuth.tokenFor(passwordEditText)
+					sharedPrefs.edit().putString("local_server_password_token", token).apply()
+					hasLocalServerPassword = true
+					showPasswordEditDialog = false
+				}, enabled = passwordEditText.isNotBlank()) { Text("Save") }
+			},
+			dismissButton = {
+				Row {
+					if (hasLocalServerPassword) {
+						TextButton(onClick = {
+							sharedPrefs.edit().remove("local_server_password_token").apply()
+							hasLocalServerPassword = false
+							showPasswordEditDialog = false
+						}) { Text("Remove") }
+					}
+					TextButton(onClick = { showPasswordEditDialog = false }) { Text("Cancel") }
+				}
+			}
+		)
 	}
 }

@@ -19,6 +19,19 @@ object LlamaBinaries {
     fun downloadUrlFor(os: OsFamily): String =
         "https://github.com/ggml-org/llama.cpp/releases/download/${AppConfig.LLAMA_RELEASE_TAG}/${assetNameFor(os)}"
 
+    /** Vulkan (GPU) release asset name for [os], or null if none exists — macOS has no separate
+     * GPU asset because Metal support is already compiled into the standard build. Vulkan is
+     * cross-vendor (NVIDIA/AMD/Intel) and needs only a normal GPU driver, unlike CUDA/ROCm which
+     * need a matching toolkit version, so it's the simplest GPU option to support first. */
+    fun vulkanAssetNameFor(os: OsFamily): String? = when (os) {
+        OsFamily.WINDOWS -> "llama-${AppConfig.LLAMA_RELEASE_TAG}-bin-win-vulkan-x64.zip"
+        OsFamily.LINUX -> "llama-${AppConfig.LLAMA_RELEASE_TAG}-bin-ubuntu-vulkan-x64.tar.gz"
+        OsFamily.MACOS -> null
+    }
+
+    fun vulkanDownloadUrlFor(os: OsFamily): String? =
+        vulkanAssetNameFor(os)?.let { "https://github.com/ggml-org/llama.cpp/releases/download/${AppConfig.LLAMA_RELEASE_TAG}/$it" }
+
     fun serverExecutableName(os: OsFamily): String =
         if (os == OsFamily.WINDOWS) "llama-server.exe" else "llama-server"
 

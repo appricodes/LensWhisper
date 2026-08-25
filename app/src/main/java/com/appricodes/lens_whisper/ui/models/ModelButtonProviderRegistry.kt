@@ -20,7 +20,9 @@ object ModelButtonProviderRegistry {
         offlineModels: List<OfflineModelInfo>
     ): Pair<ModelButtonProvider, OfflineModelInfo?> = when (selectedModelId) {
         "mlkit" -> mlkitProvider to null
-        "online" -> OnlineButtonProvider to null
+        // Local Server shares the exact same prompt grid as Online — same JSON contract, same
+        // "always supports Explore/Story" shape, no eligibility gate (see gateForSelectedModel).
+        "online", "local_server" -> OnlineButtonProvider to null
         else -> {
             val model = offlineModels.find { it.id == selectedModelId }
             OfflineVlmButtonProvider to model

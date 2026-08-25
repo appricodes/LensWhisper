@@ -21,3 +21,6 @@ backend/config.production.php
 modir.php
 backend/modir.php
 /Credentials/
+
+# Local test photos for the desktop CLI - keep out of the repo
+desktop/test_images/

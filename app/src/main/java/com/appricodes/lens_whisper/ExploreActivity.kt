@@ -25,6 +25,7 @@ import androidx.compose.ui.platform.LocalContext
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.runSelectedModelAnalysis
+import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.XaiVisionEngine
 import com.appricodes.lens_whisper.ui.components.ExploreGridOverlay
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
@@ -98,6 +99,13 @@ private fun ExploreScreen(
                 apiClient.analyzeFrameSpatialGrid(
                     context = context, uri = imageUri, positionMs = 0L, gridSize = 6, isStaticImage = true, prefs = prefs
                 )
+            },
+            localServerCall = {
+                LocalServerDiscovery.callOrError(context, prefs) {
+                    it.analyzeFrameSpatialGrid(
+                        context = context, uri = imageUri, positionMs = 0L, gridSize = 6, isStaticImage = true, prefs = prefs
+                    )
+                }
             }
         )
         beepJob.cancel()

@@ -60,4 +60,5 @@ data class HealthResponse(
     val status: String,
     val model: String,
     val engine_ready: Boolean,
+    val backend: String,
 )

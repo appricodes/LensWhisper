@@ -38,6 +38,7 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.domain.PromptConfig
+import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.XaiVisionEngine
 import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
@@ -209,6 +210,18 @@ fun MediaDescriberScreen(
                 onlineCallStreaming = {
                     if (isImageMode) apiClient.analyzeStaticImageFileStreaming(context, uri, config, prefs)
                     else apiClient.analyzeVideoFrameStreaming(context, uri, currentPlaybackPosition, config, prefs)
+                },
+                localServerCall = {
+                    LocalServerDiscovery.callOrError(context, prefs) {
+                        if (isImageMode) it.analyzeStaticImageFile(context, uri, config, prefs)
+                        else it.analyzeVideoFrame(context, uri, currentPlaybackPosition, config, prefs)
+                    }
+                },
+                localServerCallStreaming = {
+                    LocalServerDiscovery.callOrErrorStreaming(context, prefs) {
+                        if (isImageMode) it.analyzeStaticImageFileStreaming(context, uri, config, prefs)
+                        else it.analyzeVideoFrameStreaming(context, uri, currentPlaybackPosition, config, prefs)
+                    }
                 }
             )
         }

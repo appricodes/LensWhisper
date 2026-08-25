@@ -9,6 +9,7 @@ import kotlinx.serialization.Serializable
 @Serializable
 data class ChatCompletionResponse(
     val choices: List<Choice> = emptyList(),
+    val usage: Usage? = null,
 ) {
     @Serializable
     data class Choice(
@@ -22,4 +23,13 @@ data class ChatCompletionResponse(
 
     @Serializable
     data class Delta(val content: String? = null)
+
+    /** Present on the non-streaming response, and (when requested via `stream_options.
+     * include_usage`) on the final streaming chunk — same convention backend/process.php relies on. */
+    @Serializable
+    data class Usage(
+        val prompt_tokens: Int = 0,
+        val completion_tokens: Int = 0,
+        val total_tokens: Int = 0,
+    )
 }
