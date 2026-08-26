@@ -1,8 +1,8 @@
 package com.appricodes.lens_whisper.utils
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
@@ -13,25 +13,43 @@ import kotlin.math.sin
 import kotlin.random.Random
 
 /**
- * The app's two synthesized, non-speech UI sounds — both plain additive-harmonic/noise synthesis
- * into a static [AudioTrack] buffer, no bundled audio asset. Both are gated on
+ * The app's synthesized, non-speech UI sounds — plain additive-harmonic/noise synthesis into a
+ * static [AudioTrack] buffer, no bundled audio asset. All gated on
  * [PreferencesManager.soundEffectsEnabled] internally, so no call site needs to remember to check
  * it itself (see [com.appricodes.lens_whisper.utils.HoverFeedback] for the equivalent on the
  * haptics side, gated on [PreferencesManager.vibrationEnabled] instead).
+ *
+ * Played on [ACCESSIBILITY_AUDIO_ATTRIBUTES] — `USAGE_ASSISTANCE_ACCESSIBILITY` +
+ * `CONTENT_TYPE_SONIFICATION` — rather than a plain music/media stream: every one of these sounds
+ * *is* accessibility information for a blind user (a photo was taken, the app is still working, a
+ * light-level reading), not incidental media, so it belongs on the channel Android reserves for
+ * exactly that (routes and ducks correctly alongside TalkBack speech, unlike `STREAM_MUSIC`).
+ * `OfflineLightDetector`'s pre-rendered-file notes use the same attributes on their `MediaPlayer`
+ * instances, for the same reason — this object's sounds are all synthesized PCM, not files, so
+ * they go through [AudioTrack] instead, but the two intentionally agree on attributes.
  */
 object ProcessingSoundPlayer {
     private const val SAMPLE_RATE = 44100
 
+    private val ACCESSIBILITY_AUDIO_ATTRIBUTES = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .build()
+
     private fun play(pcm: ByteArray, releaseDelayMs: Long) {
         try {
-            val audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                pcm.size,
-                AudioTrack.MODE_STATIC
-            )
+            val audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(ACCESSIBILITY_AUDIO_ATTRIBUTES)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(pcm.size)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
             audioTrack.write(pcm, 0, pcm.size)
             audioTrack.play()
             Handler(Looper.getMainLooper()).postDelayed({ audioTrack.release() }, releaseDelayMs)
@@ -169,5 +187,55 @@ object ProcessingSoundPlayer {
             mixBuffer[i] = sin(2 * PI * ACK_FREQUENCY * t) * exp(-decayRate * t) * 0.18
         }
         play(toPcm16(mixBuffer), (ACK_DURATION_SEC * 1000).toLong() + 100)
+    }
+
+    // --- welcome phrase ------------------------------------------------------------------
+
+    private const val WELCOME_TOTAL_DURATION_SEC = 2.3
+    private val welcomeHarmonics = listOf(1.0 to 1.00, 2.0 to 0.45, 3.0 to 0.18)
+    private val welcomeHarmonicAmplitudeSum = welcomeHarmonics.sumOf { it.second }
+
+    private data class WelcomeNote(val frequency: Double, val startSec: Double, val durationSec: Double)
+
+    // A bright ascending major arpeggio reaching the octave (C5-E5-G5-C6) — this app's own
+    // "hello", distinct in character from the low/held waiting tone and the percussive shutter
+    // click. Notes overlap slightly for a pleasant shimmer rather than four separate beeps.
+    private val welcomeNotes = listOf(
+        WelcomeNote(523.25, 0.00, 0.9),  // C5
+        WelcomeNote(659.25, 0.35, 0.9),  // E5
+        WelcomeNote(783.99, 0.70, 0.9),  // G5
+        WelcomeNote(1046.50, 1.15, 1.1)  // C6
+    )
+
+    /** A short (~2.3s) welcome phrase — call once when the app's main screen first opens (see
+     *  `CameraActivity`'s top-level `LaunchedEffect(Unit)`), not on every return to it. */
+    fun playWelcome(context: Context) {
+        if (!PreferencesManager(context).soundEffectsEnabled) return
+        val totalSamples = (WELCOME_TOTAL_DURATION_SEC * SAMPLE_RATE).toInt()
+        val mixBuffer = DoubleArray(totalSamples)
+
+        for (note in welcomeNotes) {
+            val startSample = (note.startSec * SAMPLE_RATE).toInt()
+            val noteSamples = (note.durationSec * SAMPLE_RATE).toInt()
+            val attackSamples = (0.015 * SAMPLE_RATE).toInt()
+            val decayRate = 3.2
+            for (i in 0 until noteSamples) {
+                val bufferIndex = startSample + i
+                if (bufferIndex >= totalSamples) break
+                val t = i.toDouble() / SAMPLE_RATE
+
+                var raw = 0.0
+                for ((harmonicMultiple, amplitude) in welcomeHarmonics) {
+                    raw += amplitude * sin(2 * PI * note.frequency * harmonicMultiple * t)
+                }
+                raw /= welcomeHarmonicAmplitudeSum
+
+                val attack = if (i < attackSamples) i.toDouble() / attackSamples else 1.0
+                val envelope = attack * exp(-decayRate * t)
+                mixBuffer[bufferIndex] += raw * envelope * 0.45
+            }
+        }
+
+        play(toPcm16(mixBuffer), (WELCOME_TOTAL_DURATION_SEC * 1000).toLong() + 200)
     }
 }

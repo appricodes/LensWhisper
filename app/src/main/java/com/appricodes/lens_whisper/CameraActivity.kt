@@ -151,6 +151,12 @@ private fun CameraScreen(
     val offlineModels = remember { offlineModelsRepository.loadModels() }
     val controller = rememberAnalysisSessionController(context, prefs)
 
+    // A short welcome phrase the instant the app's main screen first opens — LaunchedEffect(Unit)
+    // fires once per composition, not on every resume (this Activity is merely paused, not
+    // recomposed from scratch, when returning from another screen like Settings), so it plays on a
+    // genuine app open, not a return trip.
+    LaunchedEffect(Unit) { ProcessingSoundPlayer.playWelcome(context) }
+
     // The first-run acceptance gate. Nothing else on this screen is reachable until it is
     // answered — the dialog itself is not dismissible (see DisclaimerDialog).
     var disclaimerAccepted by remember { mutableStateOf(prefs.hasAcceptedDisclaimer) }

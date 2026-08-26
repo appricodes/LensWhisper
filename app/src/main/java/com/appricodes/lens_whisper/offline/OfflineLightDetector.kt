@@ -3,6 +3,8 @@ package com.appricodes.lens_whisper.offline
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
+import android.media.AudioAttributes
+import android.media.AudioManager
 import android.media.MediaPlayer
 import android.os.Handler
 import android.os.Looper
@@ -75,9 +77,22 @@ object OfflineLightDetector {
      *  forever, since nothing else naturally halts that chain. Call [stop] when leaving the mode. */
     @Volatile private var active = false
 
+    // Same reasoning as ProcessingSoundPlayer.ACCESSIBILITY_AUDIO_ATTRIBUTES — a light-level
+    // reading is accessibility information for a blind user, not incidental media, so it belongs
+    // on the channel Android reserves for exactly that rather than a plain music/media stream.
+    private val accessibilityAudioAttributes = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .build()
+
     private fun playerFor(context: Context, index: Int): MediaPlayer {
         val pool = players ?: arrayOfNulls<MediaPlayer>(USED_NOTE_COUNT).also { players = it }
-        return pool[index] ?: MediaPlayer.create(context.applicationContext, NOTE_RESOURCES[index]).also { mp ->
+        return pool[index] ?: MediaPlayer.create(
+            context.applicationContext,
+            NOTE_RESOURCES[index],
+            accessibilityAudioAttributes,
+            AudioManager.AUDIO_SESSION_ID_GENERATE
+        ).also { mp ->
             mp.setOnCompletionListener { advanceTowardTarget(context) }
             pool[index] = mp
         }
