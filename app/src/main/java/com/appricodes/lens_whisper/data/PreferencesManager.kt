@@ -76,31 +76,32 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("vibration_enabled", true)
 		set(value) = standardPrefs.edit().putBoolean("vibration_enabled", value).apply()
 
-	/** Which of the four bundled YOLOv8-seg sizes powers "Object Detection", "Object and Color
-	 *  Detection", and the two Explore screens — see
+	/** Which of the two bundled YOLOv8-seg sizes (int8 only — see
+	 *  [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s doc for why the lineup
+	 *  shrank from four sizes x two precisions down to this) powers "Detect Objects", "Identify
+	 *  Objects and Colors", Explore, and Read Document — see
 	 *  [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector.ALL_SIZES] for the valid
-	 *  values ("n"/"s"/"m"/"l") and what each costs in speed vs. accuracy. Set from Settings. */
+	 *  values ("s"/"m") and what each costs in speed vs. accuracy. Default and "Recommended" is
+	 *  "m" — see [hasShownSlowModelSwitchPrompt] for the one-time nudge toward "s" if that turns
+	 *  out to be too slow on a given device. Set from Settings, or by that same prompt. */
 	var segmentationModelSize: String
-		get() = standardPrefs.getString("segmentation_model_size", "n") ?: "n"
+		get() {
+			val stored = standardPrefs.getString("segmentation_model_size", "m") ?: "m"
+			// "n" and "l" were real, bundled sizes briefly — a device that picked one before the
+			// lineup shrank to just s/m would otherwise crash the very next time it tried to load a
+			// model, so both fall back to the new default rather than a now-missing asset.
+			return if (stored == "s" || stored == "m") stored else "m"
+		}
 		set(value) = standardPrefs.edit().putString("segmentation_model_size", value).apply()
 
-	/** "int8" (the default — genuinely faster on CPU, and the one that held up on real devices) or
-	 *  "float16" (more numeric detail, larger file, from a different converter — see
-	 *  [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s doc for why, and for the
-	 *  w8a16 precision that used to occupy this slot before on-device testing found it more than 4x
-	 *  slower than int8), for the same model [segmentationModelSize] names. Both are bundled for
-	 *  every size so they can be compared against each other, not because either is expected to be
-	 *  the obviously better everyday choice — that's for the user to judge from actual results on
-	 *  their own device. */
-	var segmentationModelPrecision: String
-		get() {
-			val stored = standardPrefs.getString("segmentation_model_precision", "int8") ?: "int8"
-			// "w8a16" was a real, bundled precision briefly — a device that picked it before it was
-			// removed (no longer a bundled asset, see the class doc above) would otherwise crash the
-			// very next time it tried to load a model, so it's treated the same as never having been set.
-			return if (stored == "w8a16") "int8" else stored
-		}
-		set(value) = standardPrefs.edit().putString("segmentation_model_precision", value).apply()
+	/** True once the one-time "this is slow — switch to the smaller model?" prompt has been shown
+	 *  (regardless of the user's answer) — see `MlkitButtonProvider`'s slow-model dialog, which
+	 *  only ever fires while [segmentationModelSize] is "m" and only until this flips true. The
+	 *  user can still change the size manually in Settings at any time; this only gates the
+	 *  unprompted, automatic suggestion. */
+	var hasShownSlowModelSwitchPrompt: Boolean
+		get() = standardPrefs.getBoolean("has_shown_slow_model_switch_prompt", false)
+		set(value) = standardPrefs.edit().putBoolean("has_shown_slow_model_switch_prompt", value).apply()
 
 	/** "mlkit", "local_server", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id].
 	 *  (The former "online" value belonged to a hosted backend that no longer exists.)

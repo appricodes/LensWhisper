@@ -64,16 +64,16 @@ object DetectionPhrasing {
      * - the confidence word, derived from [confidence] via [Tier.of] — not a parameter, since it's
      *   never meaningful to say out loud independent of an actual detection's own confidence.
      *
-     * Examples: `describeDetection(0.92f, "coach", "red")` -> "Red coach".
-     * `describeDetection(0.5f, "tv", "black")` -> "Most likely black TV" is *not* what this
-     * produces — capitalization here is sentence-initial only ("Most likely black tv"); callers
-     * that want a class name capitalized (like "TV") do that themselves, since not every one of the
-     * 80 COCO labels should be.
+     * Format is `[confidence word] object[, color]` — e.g. `describeDetection(0.92f, "hat", "green")`
+     * -> "Hat, green"; `describeDetection(0.3f, "hat", "green")` -> "Maybe hat, green".
+     * Capitalization here is sentence-initial only ("Most likely black tv"); callers that want a
+     * class name capitalized (like "TV") do that themselves, since not every one of the 80 COCO
+     * labels should be.
      */
     fun describeDetection(confidence: Float, objectName: String, colorPhrase: String = ""): String {
-        val subject = if (colorPhrase.isBlank()) objectName else "$colorPhrase $objectName"
         val confidenceWord = Tier.of(confidence).confidenceWord
-        val sentence = if (confidenceWord.isEmpty()) subject else "$confidenceWord $subject"
+        val subject = if (confidenceWord.isEmpty()) objectName else "$confidenceWord $objectName"
+        val sentence = if (colorPhrase.isBlank()) subject else "$subject, $colorPhrase"
         return sentence.replaceFirstChar { it.uppercase() }
     }
 }

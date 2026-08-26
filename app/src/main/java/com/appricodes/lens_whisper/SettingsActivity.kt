@@ -43,7 +43,6 @@ class SettingsActivity : ComponentActivity() {
 		val availableLanguages = appSettings.languages
 		val standardPersonas = listOf("Neutral", "Family", "Childish", "Technical", "explicit", "explicit and naughty", "Humorous", "poetry")
 		val availableOcrLanguages = listOf("Latin (English/EU)", "Chinese", "Japanese", "Korean", "Devanagari")
-		val availableQualities = listOf("Standard", "High")
 
 		setContent {
 			LensWhisperTheme {
@@ -56,7 +55,6 @@ class SettingsActivity : ComponentActivity() {
 						availableLanguages = availableLanguages,
 						availablePersonas = standardPersonas,
 						availableOcrLanguages = availableOcrLanguages,
-						availableQualities = availableQualities,
 						onBack = { finish() }
 					)
 				}
@@ -82,7 +80,6 @@ fun SettingsScreen(
 	availableLanguages: Map<String, String>,
 	availablePersonas: List<String>,
 	availableOcrLanguages: List<String>,
-	availableQualities: List<String>,
 	onBack: () -> Unit
 ) {
 	val context = androidx.compose.ui.platform.LocalContext.current
@@ -93,7 +90,6 @@ fun SettingsScreen(
 
 	var selectedOcrLanguage by remember { mutableStateOf(sharedPrefs.getString("ocr_language", "Latin (English/EU)") ?: "Latin (English/EU)") }
 	var selectedPersona by remember { mutableStateOf(sharedPrefs.getString("selected_mode", "Neutral") ?: "Neutral") }
-	var selectedQuality by remember { mutableStateOf(sharedPrefs.getString("analysis_quality", "High") ?: "High") }
 
 	var showResultsInDialog by remember { mutableStateOf(sharedPrefs.getBoolean("show_results_in_dialog", false)) }
 	var offlineTranslationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("offline_translation_enabled", false)) }
@@ -114,12 +110,9 @@ fun SettingsScreen(
 	var langDropdownExpanded by remember { mutableStateOf(false) }
 	var ocrDropdownExpanded by remember { mutableStateOf(false) }
 	var personaDropdownExpanded by remember { mutableStateOf(false) }
-	var qualityDropdownExpanded by remember { mutableStateOf(false) }
 
 	var segmentationSize by remember { mutableStateOf(prefs.segmentationModelSize) }
-	var segmentationPrecision by remember { mutableStateOf(prefs.segmentationModelPrecision) }
 	var segmentationSizeDropdownExpanded by remember { mutableStateOf(false) }
-	var segmentationPrecisionDropdownExpanded by remember { mutableStateOf(false) }
 
 
 	Column(
@@ -159,30 +152,6 @@ fun SettingsScreen(
 		)
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "AI Analysis Quality", fontSize = 18.sp, color = Color.Gray)
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { qualityDropdownExpanded = true }
-					.padding(16.dp)
-					.clearAndSetSemantics { contentDescription = "Active AI analysis quality is $selectedQuality. Double tap to change." },
-				contentAlignment = Alignment.CenterStart
-			) {
-				Text(text = selectedQuality, fontSize = 18.sp)
-				DropdownMenu(expanded = qualityDropdownExpanded, onDismissRequest = { qualityDropdownExpanded = false }) {
-					availableQualities.forEach { quality ->
-						DropdownMenuItem(text = { Text(quality) }, onClick = {
-							selectedQuality = quality
-							sharedPrefs.edit().putString("analysis_quality", quality).apply()
-							qualityDropdownExpanded = false
-						})
-					}
-				}
-			}
-		}
-
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text(text = "Object Detection Model Size", fontSize = 18.sp, color = Color.Gray)
 			Box(
 				modifier = Modifier
@@ -207,39 +176,8 @@ fun SettingsScreen(
 				}
 			}
 			Text(
-				text = "Used by Object Detection, Object and Color Detection, and both Explore screens. " +
-					"Larger models are slower but notice more, and get colors and mask edges more precisely.",
-				fontSize = 13.sp,
-				color = Color.Gray
-			)
-		}
-
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Object Detection Model Precision", fontSize = 18.sp, color = Color.Gray)
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { segmentationPrecisionDropdownExpanded = true }
-					.padding(16.dp)
-					.clearAndSetSemantics {
-						contentDescription = "Object detection model precision is ${OfflineSegmentationDetector.precisionDisplayName(segmentationPrecision)}. Double tap to change."
-					},
-				contentAlignment = Alignment.CenterStart
-			) {
-				Text(text = OfflineSegmentationDetector.precisionDisplayName(segmentationPrecision), fontSize = 18.sp)
-				DropdownMenu(expanded = segmentationPrecisionDropdownExpanded, onDismissRequest = { segmentationPrecisionDropdownExpanded = false }) {
-					OfflineSegmentationDetector.ALL_PRECISIONS.forEach { precision ->
-						DropdownMenuItem(text = { Text(OfflineSegmentationDetector.precisionDisplayName(precision)) }, onClick = {
-							segmentationPrecision = precision
-							prefs.segmentationModelPrecision = precision
-							segmentationPrecisionDropdownExpanded = false
-						})
-					}
-				}
-			}
-			Text(
-				text = "int8 is smaller and faster; float16 keeps more numeric detail at some extra size and time.",
+				text = "Used by Detect Objects, Identify Objects and Colors, and Explore. " +
+					"The larger model is slower but notices more, and gets colors and mask edges more precisely.",
 				fontSize = 13.sp,
 				color = Color.Gray
 			)
@@ -280,12 +218,12 @@ fun SettingsScreen(
 					}
 					.clearAndSetSemantics {
 						val status = if (offlineTranslationEnabled) "enabled" else "disabled"
-						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Applies to Basic Models and to on-device AI model responses, when a translation is available. Double tap to toggle."
+						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Applies to Basic tasks and to on-device AI model responses, when a translation is available. Double tap to toggle."
 					},
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.SpaceBetween
 			) {
-				Text(text = "Translate Offline Results (Basic Models + On-Device AI)", fontSize = 16.sp, color = Color.LightGray)
+				Text(text = "Translate Offline Results (Basic tasks + On-Device AI)", fontSize = 16.sp, color = Color.LightGray)
 				Checkbox(checked = offlineTranslationEnabled, onCheckedChange = { targetState ->
 					offlineTranslationEnabled = targetState
 					sharedPrefs.edit().putBoolean("offline_translation_enabled", targetState).apply()

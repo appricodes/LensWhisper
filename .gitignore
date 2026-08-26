@@ -24,3 +24,7 @@ backend/modir.php
 
 # Local test photos for the desktop CLI - keep out of the repo
 desktop/test_images/
+
+# Backup copies of segmentation model files no longer bundled in the app (kept locally in case a
+# dropped size/precision is ever wanted back - see app/src/main/assets/models/)
+/model_backups/

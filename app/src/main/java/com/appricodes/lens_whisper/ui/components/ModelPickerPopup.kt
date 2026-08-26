@@ -71,7 +71,7 @@ fun ModelPickerPopup(
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         if (showMlkitOption) {
             DropdownMenuItem(
-                text = { Text("Basic Models (Offline)" + if (selectedModelId == "mlkit") " ✓" else "") },
+                text = { Text("Basic tasks" + if (selectedModelId == "mlkit") " ✓" else "") },
                 // MLKit doesn't use OfflineInferenceEngine at all — whatever on-device VLM was
                 // loaded has nothing left to do once this is selected, so free it right away
                 // rather than leaving it resident until something else happens to release it.

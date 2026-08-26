@@ -60,11 +60,11 @@ private fun HelpScreen(onClose: () -> Unit) {
             fontSize = 18.sp
         )
         Text(
-            text = "Basic Models is built in and needs no download. Detect Objects and Object and "
-                + "Colour Detection use a dedicated on-device detector to name up to 25 objects "
-                + "(and their colours) at once. Explore opens the photo full-screen so you can move "
-                + "a finger over it and hear what's there, or tap once for a list of everything "
-                + "found and roughly where it is.",
+            text = "Basic tasks is built in and needs no download. Detect Objects and Identify "
+                + "Objects and Colours use a dedicated on-device detector to name the objects in "
+                + "view (and their colours). Explore Photo by Touch opens the photo full-screen so "
+                + "you can move a finger over it and hear what's there, or tap once for more "
+                + "options, including a list of everything found and roughly where it is.",
             fontSize = 18.sp
         )
         Text(

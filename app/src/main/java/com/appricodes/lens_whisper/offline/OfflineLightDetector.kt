@@ -19,9 +19,8 @@ import kotlin.math.pow
  * file's waveform starts and ends at exactly 0 amplitude (10% linear attack / 80% sustain / 10%
  * linear release), generated offline by a Python script (not checked into the repo) using the
  * same fundamental-plus-decaying-overtones bell recipe this app's other tones use — see
- * [NOTE_RESOURCES] for the exact frequency of each. Only the first [USED_NOTE_COUNT] (200-800Hz,
- * two octaves) are wired up for now; the remaining 7 (800-1600Hz) are bundled unused, for a future
- * wider range.
+ * [NOTE_RESOURCES] for the exact frequency of each. All [USED_NOTE_COUNT] = 21 notes (200-1600Hz,
+ * three octaves) are wired up.
  *
  * Playback is a small state machine, not "play whatever note the latest frame maps to" —
  * [detectAndPlayTone] is called far more often (once per camera frame, ~15-30/sec) than a 200ms
@@ -43,8 +42,8 @@ import kotlin.math.pow
  */
 object OfflineLightDetector {
 
-    /** All 21 generated note resources, 200Hz-1600Hz, in ascending order. Only indices
-     *  0..[USED_NOTE_COUNT]-1 are ever selected by [detectAndPlayTone] today. */
+    /** All 21 generated note resources, 200Hz-1600Hz, in ascending order — all of them,
+     *  indices 0..[USED_NOTE_COUNT]-1, are selected by [detectAndPlayTone]. */
     private val NOTE_RESOURCES = intArrayOf(
         R.raw.light_note_01, R.raw.light_note_02, R.raw.light_note_03, R.raw.light_note_04,
         R.raw.light_note_05, R.raw.light_note_06, R.raw.light_note_07, R.raw.light_note_08,
@@ -55,9 +54,9 @@ object OfflineLightDetector {
     )
 
     /** How many of [NOTE_RESOURCES], starting from index 0 (200Hz), brightness currently maps
-     *  onto — 14 -> 200-800Hz (note 14 of 21 is exactly 800Hz by construction). Raise to use more
-     *  of the bundled range. */
-    private const val USED_NOTE_COUNT = 14
+     *  onto — 21 -> 200-1600Hz, the full bundled range (note 21 of 21 is exactly 1600Hz by
+     *  construction). */
+    private const val USED_NOTE_COUNT = 21
 
     private val mainHandler = Handler(Looper.getMainLooper())
 

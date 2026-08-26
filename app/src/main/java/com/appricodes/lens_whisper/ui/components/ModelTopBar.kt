@@ -73,7 +73,7 @@ fun ModelTopBar(
 
     fun refresh() {
         selectedModelName = when (selectedModelId) {
-            "mlkit" -> "Basic Models (Offline)"
+            "mlkit" -> "Basic tasks"
             LocalServerFeature.MODEL_ID -> "Local Server"
             else -> offlineModelsRepository.loadModels().find { it.id == selectedModelId }?.displayName ?: "No Model Selected"
         }

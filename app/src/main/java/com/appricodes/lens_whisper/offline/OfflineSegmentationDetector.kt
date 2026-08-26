@@ -22,8 +22,9 @@ import kotlin.math.min
 /**
  * One detected object: its class name, confidence, bounding box (normalized 0..1 in the *original*
  * photo's coordinate space, not the model's letterboxed 640x640 input), and its exact pixel mask —
- * queryable via [containsNormalizedPoint] rather than materialized as a full-resolution bitmap mask,
- * since nothing here ever needs to *draw* the mask, only ask "is this point part of it".
+ * queryable via [containsNormalizedPoint] ("is this point part of it") without ever materializing a
+ * full-resolution bitmap mask, and its outline drawable via [maskBoundaryEdgesNormalized] without
+ * one either — both work directly off the compact [PROTO_SIZE]-resolution [protoMask].
  */
 class DetectedInstance internal constructor(
     val label: String,
@@ -49,6 +50,51 @@ class DetectedInstance internal constructor(
         val protoSize = OfflineSegmentationDetector.PROTO_SIZE
         if (protoX < 0 || protoX >= protoSize || protoY < 0 || protoY >= protoSize) return false
         return protoMask[protoY * protoSize + protoX]
+    }
+
+    /** Maps one proto-grid corner (continuous coordinates, 0..[OfflineSegmentationDetector.PROTO_SIZE]
+     *  on each axis — a cell's own corners are at integer coordinates) back to *original*-image
+     *  normalized (0..1) coordinates — the exact inverse of [containsNormalizedPoint]'s own
+     *  original -> letterboxed -> proto mapping, run on a grid corner instead of a query point. */
+    private fun protoToNormalized(protoX: Float, protoY: Float): Pair<Float, Float> {
+        val letterboxedX = protoX * OfflineSegmentationDetector.DOWNSAMPLE
+        val letterboxedY = protoY * OfflineSegmentationDetector.DOWNSAMPLE
+        val origX = (letterboxedX - letterbox.padX) / letterbox.gain
+        val origY = (letterboxedY - letterbox.padY) / letterbox.gain
+        return (origX / letterbox.originalWidth).coerceIn(0f, 1f) to (origY / letterbox.originalHeight).coerceIn(0f, 1f)
+    }
+
+    /**
+     * The mask's *exact* outline, in original-image normalized coordinates — every grid-aligned
+     * edge in [protoMask] where an in-mask cell borders an out-of-mask (or off-grid) neighbor, each
+     * one already mapped through [protoToNormalized]. Not a smoothed/interpolated contour (no
+     * marching-squares sub-cell interpolation) and not necessarily one connected loop per blob
+     * (a mask with a hole, or two separate regions sharing one label, produces more than one) —
+     * just the complete, precise set of boundary segments, which is all a caller drawing an outline
+     * actually needs: rendered together they trace the real shape at the mask's own [PROTO_SIZE]
+     * resolution, which is fine-grained enough that the per-cell "blockiness" is not visible at
+     * normal display sizes. Computed on demand rather than at detection time — see the caller
+     * (`SegmentationExploreActivity`), which memoizes this itself since nothing here needs it
+     * more than once per detection.
+     */
+    fun maskBoundaryEdgesNormalized(): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
+        val protoSize = OfflineSegmentationDetector.PROTO_SIZE
+        fun isInside(x: Int, y: Int): Boolean {
+            if (x < 0 || x >= protoSize || y < 0 || y >= protoSize) return false
+            return protoMask[y * protoSize + x]
+        }
+        val edges = mutableListOf<Pair<Pair<Float, Float>, Pair<Float, Float>>>()
+        for (y in 0 until protoSize) {
+            for (x in 0 until protoSize) {
+                if (!isInside(x, y)) continue
+                val xf = x.toFloat(); val yf = y.toFloat()
+                if (!isInside(x, y - 1)) edges.add(protoToNormalized(xf, yf) to protoToNormalized(xf + 1, yf)) // top
+                if (!isInside(x, y + 1)) edges.add(protoToNormalized(xf, yf + 1) to protoToNormalized(xf + 1, yf + 1)) // bottom
+                if (!isInside(x - 1, y)) edges.add(protoToNormalized(xf, yf) to protoToNormalized(xf, yf + 1)) // left
+                if (!isInside(x + 1, y)) edges.add(protoToNormalized(xf + 1, yf) to protoToNormalized(xf + 1, yf + 1)) // right
+            }
+        }
+        return edges
     }
 
     /**
@@ -99,46 +145,34 @@ internal class LetterboxInfo(val originalWidth: Int, val originalHeight: Int, va
  * [DetectedInstance]s: name, confidence, box, and an exactly-queryable mask, capped to the top
  * [MAX_DETECTIONS] by confidence.
  *
- * ## Eight bundled files, dtype- and layout-agnostic decoding
- * [ALL_SIZES] (Nano/Small/Medium/Large) × [ALL_PRECISIONS] (int8/float16) — see [assetPathFor] for
- * the naming. The two precisions deliberately come from *two different* converters, because they
- * played different roles in getting here:
- * - **int8**: Ultralytics' own native exporter
- *   (`model.export(format="tflite", quantize="int8", data="coco128-seg.yaml")`), NCHW input,
- *   *normalized* (0..1) box coordinates.
- * - **float16**: `onnx2tf` (PyTorch → ONNX → onnx2tf), NHWC input, *pixel-space* (0..640) box
- *   coordinates. This is what every file here originally shipped as, back when the whole family
- *   still came from one backend. It was temporarily replaced by a w8a16 (int8 weights, int16
- *   activations) build from Ultralytics' native exporter — chosen at the time because that backend
- *   doesn't support float16 at all for this format — but real on-device testing on two phones (a
- *   Galaxy S8 and a Galaxy S21) found w8a16 running **more than 4x slower** than int8, on both, for
- *   every size. That's despite w8a16 being architecturally sound on paper (still integer
- *   arithmetic, normally at least as fast as pure int8); the likely cause is that TFLite's XNNPACK
- *   CPU delegate lacks an efficient kernel path for int16 activations on these chips and falls back
- *   to a slow reference implementation. w8a16 was dropped entirely rather than kept as a third
- *   option, and float16 — genuinely fast on CPU, unlike w8a16 turned out to be, and the whole point
- *   of a second precision to compare against int8 in the first place — took its place instead.
+ * ## Two bundled files: Small and Medium, int8 only
+ * Both from Ultralytics' own native exporter
+ * (`model.export(format="tflite", quantize="int8", data="coco128-seg.yaml")`), NCHW input,
+ * *normalized* (0..1) box coordinates — see [assetPathFor] for the naming. This is deliberately a
+ * smaller lineup than this class once had: Nano and Large were dropped (kept only as a local backup
+ * outside the app, not bundled) once the app settled on Small/Medium as the two genuinely useful
+ * points on the speed/accuracy curve, and float16 was dropped as a precision option entirely — it
+ * ran at essentially FP32 speed on real ARM hardware (TFLite's float16 "quantization" only
+ * compresses *stored* weights; compute still happens at full precision), consistently slower than
+ * int8 for no accuracy win large enough to justify it, the same conclusion reached earlier about
+ * w8a16 (which was `>4x` slower, for a different, kernel-support reason) — see git history for both.
  *
- * Because these two precisions now come from genuinely different converters, both the layout and
- * box-scale axes are resolved per-loaded-model from its own reported tensor shape/values
- * ([preprocess]'s `channelFirst` check, [decodeAndNms]'s `boxScale` check) rather than assumed —
- * cheap insurance against a future re-export drifting from what's true today, and the reason this
- * class already coped fine with the two conventions disagreeing. The dtype side is handled the same
- * way via [TensorReader]: every tensor read/write goes through
+ * The layout and box-scale axes are still resolved per-loaded-model from its own reported tensor
+ * shape/values ([preprocess]'s `channelFirst` check, [decodeAndNms]'s `boxScale` check) rather than
+ * hardcoded, even though both bundled files now share one converter and should in principle agree —
+ * cheap insurance against a future re-export drifting from what's true today. The dtype side is
+ * handled the same way via [TensorReader]: every tensor read/write goes through
  * [Tensor.dataType]/[Tensor.quantizationParams] rather than assuming FLOAT32, even though in
- * practice all eight files expose plain FLOAT32 at the input/output boundary regardless of
- * precision (the "int8" quantization is internal to the graph; boundary tensors are
- * dequantized by the exported model itself).
+ * practice both files expose plain FLOAT32 at the input/output boundary (the "int8" quantization is
+ * internal to the graph; boundary tensors are dequantized by the exported model itself).
  *
- * The four int8 files were calibrated on the same 128 real, varied photos — Ultralytics' own
- * `coco128-seg` sample (real COCO train2017 images with segmentation labels, needed because these
- * are segmentation, not detection, exports) — preprocessed implicitly by Ultralytics' own export
- * pipeline, not this class's [preprocess]. An earlier pass through this same export used the
- * *default* calibration set `data="coco8-seg.yaml"` resolves to, which is only 4 images; Ultralytics'
- * own exporter warns "`>300 images recommended for INT8 calibration`" at that size, so every int8
- * file was re-exported against the larger, still-official 128-image set instead of leaving that
- * warning unaddressed. float16 has no calibration step — it's a lossless-shape reinterpretation of
- * the trained weights, not a quantization that needs representative data.
+ * Both were calibrated on the same 128 real, varied photos — Ultralytics' own `coco128-seg` sample
+ * (real COCO train2017 images with segmentation labels, needed because these are segmentation, not
+ * detection, exports) — preprocessed implicitly by Ultralytics' own export pipeline, not this
+ * class's [preprocess]. An earlier pass through this same export used the *default* calibration set
+ * `data="coco8-seg.yaml"` resolves to, which is only 4 images; Ultralytics' own exporter warns
+ * "`>300 images recommended for INT8 calibration`" at that size, so both files were re-exported
+ * against the larger, still-official 128-image set instead of leaving that warning unaddressed.
  *
  * ## LICENSING NOTE — read before any public release
  * [Ultralytics' own stated position](https://docs.ultralytics.com/help/licensing/) is that
@@ -165,50 +199,25 @@ object OfflineSegmentationDetector {
 
     private const val TAG = "OfflineSegmentationDetector"
 
-    /**
-     * The four bundled sizes ([PreferencesManager.segmentationModelSize]'s valid values) — Nano
-     * through Large, in Ultralytics' own n/s/m/l naming, used directly as the asset filename's
-     * size letter — crossed with two precisions ([PreferencesManager.segmentationModelPrecision]:
-     * "int8" or "float16"), eight bundled files total. Both axes are chosen in Settings;
-     * [ensureInterpreter] reloads the interpreter whenever either selection changes.
-     *
-     * float16 briefly wasn't an option here: once every size besides Nano started coming from
-     * Ultralytics' own native exporter (for int8), that same backend turned out not to support
-     * float16 for this format at all — its own validation error lists only int8, w8a16 (int8
-     * weights + int16 activations), dynamic int8, and FP32. w8a16 stood in for it for a while, but
-     * real on-device testing found it more than 4x slower than int8 on both a Galaxy S8 and a
-     * Galaxy S21 — see the class doc above for the likely cause. It was dropped, and float16 is
-     * produced via `onnx2tf` (PyTorch → ONNX → onnx2tf) instead — the same route the very first
-     * Nano build this app shipped came from — run identically across all four sizes so the
-     * comparison is apples-to-apples.
-     */
-    const val SIZE_NANO = "n"
+    /** The two bundled sizes ([PreferencesManager.segmentationModelSize]'s valid values), in
+     *  Ultralytics' own s/m naming, used directly as the asset filename's size letter — see
+     *  [assetPathFor]. [ensureInterpreter] reloads the interpreter whenever the selection changes.
+     *  [SIZE_MEDIUM] is both the default and the one Settings marks "Recommended" — see
+     *  [sizeDisplayName] — with a one-time prompt to switch down to [SIZE_SMALL] if it turns out to
+     *  be too slow on a given device (see `MlkitButtonProvider`'s slow-model dialog). */
     const val SIZE_SMALL = "s"
     const val SIZE_MEDIUM = "m"
-    const val SIZE_LARGE = "l"
-    val ALL_SIZES = listOf(SIZE_NANO, SIZE_SMALL, SIZE_MEDIUM, SIZE_LARGE)
-
-    const val PRECISION_INT8 = "int8"
-    const val PRECISION_FLOAT16 = "float16"
-    val ALL_PRECISIONS = listOf(PRECISION_INT8, PRECISION_FLOAT16)
+    val ALL_SIZES = listOf(SIZE_SMALL, SIZE_MEDIUM)
 
     /** One line per size for the Settings picker — speed/accuracy is a real trade-off here, not
-     *  just a label, so the picker says so rather than leaving the user to guess what N/S/M/L mean. */
+     *  just a label, so the picker says so rather than leaving the user to guess what S/M mean. */
     fun sizeDisplayName(size: String): String = when (size) {
-        SIZE_NANO -> "Nano — fastest, least accurate"
-        SIZE_SMALL -> "Small"
-        SIZE_MEDIUM -> "Medium"
-        SIZE_LARGE -> "Large — slowest, most accurate"
+        SIZE_SMALL -> "Small — faster, less accurate"
+        SIZE_MEDIUM -> "Medium — Recommended"
         else -> size
     }
 
-    fun precisionDisplayName(precision: String): String = when (precision) {
-        PRECISION_INT8 -> "int8 — smaller, faster"
-        PRECISION_FLOAT16 -> "float16 — more accurate, larger"
-        else -> precision
-    }
-
-    private fun assetPathFor(size: String, precision: String) = "models/yolov8${size}_seg_${precision}.tflite"
+    private fun assetPathFor(size: String) = "models/yolov8${size}_seg_int8.tflite"
 
     private const val MODEL_INPUT_SIZE = 640
     private const val NUM_CLASSES = 80
@@ -234,32 +243,31 @@ object OfflineSegmentationDetector {
     @Volatile private var loadedKey: String? = null
     private val loadLock = Any()
 
-    /** Closes and reloads the interpreter whenever the (size, precision) pair differs from
-     *  whatever's currently loaded — the same "close old, load new" shape [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.ensureEngine]
+    /** Closes and reloads the interpreter whenever [size] differs from whatever's currently
+     *  loaded — the same "close old, load new" shape [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.ensureEngine]
      *  already uses for switching between VLM models, kept consistent rather than inventing a
      *  second model-switching pattern in the same app. Also resets the output-tensor shape cache
-     *  ([resolveOutputIndices]'s fields) on every reload rather than only the first time — all
-     *  eight bundled files share the same architecture and export backend and are expected to
-     *  share its exact tensor layout too, but re-deriving it from each newly-loaded model's own
-     *  reported shape costs nothing and removes the need to simply trust that assumption. */
-    private fun ensureInterpreter(context: Context, size: String, precision: String): Interpreter {
-        val key = "$size/$precision"
-        interpreter?.let { if (loadedKey == key) return it }
+     *  ([resolveOutputIndices]'s fields) on every reload rather than only the first time — both
+     *  bundled files share the same architecture and export backend and are expected to share its
+     *  exact tensor layout too, but re-deriving it from each newly-loaded model's own reported
+     *  shape costs nothing and removes the need to simply trust that assumption. */
+    private fun ensureInterpreter(context: Context, size: String): Interpreter {
+        interpreter?.let { if (loadedKey == size) return it }
         synchronized(loadLock) {
-            interpreter?.let { if (loadedKey == key) return it }
+            interpreter?.let { if (loadedKey == size) return it }
             interpreter?.close()
             candidateOutputIndex = -1
             protoOutputIndex = -1
-            val model = loadModelFile(context, size, precision)
+            val model = loadModelFile(context, size)
             val created = Interpreter(model)
             interpreter = created
-            loadedKey = key
+            loadedKey = size
             return created
         }
     }
 
-    private fun loadModelFile(context: Context, size: String, precision: String): ByteBuffer {
-        context.assets.openFd(assetPathFor(size, precision)).use { fd ->
+    private fun loadModelFile(context: Context, size: String): ByteBuffer {
+        context.assets.openFd(assetPathFor(size)).use { fd ->
             FileInputStream(fd.fileDescriptor).use { stream ->
                 return stream.channel.map(FileChannel.MapMode.READ_ONLY, fd.startOffset, fd.declaredLength)
             }
@@ -270,12 +278,11 @@ object OfflineSegmentationDetector {
      * Runs detection on [bitmap] and returns up to [MAX_DETECTIONS] instances, highest confidence
      * first. Safe to call from a background thread (the caller — see the MLKit button handlers —
      * already runs capture+detect off the main thread; this does no thread-switching of its own).
-     * Loads whichever (size, precision) [PreferencesManager.segmentationModelSize]/
-     * [PreferencesManager.segmentationModelPrecision] currently name, reloading if the user
-     * changed either in Settings since the last call.
+     * Loads whichever size [PreferencesManager.segmentationModelSize] currently names, reloading if
+     * the user changed it in Settings since the last call.
      */
     fun detect(context: Context, bitmap: Bitmap, prefs: PreferencesManager): List<DetectedInstance> {
-        val interpreter = ensureInterpreter(context, prefs.segmentationModelSize, prefs.segmentationModelPrecision)
+        val interpreter = ensureInterpreter(context, prefs.segmentationModelSize)
         val letterbox = computeLetterbox(bitmap.width, bitmap.height)
         val inputBuffer = preprocess(bitmap, letterbox, interpreter.getInputTensor(0))
 

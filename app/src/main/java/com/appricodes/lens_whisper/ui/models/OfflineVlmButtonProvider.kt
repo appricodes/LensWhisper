@@ -52,14 +52,18 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
             listOf(
                 promptCell("Objects", "objects"),
                 promptCell("Read Texts", "read_texts"),
-                customCell(0),
-                customCell(1)
-            ),
-            listOf(
-                customCell(2),
-                customCell(3),
                 GridCell(label = "Repeat", contentDescription = "Repeat the last action.", onClick = ctx.onRepeat),
                 null
+            ),
+            // The 4 custom slots get a row of their own, deliberately last — CameraActivity places
+            // the AI-inaccuracy disclaimer and the utility row right after whatever this returns,
+            // so this row ends up third-from-bottom, exactly where the custom prompts (the ones a
+            // user is most likely to reach for repeatedly) are meant to land.
+            listOf(
+                customCell(0),
+                customCell(1),
+                customCell(2),
+                customCell(3)
             )
         )
     }

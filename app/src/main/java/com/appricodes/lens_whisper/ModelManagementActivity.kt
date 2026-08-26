@@ -128,7 +128,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         prefs.selectedModelId = "mlkit"
         selectedId = "mlkit"
         OfflineInferenceEngine.release()
-        AccessibilityUtils.announceToTalkBack(context, "Basic Models selected.")
+        AccessibilityUtils.announceToTalkBack(context, "Basic tasks selected.")
     }
 
     fun selectLocalServer() {
@@ -347,7 +347,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                     "This deletes every downloaded on-device AI model (freeing ${formatSize(totalFreed)}) and any " +
                         "downloaded MLKit translation language pack — including ones downloaded automatically for " +
                         "the \"Translate Offline Results\" setting. You'll need to download them again to use them. " +
-                        "This doesn't affect Basic Models' built-in object/text/color detection, which needs no download."
+                        "This doesn't affect Basic tasks' built-in object/text/color detection, which needs no download."
                 )
             },
             confirmButton = {
@@ -409,11 +409,11 @@ private fun Modifier.mergedInfoBlock(): Modifier = this.semantics(mergeDescendan
 private fun MlkitCard(isSelected: Boolean, onSelect: () -> Unit) {
     ModelCard {
         Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(text = "Basic Models", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            Text(text = "Basic tasks", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
             Text(text = "Detects and names objects and their colors, reads text, explores a photo by touch, and measures light level. Always available, nothing to download.", fontSize = 15.sp, color = Color.Gray)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            if (isSelected) SelectedLabel("Basic Models") else Button(onClick = onSelect) { Text("Select") }
+            if (isSelected) SelectedLabel("Basic tasks") else Button(onClick = onSelect) { Text("Select") }
         }
     }
 }

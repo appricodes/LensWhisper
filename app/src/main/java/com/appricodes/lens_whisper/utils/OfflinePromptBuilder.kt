@@ -46,8 +46,8 @@ object OfflinePromptBuilder {
      *  model is asked to follow, and as a hard token cap in
      *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] regardless of whether the
      *  model actually complies with the word count. */
-    const val BRIEF_MAX_WORDS = 15
-    const val DEFAULT_MAX_WORDS = 40
+    const val BRIEF_MAX_WORDS = 20
+    const val DEFAULT_MAX_WORDS = 150
 
     /** [BRIEF_MAX_WORDS] for the brief-narration prompt, [DEFAULT_MAX_WORDS] for every other
      *  predefined prompt. Not meaningful for "custom" or "explore", which build their own

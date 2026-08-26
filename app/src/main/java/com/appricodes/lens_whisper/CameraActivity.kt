@@ -180,14 +180,15 @@ private fun CameraScreen(
     val mlkitProvider = remember {
         MlkitButtonProvider(
             context, coroutineScope,
-            capturePhoto = { maxDim ->
-                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled) {
-                    cameraController.capturePhoto(maxDim)
+            capturePhoto = { maxDim, highRes, onShutter ->
+                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled, highRes) {
+                    cameraController.capturePhoto(maxDim, onShutter)
                 }
             }
         )
     }
     mlkitProvider.ObserveContinuousLoop(prefs)
+    mlkitProvider.ObserveSlowModelDialog(prefs)
 
     var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
     val (provider, selectedOfflineModel) = remember(selectedModelId) {
@@ -234,16 +235,16 @@ private fun CameraScreen(
         ProcessingSoundPlayer.playCaptureAcknowledge(context)
         val frame = try {
             cameraController.withCaptureSession(lifecycleOwner, flashEnabled) {
-                cameraController.capturePhotoToFile(MAX_CAPTURE_DIMENSION)
+                // onShutter fires the instant the shutter sound plays (see
+                // CameraController.capturePhotoInternal), not after readout/decode/scale/file-write
+                // — the waiting tone means "the model is working", which starts exactly then.
+                cameraController.capturePhotoToFile(MAX_CAPTURE_DIMENSION) { controller.startProcessingChime() }
             }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             null
         } ?: return null
-        // Only after the shutter has actually fired (see CameraController.capturePhotoInternal) —
-        // the waiting tone means "the model is working", which isn't true a moment earlier.
-        controller.startProcessingChime()
         return CapturedBundle(
             listOf(frame.bitmap),
             localServerCall = {
@@ -422,16 +423,19 @@ private fun CameraScreen(
             )
         )
 
-        // The disclaimer summary sits between the first row of buttons and the rest, per the
-        // requirement that it be immediately after the first row. The two grids are weighted by
-        // their row counts so the cells stay the same height across the split.
+        // The disclaimer summary sits directly above the bottom utility row (volume keys/camera
+        // switch/flash/mic) — second-from-bottom overall, with every row the current provider
+        // returns (for OfflineVlmButtonProvider: its 2 rows of predefined prompts, then its 4
+        // custom-prompt buttons as their own row — see that provider's doc) rendered together
+        // above it, unchanged in order. The two grids are weighted by their row counts so the
+        // cells stay the same height across the split.
         val allRows = provider.rows(ctx) + listOf(bottomRow)
-        val firstRow = allRows.take(1)
-        val remainingRows = allRows.drop(1)
+        val mainRows = allRows.dropLast(1)
+        val lastRow = allRows.takeLast(1)
 
-        ActionButtonGrid(rows = firstRow, modifier = Modifier.weight(firstRow.size.toFloat()))
+        ActionButtonGrid(rows = mainRows, modifier = Modifier.weight(mainRows.size.toFloat()))
         DisclaimerSummaryStrip(onClick = { showDisclaimerReadOnly = true })
-        ActionButtonGrid(rows = remainingRows, modifier = Modifier.weight(remainingRows.size.toFloat()))
+        ActionButtonGrid(rows = lastRow, modifier = Modifier.weight(lastRow.size.toFloat()))
     }
 
     controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })

@@ -106,6 +106,12 @@
             android:theme="@style/Theme.LensWhisper" />
 
         <activity
+            android:name=".ReadDocumentActivity"
+            android:exported="false"
+            android:label="Read Document"
+            android:theme="@style/Theme.LensWhisper" />
+
+        <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:label="Settings"
@@ -140,5 +146,17 @@
                 <action android:name="android.intent.action.MEDIA_BUTTON" />
             </intent-filter>
         </receiver>
+
+        <!-- Backs sharing a captured photo from Explore/Read Document (see utils/ShareUtils.kt) -
+             a plain file:// Uri for a cache-dir file is rejected by other apps on modern Android. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

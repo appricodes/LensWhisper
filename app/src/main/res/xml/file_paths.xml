@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Backs the FileProvider used to share a captured photo (Explore/Read Document) — captures are
+     written under the cache dir (see CameraController.capturePhotoToFile and the explore_*.jpg /
+     read_document_*.jpg files these screens write themselves), so only that needs exposing. -->
+<paths>
+    <cache-path name="captures" path="." />
+</paths>

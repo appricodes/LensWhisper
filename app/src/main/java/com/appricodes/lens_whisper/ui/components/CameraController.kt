@@ -14,6 +14,7 @@ import androidx.camera.core.ImageCapture
 import androidx.camera.core.ImageCaptureException
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.UseCase
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
 import androidx.camera.core.resolutionselector.ResolutionSelector
 import androidx.camera.core.resolutionselector.ResolutionStrategy
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -82,6 +83,9 @@ class CameraController(private val context: Context) {
     // ImageCapture mid-session (e.g. MLKit's light mode starting while a Story burst runs) and a
     // fresh use case would silently come back with the flash off.
     private var captureFlashEnabled = false
+    // Same reasoning as captureFlashEnabled — which resolution the current capture session wants,
+    // see withCaptureSession's highResolution parameter.
+    private var captureTargetResolution: Size = RESOLUTION_720P
     private var boundLifecycleOwner: LifecycleOwner? = null
     // What the current binding was built for. rebind() is a no-op when nothing in it changed,
     // which matters because a capture taken *inside* a continuous session bumps the session depth
@@ -156,13 +160,21 @@ class CameraController(private val context: Context) {
      * system's camera-in-use indicator can stay lit up to that long past the actual photo, which
      * is the real trade-off here.
      */
-    suspend fun <T> withCaptureSession(lifecycleOwner: LifecycleOwner, flashEnabled: Boolean, block: suspend () -> T): T {
+    suspend fun <T> withCaptureSession(
+        lifecycleOwner: LifecycleOwner,
+        flashEnabled: Boolean,
+        highResolution: Boolean = false,
+        block: suspend () -> T
+    ): T {
         cameraMutex.withLock {
             pendingUnbindJob?.cancel()
             pendingUnbindJob = null
             captureSessionDepth++
             boundLifecycleOwner = lifecycleOwner
             captureFlashEnabled = flashEnabled
+            // Read Text/Read Document pass true; every other capture leaves this at the 720p
+            // default — see RESOLUTION_1080P/RESOLUTION_720P's doc.
+            captureTargetResolution = if (highResolution) RESOLUTION_1080P else RESOLUTION_720P
             rebind()
         }
         try {
@@ -172,6 +184,7 @@ class CameraController(private val context: Context) {
                 captureSessionDepth--
                 if (captureSessionDepth == 0) {
                     captureFlashEnabled = false
+                    captureTargetResolution = RESOLUTION_720P
                     scheduleDelayedUnbind()
                 }
             }
@@ -213,7 +226,7 @@ class CameraController(private val context: Context) {
 
         val wantCapture = captureSessionDepth > 0
         val sink = analysisFrameSink
-        val signature = "$wantCapture|${sink != null}|$lensFacing|$captureFlashEnabled"
+        val signature = "$wantCapture|${sink != null}|$lensFacing|$captureFlashEnabled|$captureTargetResolution"
         // Belt-and-braces alongside onStopObserver: if this is somehow being asked to reuse a
         // binding for a LifecycleOwner that isn't even at STARTED right now, don't trust the
         // signature match either way.
@@ -236,6 +249,20 @@ class CameraController(private val context: Context) {
         if (wantCapture) {
             val captureUseCase = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setResolutionSelector(
+                    ResolutionSelector.Builder()
+                        // ResolutionSelector applies its AspectRatioStrategy before the
+                        // ResolutionStrategy below, and the builder's default is 4:3 — left alone,
+                        // that would filter the candidate list against 4:3 before ever looking at
+                        // captureTargetResolution's 16:9 target (1920x1080/1280x720), and could
+                        // land on some other resolution entirely. Pin it to 16:9 explicitly so the
+                        // resolution strategy is actually choosing among sizes near the target.
+                        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_16_9_FALLBACK_AUTO_STRATEGY)
+                        .setResolutionStrategy(
+                            ResolutionStrategy(captureTargetResolution, ResolutionStrategy.FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER)
+                        )
+                        .build()
+                )
                 .build()
             captureUseCase.flashMode =
                 if (captureFlashEnabled && lensHasFlash(cameraProvider)) ImageCapture.FLASH_MODE_ON
@@ -337,19 +364,34 @@ class CameraController(private val context: Context) {
         lensFacing == CameraSelector.LENS_FACING_BACK
     }
 
-    /** Takes a photo and returns just the bitmap. Must be called inside [withCaptureSession]. */
-    suspend fun capturePhoto(maxDim: Int = 2500): Bitmap = capturePhotoInternal(maxDim).bitmap
+    /** Takes a photo and returns just the bitmap. Must be called inside [withCaptureSession].
+     *  [onShutter] fires synchronously at the exact moment the shutter sound does — see
+     *  [capturePhotoInternal]'s doc — so a caller that wants its "waiting for the model" tone to
+     *  start right after the shutter, not after this whole suspend function returns (which also
+     *  waits out image readout/decode/scale/file-write), starts it from there instead of after
+     *  `await`ing this call. */
+    suspend fun capturePhoto(maxDim: Int = 2500, onShutter: () -> Unit = {}): Bitmap = capturePhotoInternal(maxDim, onShutter).bitmap
 
     /** Same as [capturePhoto] but also writes a JPEG to the cache dir, for the upload paths. */
-    suspend fun capturePhotoToFile(maxDim: Int = 2500): CapturedFrame = capturePhotoInternal(maxDim)
+    suspend fun capturePhotoToFile(maxDim: Int = 2500, onShutter: () -> Unit = {}): CapturedFrame = capturePhotoInternal(maxDim, onShutter)
 
-    private suspend fun capturePhotoInternal(maxDim: Int): CapturedFrame = cameraMutex.withLock {
+    private suspend fun capturePhotoInternal(maxDim: Int, onShutter: () -> Unit): CapturedFrame = cameraMutex.withLock {
         suspendCancellableCoroutine { cont ->
             val capture = imageCapture
             if (capture == null) {
                 cont.resumeWithException(IllegalStateException("Camera not bound — capture must run inside withCaptureSession"))
                 return@suspendCancellableCoroutine
             }
+            // The single choke point every capture path in the app goes through (single shot,
+            // Story frames, every MLKit/segmentation mode, Explore) — playing the shutter click
+            // here, right before the capture command itself is issued, means no call site has to
+            // remember to trigger it itself. Deliberately *before* takePicture(), not in
+            // onCaptureSuccess below: a real shutter sound marks the moment of exposure, not the
+            // moment the resulting image finishes being read out and decoded — which can trail the
+            // former by a further processing delay. onShutter() fires in the same breath, for
+            // callers that need to react at this exact point rather than after the whole capture.
+            ProcessingSoundPlayer.playShutter(context)
+            onShutter()
             capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
                     val bitmap = try { imageProxyToBitmap(image) } finally { image.close() }
@@ -357,11 +399,6 @@ class CameraController(private val context: Context) {
                         cont.resumeWithException(IllegalStateException("Failed to decode captured photo"))
                         return
                     }
-                    // The single choke point every capture path in the app goes through (single
-                    // shot, Story frames, every MLKit/segmentation mode, Explore) — playing the
-                    // shutter click here, right as the photo is actually taken, means no call site
-                    // has to remember to trigger it itself.
-                    ProcessingSoundPlayer.playShutter(context)
                     val scaled = ImageScaling.scaleToMax(bitmap, maxDim)
                     val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
                     FileOutputStream(file).use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
@@ -379,6 +416,16 @@ class CameraController(private val context: Context) {
         /** How long the camera stays bound after a capture session ends before actually
          *  unbinding — see [withCaptureSession]/[scheduleDelayedUnbind]. */
         private const val KEEP_WARM_MS = 30000L
+
+        // Capture targets for withCaptureSession's highResolution flag — Read Text/Read Document
+        // need enough resolution for small glyphs to stay legible to OCR; every other capture
+        // (custom VLM prompts, Story, Detect Objects/Object and Color Detection, Explore) only
+        // needs enough detail for object/scene description, where 720p is plenty and faster to
+        // capture, scale, and run inference on. Landscape (width x height) regardless of the
+        // device's own orientation — CameraX resolves these against the sensor's native reported
+        // sizes, same convention as the 32x32 analysis-resolution selector below.
+        private val RESOLUTION_1080P = Size(1920, 1080)
+        private val RESOLUTION_720P = Size(1280, 720)
 
         /**
          * Process-wide belt-and-braces release: unbinds every CameraX use case and turns any torch

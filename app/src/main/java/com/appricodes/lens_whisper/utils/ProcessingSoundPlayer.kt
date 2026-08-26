@@ -84,9 +84,11 @@ object ProcessingSoundPlayer {
     // deliberately quiet ([peak]) and long-tailed (low [decayRate]) instead of the old bright,
     // fast-decaying major-triad chime — a held, low murmur under the spoken UI rather than
     // something that competes with it.
+    // Peaks are 50% louder than the original 0.16/0.11 — still quiet by design, just less easily
+    // masked under TalkBack speech than the first pass turned out to be.
     private val waitVoices = listOf(
-        WaitVoice(frequency = 146.83, startSec = 0.00, durationSec = 0.70, decayRate = 2.6, peak = 0.16), // D3
-        WaitVoice(frequency = 207.65, startSec = 0.22, durationSec = 0.55, decayRate = 3.0, peak = 0.11)  // Ab3, a tritone up
+        WaitVoice(frequency = 146.83, startSec = 0.00, durationSec = 0.70, decayRate = 2.6, peak = 0.24), // D3
+        WaitVoice(frequency = 207.65, startSec = 0.22, durationSec = 0.55, decayRate = 3.0, peak = 0.165)  // Ab3, a tritone up
     )
 
     /**
@@ -187,6 +189,62 @@ object ProcessingSoundPlayer {
             mixBuffer[i] = sin(2 * PI * ACK_FREQUENCY * t) * exp(-decayRate * t) * 0.18
         }
         play(toPcm16(mixBuffer), (ACK_DURATION_SEC * 1000).toLong() + 100)
+    }
+
+    // --- empty-area ambient tone -----------------------------------------------------------
+
+    private const val EMPTY_AREA_DURATION_SEC = 0.35
+    private const val EMPTY_AREA_FREQUENCY = 90.0 // low and calm — an ambient placeholder, not an alert
+
+    /** A soft, low, calm hum — call wherever a hover/touch lands on "nothing here" in a photo
+     *  (Explore, Read Document), instead of a spoken "Nothing here." Zero-to-zero linear envelope,
+     *  same reasoning as `OfflineLightDetector`'s notes: a finger sliding across empty space can
+     *  trigger this repeatedly in quick succession, so the waveform can't afford to click. */
+    fun playEmptyAreaTone(context: Context) {
+        if (!PreferencesManager(context).soundEffectsEnabled) return
+        val totalSamples = (EMPTY_AREA_DURATION_SEC * SAMPLE_RATE).toInt()
+        val mixBuffer = DoubleArray(totalSamples)
+        val attackSamples = (totalSamples * 0.15).toInt()
+        val releaseSamples = (totalSamples * 0.35).toInt()
+        val releaseStart = totalSamples - releaseSamples
+        for (i in 0 until totalSamples) {
+            val t = i.toDouble() / SAMPLE_RATE
+            val envelope = when {
+                i < attackSamples -> i.toDouble() / attackSamples
+                i >= releaseStart -> (totalSamples - i).toDouble() / releaseSamples
+                else -> 1.0
+            }
+            val raw = sin(2 * PI * EMPTY_AREA_FREQUENCY * t) + 0.4 * sin(2 * PI * EMPTY_AREA_FREQUENCY * 2 * t)
+            mixBuffer[i] = raw / 1.4 * envelope * 0.14
+        }
+        play(toPcm16(mixBuffer), (EMPTY_AREA_DURATION_SEC * 1000).toLong() + 100)
+    }
+
+    // --- explore/read-document screen opened ------------------------------------------------
+
+    private const val SCREEN_OPENED_DURATION_SEC = 0.18
+
+    /** A very short, distinct "ready" chirp — call once when Explore or Read Document actually has
+     *  something to show (detection/OCR finished), right before announcing how to use the screen.
+     *  Two quick rising notes, shorter and brighter than [playEmptyAreaTone] or the welcome phrase,
+     *  so it reads as "this specific screen is ready" rather than either of those. */
+    fun playScreenOpened(context: Context) {
+        if (!PreferencesManager(context).soundEffectsEnabled) return
+        val totalSamples = (SCREEN_OPENED_DURATION_SEC * SAMPLE_RATE).toInt()
+        val mixBuffer = DoubleArray(totalSamples)
+        val noteSamples = totalSamples / 2
+        val frequencies = listOf(587.33, 880.0) // D5, A5
+        val decayRate = 22.0
+        for ((noteIndex, frequency) in frequencies.withIndex()) {
+            val startSample = noteIndex * noteSamples
+            for (i in 0 until noteSamples) {
+                val bufferIndex = startSample + i
+                if (bufferIndex >= totalSamples) break
+                val t = i.toDouble() / SAMPLE_RATE
+                mixBuffer[bufferIndex] += sin(2 * PI * frequency * t) * exp(-decayRate * t) * 0.25
+            }
+        }
+        play(toPcm16(mixBuffer), (SCREEN_OPENED_DURATION_SEC * 1000).toLong() + 100)
     }
 
     // --- welcome phrase ------------------------------------------------------------------

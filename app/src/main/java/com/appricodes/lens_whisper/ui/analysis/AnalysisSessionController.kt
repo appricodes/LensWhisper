@@ -260,6 +260,13 @@ class AnalysisSessionController(
     private suspend fun runStreamingAnalysis(flow: Flow<String>, translate: Boolean) {
         val fullText = StringBuilder()
         val pending = StringBuilder()
+        // Small on-device models occasionally degenerate into repeating themselves verbatim once
+        // they run out of anything new to say. Every complete sentence spoken so far is tracked
+        // here; hitting an exact repeat throws RepeatedSentenceDetected, which unwinds out of
+        // flow.collect below and — because that's the same coroutine actually driving
+        // OfflineInferenceEngine's token generation — genuinely stops the model from generating
+        // further tokens, not just stops this function from speaking them.
+        val seenSentences = mutableSetOf<String>()
 
         suspend fun speak(sentence: String) {
             val trimmed = sentence.trim()
@@ -277,13 +284,21 @@ class AnalysisSessionController(
                 pending.append(delta)
                 var end = findSentenceEnd(pending)
                 while (end != -1) {
-                    speak(pending.substring(0, end + 1))
+                    val sentence = pending.substring(0, end + 1)
                     pending.delete(0, end + 1)
+                    val trimmed = sentence.trim()
+                    if (trimmed.isNotEmpty() && !seenSentences.add(trimmed)) throw RepeatedSentenceDetected()
+                    speak(sentence)
                     end = findSentenceEnd(pending)
                 }
             }
             activeAudioFeedbackJob?.cancel()
             speak(pending.toString()) // whatever's left over (no trailing punctuation) still gets spoken
+            if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
+        } catch (e: RepeatedSentenceDetected) {
+            // Not an error — the model simply had nothing more to add. Whatever was already spoken
+            // stands as the final answer.
+            activeAudioFeedbackJob?.cancel()
             if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
         } catch (e: CancellationException) {
             throw e
@@ -293,6 +308,12 @@ class AnalysisSessionController(
             dialogState = "Error" to (e.localizedMessage ?: "Analysis failed.")
         }
     }
+
+    /** Thrown from inside [runStreamingAnalysis]'s `flow.collect` to unwind out of it the moment a
+     *  sentence repeats one already spoken — see that function's doc. Deliberately not a
+     *  [CancellationException] subtype, so it can't be mistaken for real coroutine cancellation by
+     *  this or any other catch block. */
+    private class RepeatedSentenceDetected : Exception()
 
     /**
      * Repeats the last prompt run (voice query, tap, or custom), if any. [selectedModelId] guards

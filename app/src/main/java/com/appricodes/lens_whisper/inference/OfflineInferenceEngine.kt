@@ -55,12 +55,14 @@ object OfflineInferenceEngine {
     private const val LOAD_TIMEOUT_MS = 60_000L
     private const val INFERENCE_TIMEOUT_MS = 90_000L
 
-    /** Caps every on-device response at 60 tokens (roughly 45-55 words for these models). This is
-     *  a hard backstop on top of the word limits in [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]
-     *  ("under 15/40 words"), which the model is free to ignore — small models routinely run past a
+    /** Caps every on-device response at 200 tokens (roughly 150-180 words for these models). This
+     *  is a hard backstop on top of the word limits in [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]
+     *  ("under 20/150 words"), which the model is free to ignore — small models routinely run past a
      *  word count asked for in the prompt. This caps generation time and battery cost on-device
-     *  regardless of whether the model cooperates. */
-    private const val MAX_OUTPUT_TOKENS = 60
+     *  regardless of whether the model cooperates; the streaming path also has its own
+     *  repeated-sentence cutoff (see `AnalysisSessionController.runStreamingAnalysis`) for the more
+     *  common failure mode of a small model looping well before this token cap is reached. */
+    private const val MAX_OUTPUT_TOKENS = 200
 
     /** Published so the UI can show a blocking "Loading <model>…" alert while a model is
      *  actually loading into memory, and auto-dismiss once it's ready — whether loading was

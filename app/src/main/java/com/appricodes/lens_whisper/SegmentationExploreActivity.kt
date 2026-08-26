@@ -8,9 +8,11 @@ import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -23,6 +25,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Checkbox
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -34,10 +37,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.input.pointer.PointerEventType
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -55,20 +61,28 @@ import androidx.compose.ui.window.Dialog
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
-import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
+import com.appricodes.lens_whisper.offline.OfflineColorDetector
+import com.appricodes.lens_whisper.offline.SegmentationSpeedGate
 import com.appricodes.lens_whisper.ui.components.CameraController
+import com.appricodes.lens_whisper.ui.components.ImmersiveBackButton
+import com.appricodes.lens_whisper.ui.components.ImmersiveFullScreen
+import com.appricodes.lens_whisper.ui.components.SlowModelSwitchDialog
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.HoverFeedback
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
+import com.appricodes.lens_whisper.utils.ShareUtils
 import com.appricodes.lens_whisper.utils.VolumeShortcuts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 private const val MAX_CAPTURE_DIMENSION = 2500
 
@@ -76,18 +90,23 @@ private const val MAX_CAPTURE_DIMENSION = 2500
  * The mask-based "Explore" screen — see [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider],
  * the sole external caller. Shares its overall shape ("open on a captured photo, run inference,
  * then let the user explore the result") with the existing VLM-driven [ExploreActivity], but the
- * interaction itself is different: this one is grounded in [OfflineSegmentationDetector]'s exact
- * per-pixel masks rather than a coarse VLM-described grid, so a finger genuinely has to be *on* an
- * object (not just inside its rough bounding area) to name it.
+ * interaction itself is different: this one is grounded in [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s
+ * exact per-pixel masks rather than a coarse VLM-described grid, so a finger genuinely has to be
+ * *on* an object (not just inside its rough bounding area) to name it.
  *
  * Two ways to learn what's in the photo, both on [HoverExploreLayer]:
  * - **Continuous hover**: move a finger over the photo to hear whatever is under it, with haptic +
  *   tone feedback on crossing into/out of an object (see [HoverFeedback]) so a blind user can feel
- *   an edge, not just hear about it after the fact.
- * - **A single tap** opens [DetectedItemsPopup] — every detected object at once, each with a coarse
- *   spatial location, plus "Capture new photo" as the first entry so a bad shot can be retaken
- *   without leaving this screen. This replaces the former 6x6 grid variant ("Explore 2"): a
- *   TalkBack-navigable list needs no finger-precision at all, unlike a grid of small cells.
+ *   an edge, not just hear about it after the fact. Every object also gets a visible outline (dark
+ *   red normally, brightening while the finger is on it) — sighted-assistant/low-vision use, not
+ *   needed for the audio path itself.
+ * - **A single tap** opens [ExploreMenu] — Color Report (a toggle, see [HoverExploreLayer]'s doc),
+ *   Share Photo, Capture New Photo, then every detected object at once with a coarse spatial
+ *   location (read-only — a fully TalkBack-navigable list needs no finger-precision at all, unlike
+ *   a grid of small cells, but doesn't need to be actionable either).
+ *
+ * Full-screen ([ImmersiveFullScreen]): no status/nav bar, a small [ImmersiveBackButton] in the
+ * bottom-right corner instead.
  */
 class SegmentationExploreActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -105,13 +124,23 @@ class SegmentationExploreActivity : ComponentActivity() {
 
 /** Runs detection + per-instance color naming + confidence phrasing on [loadedBitmap], with the
  *  "waiting for the model" tone looping for the duration — shared by the initial load and by
- *  "Capture new photo" so the two paths can't drift apart. */
+ *  "Capture new photo" so the two paths can't drift apart. [onSlowFirstDetected] surfaces
+ *  [SegmentationSpeedGate]'s one-time slow-model signal up to the caller. */
 private suspend fun detectAndDescribe(
     context: Context,
     loadedBitmap: Bitmap,
-    prefs: PreferencesManager
-): Pair<List<DetectedInstance>, Map<DetectedInstance, String>> = coroutineScopeWithWaitingTone(context) {
-    val detected = withContext(Dispatchers.Default) { OfflineSegmentationDetector.detect(context, loadedBitmap, prefs) }
+    prefs: PreferencesManager,
+    // Non-null when the caller (captureNewPhoto) already started the waiting tone itself, from
+    // CameraController's onShutter callback, the instant the shutter fired — this function then
+    // just adopts and eventually cancels that job instead of starting a second, later one. Null
+    // for the initial-load path, where there's no shutter event and detectAndDescribe starting
+    // its own tone right away already means "exactly when the image is received".
+    externalToneJob: Job? = null,
+    onSlowFirstDetected: () -> Unit
+): Pair<List<DetectedInstance>, Map<DetectedInstance, String>> = coroutineScopeWithWaitingTone(context, externalToneJob) {
+    val detected = withContext(Dispatchers.Default) {
+        SegmentationSpeedGate.detect(context, loadedBitmap, prefs, onSlowFirstDetected)
+    }
     val described = withContext(Dispatchers.Default) {
         detected.associateWith { instance ->
             val colors = instance.namedDominantColors(loadedBitmap)
@@ -121,9 +150,9 @@ private suspend fun detectAndDescribe(
     detected to described
 }
 
-private suspend fun <T> coroutineScopeWithWaitingTone(context: Context, block: suspend CoroutineScope.() -> T): T =
+private suspend fun <T> coroutineScopeWithWaitingTone(context: Context, externalToneJob: Job?, block: suspend CoroutineScope.() -> T): T =
     coroutineScope {
-        val toneJob = launch(Dispatchers.IO) {
+        val toneJob = externalToneJob ?: launch(Dispatchers.IO) {
             while (true) {
                 ProcessingSoundPlayer.playWaitingTone(context)
                 delay(1100)
@@ -145,6 +174,10 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
 
     var isLoading by remember { mutableStateOf(true) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
+    // The current photo's own cache file, for "Share photo" — the initial one is already a cache
+    // file (see MlkitButtonProvider.launchSegmentationExplore's Uri.fromFile), and "Capture new
+    // photo" below writes a fresh one the same way.
+    var currentPhotoFile by remember { mutableStateOf(imageUri?.path?.let { File(it) }) }
     var instances by remember { mutableStateOf<List<DetectedInstance>>(emptyList()) }
     // Each instance's full spoken sentence, built via DetectionPhrasing.describeDetection and
     // computed once right after detection rather than on every hover/touch — Palette color
@@ -152,15 +185,18 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
     // every pointer-move event.
     var descriptions by remember { mutableStateOf<Map<DetectedInstance, String>>(emptyMap()) }
     var showPopup by remember { mutableStateOf(false) }
+    var colorReportEnabled by remember { mutableStateOf(false) }
+    var showSlowModelDialog by remember { mutableStateOf(false) }
 
     BackHandler { onClose() }
     DisposableEffect(cameraController) { onDispose { cameraController.shutdown() } }
+    ImmersiveFullScreen()
 
-    suspend fun runDetection(loadedBitmap: Bitmap) {
+    suspend fun runDetection(loadedBitmap: Bitmap, externalToneJob: Job? = null) {
         isLoading = true
         bitmap = loadedBitmap
         AccessibilityUtils.announceToTalkBack(context, "Analyzing objects.")
-        val (detected, described) = detectAndDescribe(context, loadedBitmap, prefs)
+        val (detected, described) = detectAndDescribe(context, loadedBitmap, prefs, externalToneJob) { showSlowModelDialog = true }
         isLoading = false
         if (detected.isEmpty()) {
             instances = emptyList()
@@ -169,7 +205,8 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
         } else {
             instances = detected
             descriptions = described
-            AccessibilityUtils.announceToTalkBack(context, "Ready. Move your finger over the photo to hear what's there, or tap once for a list.")
+            ProcessingSoundPlayer.playScreenOpened(context)
+            AccessibilityUtils.announceToTalkBack(context, "Touch the screen to hear what's there. Tap anywhere for more options.")
         }
     }
 
@@ -180,18 +217,40 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
         isLoading = true
         ProcessingSoundPlayer.playCaptureAcknowledge(context)
         coroutineScope.launch {
+            // toneJob is launched as a child of THIS coroutine (captureScope), not of the outer
+            // remembered coroutineScope — so if this coroutine is cancelled, or throws (including
+            // from the file-write step below, which has no try of its own), toneJob is torn down
+            // with it automatically, rather than needing every exit path to remember to cancel it.
+            val captureScope = this
+            var toneJob: Job? = null
             val newBitmap = try {
                 cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled) {
-                    cameraController.capturePhoto(MAX_CAPTURE_DIMENSION)
+                    cameraController.capturePhoto(MAX_CAPTURE_DIMENSION) {
+                        // Fires the instant the shutter sound plays (see
+                        // CameraController.capturePhotoInternal), not after readout/decode/scale —
+                        // runDetection adopts this job instead of starting its own, later one.
+                        toneJob = captureScope.launch(Dispatchers.IO) {
+                            while (true) {
+                                ProcessingSoundPlayer.playWaitingTone(context)
+                                delay(1100)
+                            }
+                        }
+                    }
                 }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
+                toneJob?.cancel()
                 AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                 isLoading = false
                 return@launch
             }
-            runDetection(newBitmap)
+            currentPhotoFile = withContext(Dispatchers.IO) {
+                val file = File(context.cacheDir, "explore_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(file).use { newBitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                file
+            }
+            runDetection(newBitmap, toneJob)
         }
     }
 
@@ -217,39 +276,49 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
             Image(
                 bitmap = bmp.asImageBitmap(),
                 contentDescription = null,
+                // Fills the screen exactly, distorting the aspect ratio if needed, rather than
+                // letterboxing — the whole photo stays touchable/visible edge to edge, which
+                // matters more here than preserving its proportions.
                 modifier = Modifier.fillMaxSize(),
-                contentScale = ContentScale.Fit
+                contentScale = ContentScale.FillBounds
             )
         }
 
         val loadedBitmap = bitmap
         if (!isLoading && loadedBitmap != null) {
             HoverExploreLayer(
-                bitmapSize = loadedBitmap.width to loadedBitmap.height,
+                sourceBitmap = loadedBitmap,
                 instances = instances,
                 descriptions = descriptions,
+                colorReportEnabled = colorReportEnabled,
                 onTap = { showPopup = true }
             )
         }
 
         if (showPopup) {
-            DetectedItemsPopup(
+            ExploreMenu(
                 instances = instances,
                 descriptions = descriptions,
-                onCaptureNewPhoto = { captureNewPhoto() },
-                onItemSelected = { text ->
+                colorReportEnabled = colorReportEnabled,
+                onColorReportToggled = { colorReportEnabled = it },
+                onSharePhoto = {
                     showPopup = false
-                    AccessibilityUtils.announceToTalkBack(context, text)
+                    currentPhotoFile?.let { ShareUtils.shareImage(context, it) }
                 },
+                onCaptureNewPhoto = { captureNewPhoto() },
                 onDismiss = { showPopup = false }
             )
         }
+
+        SlowModelSwitchDialog(context = context, prefs = prefs, show = showSlowModelDialog, onDone = { showSlowModelDialog = false })
+
+        ImmersiveBackButton(onClick = onClose)
     }
 }
 
 /** Coarse 3x3-zone location for [instance]'s box center — "center, top, bottom, left, right, upper
- *  left, upper right, lower left, lower right" — used only by [DetectedItemsPopup]'s list, where a
- *  spoken location stands in for the finger-precision [HoverExploreLayer] normally relies on. */
+ *  left, upper right, lower left, lower right" — used only by [ExploreMenu]'s list, where a spoken
+ *  location stands in for the finger-precision [HoverExploreLayer] normally relies on. */
 private fun locationDescriptor(instance: DetectedInstance): String {
     val cx = (instance.boxLeft + instance.boxRight) / 2f
     val cy = (instance.boxTop + instance.boxBottom) / 2f
@@ -264,16 +333,19 @@ private fun locationDescriptor(instance: DetectedInstance): String {
 }
 
 /**
- * The list that replaces the old 6x6 grid: "Capture new photo" first, then every detected
- * instance as "<description>, <location>" — a fully TalkBack-navigable list needs no finger
- * precision at all, unlike touching a specific grid cell or mask edge.
+ * The tap-to-open menu — no title (the four items are self-explanatory without one). "Color
+ * Report" is a toggle, not a one-shot action; the object list below it is read-only (browsable via
+ * TalkBack, does nothing on selection) — it exists to let a user hear everything at once, not to
+ * re-trigger anything.
  */
 @Composable
-private fun DetectedItemsPopup(
+private fun ExploreMenu(
     instances: List<DetectedInstance>,
     descriptions: Map<DetectedInstance, String>,
+    colorReportEnabled: Boolean,
+    onColorReportToggled: (Boolean) -> Unit,
+    onSharePhoto: () -> Unit,
     onCaptureNewPhoto: () -> Unit,
-    onItemSelected: (String) -> Unit,
     onDismiss: () -> Unit
 ) {
     Dialog(onDismissRequest = onDismiss) {
@@ -283,22 +355,41 @@ private fun DetectedItemsPopup(
             modifier = Modifier.fillMaxWidth(0.92f).fillMaxHeight(0.8f)
         ) {
             Column(modifier = Modifier.fillMaxSize().padding(16.dp)) {
-                Text(text = "Detected Objects", fontSize = 20.sp, color = MaterialTheme.colorScheme.onSurface)
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onColorReportToggled(!colorReportEnabled) }
+                        .padding(vertical = 14.dp)
+                        .clearAndSetSemantics {
+                            val state = if (colorReportEnabled) "on" else "off"
+                            contentDescription = "Color Report is $state. Double tap to toggle. When on, hovering also announces the colors under your finger."
+                        },
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(text = "Color Report", fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
+                    Checkbox(checked = colorReportEnabled, onCheckedChange = onColorReportToggled)
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onSharePhoto() }
+                        .padding(vertical = 14.dp)
+                        .clearAndSetSemantics { contentDescription = "Share photo. Double tap to share this photo." }
+                ) {
+                    Text(text = "Share Photo", fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+                }
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { onCaptureNewPhoto() }
+                        .padding(vertical = 14.dp)
+                        .clearAndSetSemantics { contentDescription = "Capture new photo. Double tap to take a new photo and re-analyze it." }
+                ) {
+                    Text(text = "Capture New Photo", fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 LazyColumn(modifier = Modifier.weight(1f)) {
-                    item {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { onCaptureNewPhoto() }
-                                .padding(vertical = 14.dp)
-                                .clearAndSetSemantics {
-                                    contentDescription = "Capture new photo. Double tap to take a new photo and re-analyze it."
-                                }
-                        ) {
-                            Text(text = "Capture new photo", fontSize = 18.sp, color = MaterialTheme.colorScheme.primary)
-                        }
-                    }
                     if (instances.isEmpty()) {
                         item {
                             Text(
@@ -314,9 +405,8 @@ private fun DetectedItemsPopup(
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onItemSelected(text) }
                                 .padding(vertical = 14.dp)
-                                .clearAndSetSemantics { contentDescription = "$text. Double tap to hear again." }
+                                .clearAndSetSemantics { contentDescription = text }
                         ) {
                             Text(text = text, fontSize = 18.sp, color = MaterialTheme.colorScheme.onSurface)
                         }
@@ -327,24 +417,51 @@ private fun DetectedItemsPopup(
     }
 }
 
+/** A small crop of [bitmap] centered on normalized point ([nx],[ny]), sized to [bitmap]'s own
+ *  width / 50 on each side — "1/50 of the screen width" translates directly to this once the photo
+ *  fills the screen edge to edge (see [ContentScale.FillBounds] above): screen-space and bitmap-space
+ *  sizes are then just a constant scale factor apart, so the ratio is the same in either space. */
+private fun cropAroundPoint(bitmap: Bitmap, nx: Float, ny: Float): Bitmap {
+    val boxSize = (bitmap.width / 50f).toInt().coerceAtLeast(2)
+    val cx = (nx * bitmap.width).toInt()
+    val cy = (ny * bitmap.height).toInt()
+    val left = (cx - boxSize / 2).coerceIn(0, bitmap.width - 1)
+    val top = (cy - boxSize / 2).coerceIn(0, bitmap.height - 1)
+    val right = (left + boxSize).coerceIn(left + 1, bitmap.width)
+    val bottom = (top + boxSize).coerceIn(top + 1, bitmap.height)
+    return Bitmap.createBitmap(bitmap, left, top, right - left, bottom - top)
+}
+
+private val OUTLINE_COLOR_NORMAL = Color(0xFF8B0000) // dark red
+private val OUTLINE_COLOR_ACTIVE = Color(0xFFFF4444) // bright red — the object currently under the finger
+
 /**
- * The finger-hover exploration layer. Deliberately built on raw
- * [androidx.compose.ui.input.pointer.pointerInput] rather than a `clickable`/semantics-node-per-
- * region approach, because the region under the finger changes continuously along an irregular
- * mask boundary — there is no fixed set of nodes to pre-declare the way a grid would have.
+ * The finger-hover exploration layer: draws every detected object's outline (bounding box —
+ * precise enough to see, far simpler than tracing the mask's actual contour; hit-testing below
+ * still uses the exact per-pixel mask, unaffected by this simplification) and handles hover/tap.
+ * Deliberately built on raw [androidx.compose.ui.input.pointer.pointerInput] rather than a
+ * `clickable`/semantics-node-per-region approach, because the region under the finger changes
+ * continuously along an irregular mask boundary — there is no fixed set of nodes to pre-declare
+ * the way a grid would have.
  *
  * [PointerEventType.Enter]/[PointerEventType.Move] are what TalkBack's touch-exploration delivers
  * for a moving finger while its "explore by touch" is active — the same channel a real stylus/mouse
  * hover uses, and the same one a plain touch-drag uses when TalkBack is off — so one handler covers
  * a screen-reader user, a sighted user without TalkBack, and a mouse/stylus tester alike.
  *
- * Announces via [AccessibilityUtils.announceToTalkBack], only when the hovered instance actually
- * changes — the same dedupe/interrupt pattern
- * [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider]'s continuous modes already use, kept
- * consistent rather than inventing a second announcement style for this one screen. Every boundary
- * crossing (entering/leaving an object, including moving directly from one object to another) also
- * gets [HoverFeedback]'s short hard vibration and a distinct tone per direction; staying inside the
- * same object gets a soft, throttled vibration on every subsequent move.
+ * Announces via [AccessibilityUtils.announceToTalkBack] only on a genuine change: entering a new
+ * (or different) object always interrupts and speaks the new name; leaving to empty space never
+ * interrupts anything currently being spoken — it's just [ProcessingSoundPlayer.playEmptyAreaTone],
+ * a plain sound effect, not TTS — so a name that was still being read out when the finger happened
+ * to leave keeps playing to completion. Every boundary crossing also gets [HoverFeedback]'s short
+ * hard vibration and a distinct tone per direction; staying inside the same object gets a soft,
+ * throttled vibration on every subsequent move.
+ *
+ * [colorReportEnabled] adds, on top of all of the above and without changing any of it: while the
+ * finger is inside an object, the 2 dominant colors of a small box around the exact finger position
+ * (see [cropAroundPoint]) are announced alongside the object's name, re-announced (interrupting,
+ * same as an object change) whenever that local color reading itself changes — even without
+ * leaving the object, e.g. sliding from a red part of a shirt to a blue part of the same shirt.
  *
  * [onTap] fires for a real quick tap-without-drag (Press followed by Release with little movement
  * in between) — the raw-touch path for a sighted/mouse/stylus user. A TalkBack user reaches the
@@ -354,100 +471,149 @@ private fun DetectedItemsPopup(
  */
 @Composable
 private fun HoverExploreLayer(
-    bitmapSize: Pair<Int, Int>,
+    sourceBitmap: Bitmap,
     instances: List<DetectedInstance>,
     descriptions: Map<DetectedInstance, String>,
+    colorReportEnabled: Boolean,
     onTap: () -> Unit
 ) {
     val context = LocalContext.current
-    var lastAnnounced by remember { mutableStateOf<String?>(null) }
     var currentHitInstance by remember { mutableStateOf<DetectedInstance?>(null) }
+    var lastColorKey by remember { mutableStateOf<String?>(null) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
-    val (bitmapWidth, bitmapHeight) = bitmapSize
+    val bitmapWidth = sourceBitmap.width
+    val bitmapHeight = sourceBitmap.height
 
-    fun announce(text: String) {
-        if (text == lastAnnounced) return
-        lastAnnounced = text
+    fun speak(text: String) {
         VolumeShortcuts.interruptTalkBackSpeech(context)
         AccessibilityUtils.announceToTalkBack(context, text)
     }
 
-    fun updateHit(hit: DetectedInstance?) {
+    fun baseTextFor(hit: DetectedInstance): String = descriptions[hit] ?: hit.label
+
+    /** Color Report's own axis, independent of object detection: the 2 dominant colors of a small
+     *  box around the exact finger point ([cropAroundPoint]), announced whenever that *local*
+     *  reading changes — on top of/alongside whatever the object-hit logic in [updateHit] is doing,
+     *  not instead of it, and not gated on [currentHitInstance] being non-null. Runs over detected
+     *  objects (folding the object's own name in) exactly as much as over plain background (colors
+     *  alone) — the point of this mode is a color reading anywhere on the photo, not just inside
+     *  what the detector happened to recognize. */
+    fun handleColorReport(position: Offset) {
+        val crop = cropAroundPoint(sourceBitmap, position.x, position.y)
+        val colorNames = OfflineColorDetector.namedDominantColors(crop, k = 2)
+        val colorKey = colorNames.joinToString(" and ")
+        if (colorKey.isEmpty() || colorKey == lastColorKey) return
+        lastColorKey = colorKey
+        val hit = currentHitInstance
+        val text = if (hit != null) "${DetectionPhrasing.describeDetection(hit.confidence, hit.label)}, $colorKey" else colorKey
+        speak(text)
+    }
+
+    /** [position] is the finger's normalized (0..1) location, or `null` for a true Exit (the
+     *  finger left the touchable area entirely) — there's no valid position to sample color from
+     *  in that case, so Color Report simply doesn't fire for that one event, unlike every other
+     *  event where a position is always available. */
+    fun updateHit(hit: DetectedInstance?, position: Offset?) {
         if (hit !== currentHitInstance) {
             if (currentHitInstance != null) {
                 HoverFeedback.onBoundaryCrossed(context)
                 HoverFeedback.playExitTone(context)
             }
+            currentHitInstance = hit
             if (hit != null) {
                 HoverFeedback.onBoundaryCrossed(context)
                 HoverFeedback.playEnterTone(context)
+                if (!colorReportEnabled) speak(baseTextFor(hit))
+            } else {
+                // Left to empty space — an ambient cue only, never an interrupting announcement,
+                // so whatever name was still being read out keeps playing to completion.
+                ProcessingSoundPlayer.playEmptyAreaTone(context)
             }
-            currentHitInstance = hit
+            // Forces the very next handleColorReport call below to announce unconditionally, even
+            // if the local color at this new position happens to coincidentally match whatever was
+            // last announced — a boundary crossing is itself worth a fresh announcement.
+            lastColorKey = null
         } else if (hit != null) {
             HoverFeedback.onInsideObject(context)
         }
-        announce(hit?.let { descriptions[it] ?: it.label } ?: "Nothing here.")
+        if (colorReportEnabled && position != null) handleColorReport(position)
     }
+
+    // The mask's exact boundary is expensive-ish to trace (a full pass over each instance's
+    // 160x160 proto grid) but never changes for a given instance, so it's computed once per
+    // detection (keyed on `instances`, which only ever changes when a new photo replaces the old
+    // one) rather than on every recomposition/hover-move.
+    val maskOutlines = remember(instances) { instances.associateWith { it.maskBoundaryEdgesNormalized() } }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
             .onSizeChanged { containerSize = it }
             .semantics {
-                contentDescription = "Photo. Move your finger over it to hear what's there, or double tap for a list of everything found."
+                contentDescription = "Photo. Move your finger over it to hear what's there, or double tap for more options."
                 onClick { onTap(); true }
             }
-            .pointerInput(instances, descriptions, containerSize) {
-                if (containerSize.width == 0 || containerSize.height == 0 || bitmapWidth == 0 || bitmapHeight == 0) return@pointerInput
-
-                // Mirrors ContentScale.Fit's own centering math for the Image above — the photo
-                // is letterboxed inside this full-screen Box exactly the way ContentScale.Fit
-                // renders it, so hit-testing has to undo the same fit before it can ask a
-                // DetectedInstance (which thinks in the *photo's* own normalized coordinates)
-                // whether a point falls inside it.
-                val fitScale = minOf(
-                    containerSize.width.toFloat() / bitmapWidth,
-                    containerSize.height.toFloat() / bitmapHeight
+    ) {
+        Canvas(modifier = Modifier.fillMaxSize()) {
+            for (instance in instances) {
+                val isActive = instance === currentHitInstance
+                val edges = maskOutlines[instance] ?: continue
+                val path = Path()
+                for ((start, end) in edges) {
+                    path.moveTo(start.first * size.width, start.second * size.height)
+                    path.lineTo(end.first * size.width, end.second * size.height)
+                }
+                drawPath(
+                    path = path,
+                    color = if (isActive) OUTLINE_COLOR_ACTIVE else OUTLINE_COLOR_NORMAL,
+                    style = Stroke(width = if (isActive) 6f else 3f)
                 )
-                val renderedWidth = bitmapWidth * fitScale
-                val renderedHeight = bitmapHeight * fitScale
-                val offsetX = (containerSize.width - renderedWidth) / 2f
-                val offsetY = (containerSize.height - renderedHeight) / 2f
+            }
+        }
 
-                var pressPosition: Offset? = null
-                var pressTimeMs = 0L
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .pointerInput(instances, descriptions, colorReportEnabled, containerSize) {
+                    if (containerSize.width == 0 || containerSize.height == 0) return@pointerInput
 
-                awaitPointerEventScope {
-                    while (true) {
-                        val event = awaitPointerEvent()
-                        when (event.type) {
-                            PointerEventType.Press -> {
-                                pressPosition = event.changes.first().position
-                                pressTimeMs = System.currentTimeMillis()
-                            }
-                            PointerEventType.Release -> {
-                                val downPos = pressPosition
-                                if (downPos != null) {
-                                    val releasePos = event.changes.first().position
-                                    val moved = (releasePos - downPos).getDistance()
-                                    val elapsed = System.currentTimeMillis() - pressTimeMs
-                                    if (moved < 24f && elapsed < 400) onTap()
+                    var pressPosition: Offset? = null
+                    var pressTimeMs = 0L
+
+                    awaitPointerEventScope {
+                        while (true) {
+                            val event = awaitPointerEvent()
+                            when (event.type) {
+                                PointerEventType.Press -> {
+                                    pressPosition = event.changes.first().position
+                                    pressTimeMs = System.currentTimeMillis()
                                 }
-                                pressPosition = null
+                                PointerEventType.Release -> {
+                                    val downPos = pressPosition
+                                    if (downPos != null) {
+                                        val releasePos = event.changes.first().position
+                                        val moved = (releasePos - downPos).getDistance()
+                                        val elapsed = System.currentTimeMillis() - pressTimeMs
+                                        if (moved < 24f && elapsed < 400) onTap()
+                                    }
+                                    pressPosition = null
+                                }
+                                PointerEventType.Enter, PointerEventType.Move -> {
+                                    // The image fills this Box exactly (ContentScale.FillBounds) —
+                                    // no letterbox offset/scale to undo, just a direct fraction.
+                                    val rawPosition = event.changes.first().position
+                                    val nx = rawPosition.x / containerSize.width
+                                    val ny = rawPosition.y / containerSize.height
+                                    val outOfBounds = nx < 0f || nx > 1f || ny < 0f || ny > 1f
+                                    val hit = if (outOfBounds) null else instances.firstOrNull { it.containsNormalizedPoint(nx, ny) }
+                                    updateHit(hit, if (outOfBounds) null else Offset(nx, ny))
+                                }
+                                PointerEventType.Exit -> updateHit(null, null)
+                                else -> {}
                             }
-                            PointerEventType.Enter, PointerEventType.Move -> {
-                                val position = event.changes.first().position
-                                val nx = (position.x - offsetX) / renderedWidth
-                                val ny = (position.y - offsetY) / renderedHeight
-                                val hit = if (nx < 0f || nx > 1f || ny < 0f || ny > 1f) null
-                                    else instances.firstOrNull { it.containsNormalizedPoint(nx, ny) }
-                                updateHit(hit)
-                            }
-                            PointerEventType.Exit -> updateHit(null)
-                            else -> {}
                         }
                     }
                 }
-            }
-    )
+        )
+    }
 }
