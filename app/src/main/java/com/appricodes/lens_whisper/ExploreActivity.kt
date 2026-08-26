@@ -26,31 +26,30 @@ import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.runSelectedModelAnalysis
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
-import com.appricodes.lens_whisper.network.XaiVisionEngine
 import com.appricodes.lens_whisper.ui.components.ExploreGridOverlay
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
+import com.appricodes.lens_whisper.utils.SpatialGridParser
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * Spatial "explore by touch" analysis of a single captured frame, launched from Advanced
- * Camera / Video-Image describer's Explore button. Finishes back to the caller once the
+ * Spatial "explore by touch" analysis of a single captured frame, launched from the camera
+ * screen's or the Video/Image describer's Explore button. Finishes back to the caller once the
  * user picks (or backs out of) a grid cell.
  */
 class ExploreActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val prefs = PreferencesManager(this)
-        val apiClient = XaiVisionEngine()
         val imageUri = intent?.getStringExtra("IMAGE_URI")?.let { Uri.parse(it) }
 
         setContent {
             LensWhisperTheme {
-                ExploreScreen(prefs = prefs, apiClient = apiClient, imageUri = imageUri, onClose = { finish() })
+                ExploreScreen(prefs = prefs, imageUri = imageUri, onClose = { finish() })
             }
         }
     }
@@ -59,7 +58,6 @@ class ExploreActivity : ComponentActivity() {
 @Composable
 private fun ExploreScreen(
     prefs: PreferencesManager,
-    apiClient: XaiVisionEngine,
     imageUri: Uri?,
     onClose: () -> Unit
 ) {
@@ -85,7 +83,7 @@ private fun ExploreScreen(
         AccessibilityUtils.announceToTalkBack(context, "Analyzing elements.")
         val beepJob = launch(Dispatchers.IO) {
             while (true) {
-                ProcessingSoundPlayer.playChime()
+                ProcessingSoundPlayer.playWaitingTone(context)
                 delay(1100)
             }
         }
@@ -95,11 +93,6 @@ private fun ExploreScreen(
             prefs = prefs,
             config = PromptConfig("explore", "Explore", "", 1, 0.5),
             offlineImages = listOfNotNull(backgroundBitmap),
-            onlineCall = {
-                apiClient.analyzeFrameSpatialGrid(
-                    context = context, uri = imageUri, positionMs = 0L, gridSize = 6, isStaticImage = true, prefs = prefs
-                )
-            },
             localServerCall = {
                 LocalServerDiscovery.callOrError(context, prefs) {
                     it.analyzeFrameSpatialGrid(
@@ -115,7 +108,7 @@ private fun ExploreScreen(
             AccessibilityUtils.announceToTalkBack(context, "Exploration failed.")
             onClose()
         } else {
-            val parsed = apiClient.parseSpatialJson(jsonResponse, 6)
+            val parsed = SpatialGridParser.parse(jsonResponse, 6)
             if (parsed.isNotEmpty()) {
                 gridMap = parsed
                 AccessibilityUtils.announceToTalkBack(context, "Layout complete. Explore the screen elements.")

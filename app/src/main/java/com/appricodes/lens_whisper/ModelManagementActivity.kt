@@ -58,8 +58,8 @@ import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.service.ModelDownloadService
 import com.appricodes.lens_whisper.service.ModelDownloadState
-import com.appricodes.lens_whisper.ui.components.CreditsDialog
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.components.LocalServerInfoDialog
 import com.appricodes.lens_whisper.ui.components.MemoryWarningDialog
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
@@ -69,7 +69,8 @@ import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
 import com.appricodes.lens_whisper.utils.OfflineImageSize
 import kotlinx.coroutines.launch
 
-/** Lets the user pick MLKit, an on-device catalog model, or the Online Describer. */
+/** Lets the user pick MLKit or an on-device catalog model (and, while
+ *  [LocalServerFeature] is switched on - it is not - the Local Server). */
 class ModelManagementActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -96,7 +97,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val repository = remember { OfflineModelsRepository(context) }
-    // Smallest-first, matching ModelPickerPopup — listed below MLKit, above Online.
+    // Smallest-first, matching ModelPickerPopup - listed below MLKit.
     val offlineModels = remember { repository.loadModels() }
 
     var selectedId by remember { mutableStateOf(prefs.selectedModelId) }
@@ -105,7 +106,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     var memoryWarningModel by remember { mutableStateOf<OfflineModelInfo?>(null) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
     var isClearingAll by remember { mutableStateOf(false) }
-    var showCreditsDialog by remember { mutableStateOf(false) }
     var showLocalServerInfo by remember { mutableStateOf(false) }
     var offlineImageSize by remember { mutableStateOf(prefs.offlineImageSize) }
     var imageSizeDropdownExpanded by remember { mutableStateOf(false) }
@@ -128,22 +128,12 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         prefs.selectedModelId = "mlkit"
         selectedId = "mlkit"
         OfflineInferenceEngine.release()
-        AccessibilityUtils.announceToTalkBack(context, "MLKit selected.")
+        AccessibilityUtils.announceToTalkBack(context, "Basic Models selected.")
     }
 
-    fun selectOnline() {
-        prefs.selectedModelId = "online"
-        selectedId = "online"
-        OfflineInferenceEngine.release()
-        AccessibilityUtils.announceToTalkBack(context, "Online Describer selected.")
-    }
-
-    // Selection itself is never gated behind the dialog — it always happens immediately; the
-    // dialog is a one-time companion popup shown alongside the first selection, not a gate on it.
-    // Reopenable afterward any time via MoreMenu's "About Local Server" item.
     fun selectLocalServer() {
-        prefs.selectedModelId = "local_server"
-        selectedId = "local_server"
+        prefs.selectedModelId = LocalServerFeature.MODEL_ID
+        selectedId = LocalServerFeature.MODEL_ID
         OfflineInferenceEngine.release()
         AccessibilityUtils.announceToTalkBack(context, "Local Server selected.")
         if (!prefs.hasSeenLocalServerIntro) {
@@ -203,7 +193,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         }
 
         // Order: MLKit (always available, no download) -> on-device catalog models, smallest to
-        // largest -> Online last (needs login/credits, separated by a divider below).
+        // largest.
         MlkitCard(isSelected = selectedId == "mlkit", onSelect = { selectMlkit() })
 
         // isDownloaded hits the filesystem (File.exists()/.length()), so it's memoized on
@@ -236,26 +226,27 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             )
         }
 
-        HorizontalDivider()
-
-        val eligibleForOnline = prefs.freeCredits > 0 || prefs.purchasedCredits > 0
-        OnlineDescriberCard(
-            isSelected = selectedId == "online",
-            eligible = eligibleForOnline,
-            onSelect = { selectOnline() },
-            onPurchase = { showCreditsDialog = true }
-        )
-
-        LocalServerCard(
-            isSelected = selectedId == "local_server",
-            onSelect = { selectLocalServer() }
-        )
+        if (LocalServerFeature.ENABLED) {
+            HorizontalDivider()
+            LocalServerCard(
+                isSelected = selectedId == LocalServerFeature.MODEL_ID,
+                onSelect = { selectLocalServer() }
+            )
+        }
 
         HorizontalDivider()
         Text(
             text = "The model selected here is used by the Camera screen and Video/Image Describer's " +
-                "analysis and Explore. On-device models take a moment to load the first time after " +
-                "being selected, and use more memory than the Online Describer or MLKit.",
+                "analysis and Explore. Everything runs on this device - no photo is ever uploaded. " +
+                "On-device models take a moment to load the first time after being selected, and use " +
+                "more memory than Basic Models.",
+            fontSize = 13.sp,
+            color = Color.Gray
+        )
+        Text(
+            text = "Accuracy differs a lot between these models, and none of them is reliable. Read " +
+                "each description before choosing, and never rely on any of them for medicines, money, " +
+                "documents, or moving around safely.",
             fontSize = 13.sp,
             color = Color.Gray
         )
@@ -356,7 +347,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                     "This deletes every downloaded on-device AI model (freeing ${formatSize(totalFreed)}) and any " +
                         "downloaded MLKit translation language pack — including ones downloaded automatically for " +
                         "the \"Translate Offline Results\" setting. You'll need to download them again to use them. " +
-                        "This doesn't affect MLKit's built-in object/text/color detection, which needs no download."
+                        "This doesn't affect Basic Models' built-in object/text/color detection, which needs no download."
                 )
             },
             confirmButton = {
@@ -379,10 +370,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             },
             dismissButton = { TextButton(onClick = { showClearAllConfirm = false }) { Text("Cancel") } }
         )
-    }
-
-    if (showCreditsDialog) {
-        CreditsDialog(prefs = prefs, onDismiss = { showCreditsDialog = false })
     }
 
     if (showLocalServerInfo) {
@@ -422,40 +409,11 @@ private fun Modifier.mergedInfoBlock(): Modifier = this.semantics(mergeDescendan
 private fun MlkitCard(isSelected: Boolean, onSelect: () -> Unit) {
     ModelCard {
         Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(text = "MLKit", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
-            Text(text = "Fully offline object, text, and color detection. Always available, nothing to download.", fontSize = 15.sp, color = Color.Gray)
+            Text(text = "Basic Models", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
+            Text(text = "Detects and names objects and their colors, reads text, explores a photo by touch, and measures light level. Always available, nothing to download.", fontSize = 15.sp, color = Color.Gray)
         }
         Row(modifier = Modifier.fillMaxWidth()) {
-            if (isSelected) SelectedLabel("MLKit") else Button(onClick = onSelect) { Text("Select") }
-        }
-    }
-}
-
-@Composable
-private fun OnlineDescriberCard(
-    isSelected: Boolean,
-    eligible: Boolean,
-    onSelect: () -> Unit,
-    onPurchase: () -> Unit
-) {
-    ModelCard {
-        Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(text = "Online Describer", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
-            Text(text = "Sends photos to our server for AI analysis.", fontSize = 15.sp, color = Color.Gray)
-            if (!eligible) {
-                Text(
-                    text = "You need credits — watch a short ad to earn some.",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.error
-                )
-            }
-        }
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-            if (eligible) {
-                if (isSelected) SelectedLabel("Online Describer") else Button(onClick = onSelect) { Text("Select") }
-            } else {
-                OutlinedButton(onClick = onPurchase) { Text("Get Credits") }
-            }
+            if (isSelected) SelectedLabel("Basic Models") else Button(onClick = onSelect) { Text("Select") }
         }
     }
 }

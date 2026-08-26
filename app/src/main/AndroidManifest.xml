@@ -8,14 +8,16 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
-    <uses-permission android:name="com.android.vending.BILLING" />
 
     <!-- LocalServerDiscovery: reading the phone's own LAN IP/subnet to probe for a Local Server
-         (see network/LocalServerDiscovery.kt). Both are normal-level, no runtime prompt. -->
+         (see network/LocalServerDiscovery.kt). Both are normal-level, no runtime prompt. Kept
+         while that feature is switched off (see network/LocalServerFeature.kt) so re-enabling it
+         is a one-line change; drop both if it is ever removed for good. -->
     <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
 
     <uses-permission android:name="android.permission.CAMERA" />
+    <uses-permission android:name="android.permission.VIBRATE" />
     <uses-feature android:name="android.hardware.camera" android:required="false" />
     <uses-feature android:name="android.hardware.camera.front" android:required="false" />
 
@@ -35,12 +37,22 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
-        <!-- Google Mobile Ads (rewarded "watch an ad for credits"). This is the real AdMob App ID
-             for this app, from the developer's own AdMob console — set 2026-08-24, replacing the
-             placeholder Google test App ID this used to hold. -->
+        <!-- Google Mobile Ads. The real AdMob App ID from the developer's own console. Declaring
+             it here does not start the SDK — ads/AdConsentManager.kt is the only thing that calls
+             MobileAds.initialize, and only after consent. -->
         <meta-data
             android:name="com.google.android.gms.ads.APPLICATION_ID"
             android:value="ca-app-pub-9386480260190622~9575982937" />
+
+        <!-- Stops Google's app-measurement from starting itself at process launch. The Ads SDK
+             ships a MobileAdsInitProvider that runs before any of our code does, so "we simply
+             don't call MobileAds.initialize until consent" is not on its own enough to guarantee
+             nothing touches an identifier first. This is Google's documented flag for deferring
+             that part until initialize() is actually called - which, here, only ever happens after
+             the user has consented (see ads/AdConsentManager.kt). -->
+        <meta-data
+            android:name="com.google.android.gms.ads.DELAY_APP_MEASUREMENT_INIT"
+            android:value="true" />
 
         <activity
             android:name=".CameraActivity"
@@ -88,15 +100,21 @@
             android:theme="@style/Theme.LensWhisper" />
 
         <activity
-            android:name=".LoginActivity"
+            android:name=".SegmentationExploreActivity"
             android:exported="false"
-            android:label="Login"
+            android:label="Explore"
             android:theme="@style/Theme.LensWhisper" />
 
         <activity
             android:name=".SettingsActivity"
             android:exported="false"
             android:label="Settings"
+            android:theme="@style/Theme.LensWhisper" />
+
+        <activity
+            android:name=".LegalActivity"
+            android:exported="false"
+            android:label="Legal Information"
             android:theme="@style/Theme.LensWhisper" />
 
         <activity

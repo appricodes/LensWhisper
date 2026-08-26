@@ -1,51 +1,10 @@
 ﻿package com.appricodes.lens_whisper.data
 
 import android.content.Context
-import android.content.SharedPreferences
-import android.util.Log
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKey
-import java.io.File
+import com.appricodes.lens_whisper.network.LocalServerFeature
 
 class PreferencesManager(val context: Context) {
 	private val standardPrefs = context.getSharedPreferences("LensWhisperPrefs", Context.MODE_PRIVATE)
-
-	private val securePrefs: SharedPreferences by lazy {
-		try {
-			createEncryptedPrefs(context)
-		} catch (e: Exception) {
-			Log.e("PreferencesManager", "Encrypted prefs corrupted. Wiping and recreating.", e)
-			if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-				context.deleteSharedPreferences("SecureLensWhisperPrefs")
-			} else {
-				context.getSharedPreferences("SecureLensWhisperPrefs", Context.MODE_PRIVATE).edit().clear().commit()
-				val dir = File(context.applicationInfo.dataDir, "shared_prefs")
-				File(dir, "SecureLensWhisperPrefs.xml").delete()
-			}
-			createEncryptedPrefs(context)
-		}
-	}
-
-	private fun createEncryptedPrefs(ctx: Context): SharedPreferences {
-		val masterKey = MasterKey.Builder(ctx)
-			.setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
-			.build()
-		return EncryptedSharedPreferences.create(
-			ctx,
-			"SecureLensWhisperPrefs",
-			masterKey,
-			EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-			EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-		)
-	}
-
-	var userEmail: String?
-		get() = securePrefs.getString("user_email", null)
-		set(value) = securePrefs.edit().putString("user_email", value).apply()
-
-	var googleId: String?
-		get() = securePrefs.getString("google_id", null)
-		set(value) = securePrefs.edit().putString("google_id", value).apply()
 
 	var selectedLanguage: String
 		get() = standardPrefs.getString("selected_language", "English") ?: "English"
@@ -59,8 +18,17 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getString("ocr_language", "Latin (English/EU)") ?: "Latin (English/EU)"
 		set(value) = standardPrefs.edit().putString("ocr_language", value).apply()
 
+	/** The narration persona, e.g. "Neutral" or "Technical" - see assets/settings.json.
+	 *
+	 *  Two personas ("explicit", "explicit and naughty") were removed: they instructed the model to
+	 *  describe whatever is in front of the camera - including bystanders, and including people who
+	 *  may be minors - in sexualised terms. [RETIRED_MODES] maps a stored one back to Neutral so a
+	 *  device that had one selected before the update doesn't keep using it. */
 	var selectedMode: String
-		get() = standardPrefs.getString("selected_mode", "Neutral") ?: "Neutral"
+		get() {
+			val stored = standardPrefs.getString("selected_mode", "Neutral") ?: "Neutral"
+			return if (stored.lowercase() in RETIRED_MODES) "Neutral" else stored
+		}
 		set(value) = standardPrefs.edit().putString("selected_mode", value).apply()
 
 	// NEW: Analysis Quality Preference
@@ -72,13 +40,75 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("show_results_in_dialog", false)
 		set(value) = standardPrefs.edit().putBoolean("show_results_in_dialog", value).apply()
 
+	/** Whether the first-run AI-limitations notice has been accepted. The app is unusable until it
+	 *  is — see [com.appricodes.lens_whisper.ui.components.DisclaimerDialog]. Deliberately has no
+	 *  setter that clears it: re-showing the gate on every launch would be nagging, and the text
+	 *  stays readable at any time from the main screen and from Legal Information. */
+	var hasAcceptedDisclaimer: Boolean
+		get() = standardPrefs.getBoolean("has_accepted_disclaimer", false)
+		set(value) = standardPrefs.edit().putBoolean("has_accepted_disclaimer", value).apply()
+
+	/** Whether the flash should fire when a photo is taken. This is an *intent*, not live torch
+	 *  state: the camera is only bound for the moment of capture (see
+	 *  [com.appricodes.lens_whisper.ui.components.CameraController]), so there is no continuously
+	 *  burning torch for this to reflect. */
+	var flashEnabled: Boolean
+		get() = standardPrefs.getBoolean("flash_enabled", false)
+		set(value) = standardPrefs.edit().putBoolean("flash_enabled", value).apply()
+
 	var volumeShortcutsEnabled: Boolean
 		get() = standardPrefs.getBoolean("volume_shortcuts_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("volume_shortcuts_enabled", value).apply()
 
-	/** "mlkit", "online", "local_server", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]. */
+	/** Gates every synthesized UI sound effect this app plays — the shutter click, the "waiting for
+	 *  the model" tone, and the Explore hover enter/exit tones (see
+	 *  [com.appricodes.lens_whisper.utils.ProcessingSoundPlayer] and
+	 *  [com.appricodes.lens_whisper.utils.HoverFeedback]). Independent of [vibrationEnabled] — a
+	 *  user who wants haptics but not audio (or vice versa) can have exactly that. Default on. */
+	var soundEffectsEnabled: Boolean
+		get() = standardPrefs.getBoolean("sound_effects_enabled", true)
+		set(value) = standardPrefs.edit().putBoolean("sound_effects_enabled", value).apply()
+
+	/** Gates every haptic pulse this app triggers — currently only the Explore hover feedback (see
+	 *  [com.appricodes.lens_whisper.utils.HoverFeedback]): a short hard pulse crossing into or out
+	 *  of an object's mask, a soft continuous pulse while inside one. Default on. */
+	var vibrationEnabled: Boolean
+		get() = standardPrefs.getBoolean("vibration_enabled", true)
+		set(value) = standardPrefs.edit().putBoolean("vibration_enabled", value).apply()
+
+	/** Which of the four bundled YOLOv8-seg sizes powers "Object Detection", "Object and Color
+	 *  Detection", and the two Explore screens — see
+	 *  [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector.ALL_SIZES] for the valid
+	 *  values ("n"/"s"/"m"/"l") and what each costs in speed vs. accuracy. Set from Settings. */
+	var segmentationModelSize: String
+		get() = standardPrefs.getString("segmentation_model_size", "n") ?: "n"
+		set(value) = standardPrefs.edit().putString("segmentation_model_size", value).apply()
+
+	/** "int8" (the default — genuinely faster on CPU, and the one that held up on real devices) or
+	 *  "float16" (more numeric detail, larger file, from a different converter — see
+	 *  [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s doc for why, and for the
+	 *  w8a16 precision that used to occupy this slot before on-device testing found it more than 4x
+	 *  slower than int8), for the same model [segmentationModelSize] names. Both are bundled for
+	 *  every size so they can be compared against each other, not because either is expected to be
+	 *  the obviously better everyday choice — that's for the user to judge from actual results on
+	 *  their own device. */
+	var segmentationModelPrecision: String
+		get() {
+			val stored = standardPrefs.getString("segmentation_model_precision", "int8") ?: "int8"
+			// "w8a16" was a real, bundled precision briefly — a device that picked it before it was
+			// removed (no longer a bundled asset, see the class doc above) would otherwise crash the
+			// very next time it tried to load a model, so it's treated the same as never having been set.
+			return if (stored == "w8a16") "int8" else stored
+		}
+		set(value) = standardPrefs.edit().putString("segmentation_model_precision", value).apply()
+
+	/** "mlkit", "local_server", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id].
+	 *  (The former "online" value belonged to a hosted backend that no longer exists.)
+	 *
+	 *  Read through [LocalServerFeature.sanitizeSelectedModelId] so a "local_server" selection
+	 *  stored by an older build can't keep selecting a model the user can no longer see. */
 	var selectedModelId: String
-		get() = standardPrefs.getString("selected_model_id", "mlkit") ?: "mlkit"
+		get() = LocalServerFeature.sanitizeSelectedModelId(standardPrefs.getString("selected_model_id", "mlkit") ?: "mlkit")
 		set(value) = standardPrefs.edit().putString("selected_model_id", value).apply()
 
 	/** Base URL (e.g. "http://192.168.1.42:8765") of the user's LensWhisper Desktop companion app
@@ -94,10 +124,11 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("has_seen_local_server_intro", false)
 		set(value) = standardPrefs.edit().putBoolean("has_seen_local_server_intro", value).apply()
 
-	/** SHA-256 token derived from the Local Server's optional password (see
-	 *  [com.appricodes.lens_whisper.network.LocalServerAuth.tokenFor]) — sent as an `Authorization:
-	 *  Bearer` header, never the password itself, which is never stored anywhere. Empty when no
-	 *  password has been entered (matching a server with no password protection set). */
+	/** SHA-256 token derived from the Local Server's mandatory password (see
+	 *  [com.appricodes.lens_whisper.network.LocalServerAuth.tokenFor]). The token *is* the AES-256
+	 *  key every request/response body is encrypted with — it is never transmitted, and neither is
+	 *  the password, which is never stored anywhere. Empty until a password has been entered, which
+	 *  blocks Local Server requests outright. */
 	var localServerPasswordToken: String
 		get() = standardPrefs.getString("local_server_password_token", "") ?: ""
 		set(value) = standardPrefs.edit().putString("local_server_password_token", value).apply()
@@ -106,18 +137,6 @@ class PreferencesManager(val context: Context) {
 	var offlineImageSize: String
 		get() = standardPrefs.getString("offline_image_size", "Large") ?: "Large"
 		set(value) = standardPrefs.edit().putString("offline_image_size", value).apply()
-
-	var isLoggedIn: Boolean
-		get() = standardPrefs.getBoolean("is_logged_in", false)
-		set(value) = standardPrefs.edit().putBoolean("is_logged_in", value).apply()
-
-	var freeCredits: Int
-		get() = standardPrefs.getInt("free_credits", 0)
-		set(value) = standardPrefs.edit().putInt("free_credits", value).apply()
-
-	var purchasedCredits: Int
-		get() = standardPrefs.getInt("purchased_credits", 0)
-		set(value) = standardPrefs.edit().putInt("purchased_credits", value).apply()
 
 	var urlHistory: String
 		get() = standardPrefs.getString("url_history", "") ?: ""
@@ -153,19 +172,6 @@ class PreferencesManager(val context: Context) {
 		suppressedMemoryWarningModelIds = ids.joinToString("|")
 	}
 
-	/** Random per-install identifier, generated once on first access and persisted forever after
-	 *  (an app reinstall/data-clear gets a new one). Never derived from any hardware/Play Services
-	 *  identifier and never sent to Google's ad SDK — only this app's own backend sees it, to tie
-	 *  anonymous ad-earned credits (see [com.appricodes.lens_whisper.ads.AdCreditsSession]) to a
-	 *  `install_credits` row server-side. See backend/get_credits.php. */
-	val installId: String
-		get() {
-			standardPrefs.getString("install_id", null)?.let { return it }
-			val generated = java.util.UUID.randomUUID().toString()
-			standardPrefs.edit().putString("install_id", generated).apply()
-			return generated
-		}
-
 	/** Which delegate ([com.appricodes.lens_whisper.inference.OfflineInferenceEngine] reads this as
 	 *  "CPU" or absent-meaning-GPU) an on-device model's *vision* encoder should use on *this*
 	 *  device — auto-detected, not user-facing. GPU is tried first for every model on every device;
@@ -179,6 +185,10 @@ class PreferencesManager(val context: Context) {
 
 	fun setVisionBackendOverride(modelId: String, backend: String) {
 		standardPrefs.edit().putString("vision_backend_override_$modelId", backend).apply()
+	}
+
+	private companion object {
+		val RETIRED_MODES = setOf("explicit", "explicit and naughty")
 	}
 
 	fun getUrlHistoryList(): List<String> = urlHistory.split("|").filter { it.isNotEmpty() }

@@ -31,13 +31,22 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.appricodes.lens_whisper.ModelManagementActivity
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 
 /**
  * Top bar shared by [com.appricodes.lens_whisper.CameraActivity] and the Video/Image describer:
- * a model-name button (opens [ModelPickerPopup] for a quick switch), the remaining-credits badge
- * (opens [CreditsDialog]), and a More button (opens [MoreMenu]) — all in one row, replacing the
- * old plain "tap name to open Manage Models" behavior.
+ * a model-name button (opens [ModelPickerPopup] for a quick switch), a Support button (opens
+ * [SupportDialog]) and a More button (opens [MoreMenu]).
+ *
+ * The Support button sits where the remaining-credits badge used to. Credits are gone - every
+ * model runs on-device and nothing is metered - so what occupied that slot is now the one purely
+ * voluntary thing left: watching an advertisement to support the developer, which unlocks nothing.
+ *
+ * [showModelSelector]/[showMoreButton] let [com.appricodes.lens_whisper.SettingsActivity] use this
+ * bar for the Support button alone — switching models or reaching the More menu (which itself
+ * leads to Settings) from inside Settings has no obvious use, and Settings is one of the More
+ * menu's own destinations.
  */
 @Composable
 fun ModelTopBar(
@@ -48,6 +57,8 @@ fun ModelTopBar(
     showMoreMenuOpenCameraOption: Boolean = false,
     showMoreMenuVolumeKeyToggle: Boolean = false,
     showMlkitOption: Boolean = true,
+    showModelSelector: Boolean = true,
+    showMoreButton: Boolean = true,
     modifier: Modifier = Modifier,
     backgroundColor: Color = Color.Black
 ) {
@@ -56,26 +67,25 @@ fun ModelTopBar(
     val offlineModelsRepository = remember { OfflineModelsRepository(context) }
 
     var selectedModelName by remember { mutableStateOf("") }
-    var totalCredits by remember { mutableStateOf(0) }
-    var showCreditsDialog by remember { mutableStateOf(false) }
+    var showSupportDialog by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
 
     fun refresh() {
         selectedModelName = when (selectedModelId) {
-            "mlkit" -> "MLKit (Offline)"
-            "online" -> "Online Describer"
-            "local_server" -> "Local Server"
+            "mlkit" -> "Basic Models (Offline)"
+            LocalServerFeature.MODEL_ID -> "Local Server"
             else -> offlineModelsRepository.loadModels().find { it.id == selectedModelId }?.displayName ?: "No Model Selected"
         }
-        totalCredits = prefs.freeCredits + prefs.purchasedCredits
     }
 
-    LaunchedEffect(selectedModelId) { refresh() }
-    DisposableEffect(lifecycleOwner) {
-        val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) refresh() }
-        lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    if (showModelSelector) {
+        LaunchedEffect(selectedModelId) { refresh() }
+        DisposableEffect(lifecycleOwner) {
+            val observer = LifecycleEventObserver { _, event -> if (event == Lifecycle.Event.ON_RESUME) refresh() }
+            lifecycleOwner.lifecycle.addObserver(observer)
+            onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        }
     }
 
     Row(
@@ -86,49 +96,53 @@ fun ModelTopBar(
         horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Text(
-            text = selectedModelName,
-            color = Color.White,
-            fontSize = 16.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier
-                .weight(1f)
-                .clickable { showModelPicker = true }
-                .clearAndSetSemantics { contentDescription = "Selected model: $selectedModelName. Double tap to change." }
-        )
-        ModelPickerPopup(
-            expanded = showModelPicker,
-            onDismiss = { showModelPicker = false },
-            prefs = prefs,
-            controller = controller,
-            selectedModelId = selectedModelId,
-            onModelSelected = { onModelSelected(it); refresh() },
-            onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) },
-            onNeedCredits = { showCreditsDialog = true },
-            showMlkitOption = showMlkitOption
-        )
-
-        Button(onClick = { showCreditsDialog = true }) { Text("$totalCredits Credits") }
-
-        Button(onClick = { showMoreMenu = true }) {
-            Text("More")
+        if (showModelSelector) {
+            Text(
+                text = selectedModelName,
+                color = Color.White,
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                modifier = Modifier
+                    .weight(1f)
+                    .clickable { showModelPicker = true }
+                    .clearAndSetSemantics { contentDescription = "Selected model: $selectedModelName. Double tap to change." }
+            )
+            ModelPickerPopup(
+                expanded = showModelPicker,
+                onDismiss = { showModelPicker = false },
+                prefs = prefs,
+                controller = controller,
+                selectedModelId = selectedModelId,
+                onModelSelected = { onModelSelected(it); refresh() },
+                onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) },
+                showMlkitOption = showMlkitOption
+            )
         }
-        MoreMenu(
-            expanded = showMoreMenu,
-            onDismiss = { showMoreMenu = false },
-            prefs = prefs,
-            showOpenCameraOption = showMoreMenuOpenCameraOption,
-            selectedModelId = selectedModelId,
-            onModelDeleted = { onModelSelected("mlkit"); refresh() },
-            showVolumeKeyToggle = showMoreMenuVolumeKeyToggle
-        )
+
+        Button(
+            onClick = { showSupportDialog = true },
+            modifier = Modifier.clearAndSetSemantics {
+                contentDescription = "Support development. Optionally watch a video advertisement. Nothing in the app is locked."
+            }
+        ) { Text("Support") }
+
+        if (showMoreButton) {
+            Button(onClick = { showMoreMenu = true }) {
+                Text("More")
+            }
+            MoreMenu(
+                expanded = showMoreMenu,
+                onDismiss = { showMoreMenu = false },
+                prefs = prefs,
+                showOpenCameraOption = showMoreMenuOpenCameraOption,
+                selectedModelId = selectedModelId,
+                onModelDeleted = { onModelSelected("mlkit"); refresh() },
+                showVolumeKeyToggle = showMoreMenuVolumeKeyToggle
+            )
+        }
     }
 
-    if (showCreditsDialog) {
-        CreditsDialog(
-            prefs = prefs,
-            onDismiss = { showCreditsDialog = false },
-            onCreditsChanged = { refresh() }
-        )
+    if (showSupportDialog) {
+        SupportDialog(onDismiss = { showSupportDialog = false })
     }
 }

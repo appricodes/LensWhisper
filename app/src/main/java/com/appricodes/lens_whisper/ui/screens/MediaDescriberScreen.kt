@@ -38,12 +38,13 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.domain.PromptConfig
+import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
-import com.appricodes.lens_whisper.network.XaiVisionEngine
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.ActionButtonGrid
-import com.appricodes.lens_whisper.ui.components.CreditsDialog
+import com.appricodes.lens_whisper.ui.components.DisclaimerDialog
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.components.MediaPreviewArea
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
@@ -73,7 +74,6 @@ import java.io.FileOutputStream
 fun MediaDescriberScreen(
     prefs: PreferencesManager,
     settings: AppSettings,
-    apiClient: XaiVisionEngine,
     initialFileUri: Uri?,
     exoPlayer: ExoPlayer,
     onVoiceTriggerReady: (() -> Unit) -> Unit,
@@ -96,6 +96,8 @@ fun MediaDescriberScreen(
         ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
     }
     fun gate(action: () -> Unit) = controller.gateForSelectedModel(selectedModelId, selectedOfflineModel, action)
+
+    var disclaimerAccepted by remember { mutableStateOf(prefs.hasAcceptedDisclaimer) }
 
     var currentFileUri by remember { mutableStateOf(initialFileUri) }
     var isImageMode by remember { mutableStateOf(false) }
@@ -198,19 +200,13 @@ fun MediaDescriberScreen(
             null
         } else {
             AccessibilityUtils.announceToTalkBack(context, "Analyzing ${config.title}")
-            controller.startProcessingChime()
             val currentPlaybackPosition = exoPlayer.currentPosition
             val offlineImages = if (isImageMode) listOfNotNull(runtimeLoadedImageBitmap) else extractVideoFrameBitmaps(uri, currentPlaybackPosition, config)
+            // File mode has no shutter — nothing was physically captured — so the waiting tone
+            // starts right after the frame/image is actually in hand instead.
+            controller.startProcessingChime()
             CapturedBundle(
                 offlineImages,
-                onlineCall = {
-                    if (isImageMode) apiClient.analyzeStaticImageFile(context, uri, config, prefs)
-                    else apiClient.analyzeVideoFrame(context, uri, currentPlaybackPosition, config, prefs)
-                },
-                onlineCallStreaming = {
-                    if (isImageMode) apiClient.analyzeStaticImageFileStreaming(context, uri, config, prefs)
-                    else apiClient.analyzeVideoFrameStreaming(context, uri, currentPlaybackPosition, config, prefs)
-                },
                 localServerCall = {
                     LocalServerDiscovery.callOrError(context, prefs) {
                         if (isImageMode) it.analyzeStaticImageFile(context, uri, config, prefs)
@@ -334,13 +330,35 @@ fun MediaDescriberScreen(
     }
 
     controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })
-    var showCreditsDialog by remember { mutableStateOf(false) }
-    controller.OnlineGateDialog(onGetCredits = { showCreditsDialog = true })
-    if (showCreditsDialog) {
-        CreditsDialog(prefs = prefs, onDismiss = { showCreditsDialog = false })
-    }
     controller.ObserveDownloads()
+
+    // This screen is a second, independent entry point into the app: Android routes a shared or
+    // opened image/video straight here (see the VIEW intent filters in AndroidManifest), without
+    // the camera screen ever running. The first-run notice therefore has to be gated here too,
+    // otherwise sharing a photo into LensWhisper on a fresh install skips it entirely.
+    if (!disclaimerAccepted) {
+        DisclaimerDialog(
+            onAccept = {
+                prefs.hasAcceptedDisclaimer = true
+                disclaimerAccepted = true
+            },
+            onDecline = { (context as? android.app.Activity)?.finishAndRemoveTask() }
+        )
+    }
     ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels)
+
+    // Proactively warms the selected on-device model as soon as this screen opens (or the
+    // selection changes), rather than only lazily loading it the first time a button is pressed —
+    // ensureEngine() is a quick no-op if it's already loaded, so this is cheap to re-run.
+    // ModelLoadingObserver above turns this into both the visual dialog and the spoken
+    // announcement. Not applicable to "mlkit" (this screen doesn't even offer it as an option —
+    // see ModelPickerPopup's doc — but selectedModelId is a shared preference, so it's still worth
+    // guarding here) or the Local Server (nothing here to preload — it runs on a separate machine).
+    LaunchedEffect(selectedModelId) {
+        if (selectedModelId != "mlkit" && selectedModelId != LocalServerFeature.MODEL_ID) {
+            offlineModels.find { it.id == selectedModelId }?.let { OfflineInferenceEngine.preload(context, it) }
+        }
+    }
 }
 
 /**

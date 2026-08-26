@@ -70,20 +70,20 @@ object LocalServerDiscovery {
         }
     }
 
-    /** Resolves the Local Server's address and runs [action] against a matching [XaiVisionEngine],
+    /** Resolves the Local Server's address and runs [action] against a matching [LocalServerEngine],
      * or returns the app's standard "ERROR: ..." string if none could be found — same convention
      * every other non-streaming analysis path uses, so [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController]
      * doesn't need a special case for this one. */
-    suspend fun callOrError(context: Context, prefs: PreferencesManager, action: suspend (XaiVisionEngine) -> String): String {
+    suspend fun callOrError(context: Context, prefs: PreferencesManager, action: suspend (LocalServerEngine) -> String): String {
         val baseUrl = resolveBaseUrl(context, prefs) ?: return "ERROR: $NOT_FOUND_MESSAGE"
-        return action(XaiVisionEngine(baseUrl))
+        return action(LocalServerEngine(baseUrl))
     }
 
     /** Streaming counterpart — throws instead of returning an "ERROR:" string, matching every
-     * other streaming path's convention (see [XaiVisionEngine]'s streaming docs). */
-    fun callOrErrorStreaming(context: Context, prefs: PreferencesManager, action: (XaiVisionEngine) -> Flow<String>): Flow<String> = flow {
+     * other streaming path's convention (see [LocalServerEngine]'s streaming docs). */
+    fun callOrErrorStreaming(context: Context, prefs: PreferencesManager, action: (LocalServerEngine) -> Flow<String>): Flow<String> = flow {
         val baseUrl = resolveBaseUrl(context, prefs) ?: throw IllegalStateException(NOT_FOUND_MESSAGE)
-        emitAll(action(XaiVisionEngine(baseUrl)))
+        emitAll(action(LocalServerEngine(baseUrl)))
     }
 
     private fun baseUrlFor(ip: String) = "http://$ip:$PORT"

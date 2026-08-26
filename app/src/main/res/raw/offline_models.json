@@ -4,7 +4,7 @@
       "id": "gemma4_multimodal_2b",
       "displayName": "Gemma4 2000M",
       "family": "Gemma 4",
-      "description": "2B-parameter (E2B) multimodal variant. Automatically uses a build tuned for your device's chipset when one is available.",
+      "description": "Most accurate model in this app. Best choice for reading text, understanding a cluttered scene, and answering your own questions. Largest download and needs a capable phone; on some chipsets it runs on the NPU and is fast, on others it is slow. Supports Explore. Still makes mistakes - check anything that matters.",
       "supportsExplore": true,
       "variants": [
         {
@@ -55,7 +55,7 @@
       "id": "lfm2_5_vl_450m",
       "displayName": "LFM2.5-VL 450M",
       "family": "LFM2.5-VL",
-      "description": "Light, quick model — good for quick captions, simple questions, and reading large text. Less reliable on object counting or subjects near the top of the frame; only takes one image per prompt (no Story mode, which the on-device catalog doesn't offer anyway).",
+      "description": "Fastest and smallest, and the least accurate. Fine for a quick sense of what is in front of you and for large, clear text. Unreliable at counting things, at objects near the top of the frame, and at small or low-contrast text. Choose this for speed on an older phone, not when the answer matters.",
       "supportsExplore": false,
       "variants": [
         {
@@ -71,7 +71,7 @@
       "id": "smolvlm2_500m",
       "displayName": "SmolVLM2 500M",
       "family": "SmolVLM2",
-      "description": "Smallest, lightest model in the catalog — good for quick captions and simple questions. Keep questions brief; can be repetitive on longer requests. Only takes one image per prompt (no Story mode, which the on-device catalog doesn't offer anyway).",
+      "description": "Very small and quick, and among the least accurate. Handles short questions and simple captions; gets repetitive and drifts off-topic on longer requests. A reasonable fallback if larger models are too slow on your phone, but expect frequent mistakes.",
       "supportsExplore": false,
       "variants": [
         {
@@ -87,7 +87,7 @@
       "id": "smolvlm2_2200m",
       "displayName": "SmolVLM2 2200M",
       "family": "SmolVLM2",
-      "description": "Larger SmolVLM2 variant — better quality than the 500M version, at a bigger download size and noticeably slower generation (several seconds per word on a mid-range chipset, tested 2026-08-24). Only takes one image per prompt (no Story mode, which the on-device catalog doesn't offer anyway).",
+      "description": "Middle of the range: clearly more accurate than the 500M version, clearly behind Gemma4. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
       "supportsExplore": false,
       "variants": [
         {
@@ -103,7 +103,7 @@
       "id": "qwen_vl_2b",
       "displayName": "Qwen-VL 2000M",
       "family": "Qwen-VL",
-      "description": "2B-parameter Qwen vision-language model.",
+      "description": "Second most accurate after Gemma4, and often the best of the catalogue at reading text and signs. Moderate download, reasonable speed on a mid-range phone. Supports Explore. Still misreads digits and small print - never rely on it for a dosage, a price, or a date.",
       "supportsExplore": true,
       "variants": [
         {

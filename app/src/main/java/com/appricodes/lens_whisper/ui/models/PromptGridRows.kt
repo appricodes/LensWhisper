@@ -4,15 +4,15 @@ import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.ui.components.GridCell
 
 /**
- * The 3x4 prompt grid for [OnlineButtonProvider] — the on-device catalog now has its own,
+ * The 3x4 prompt grid for [LocalServerButtonProvider] - the on-device catalog has its own,
  * substantially different layout (see [OfflineVlmButtonProvider]: no Explore/Story, 4
- * voice-recordable custom slots instead of 2 static ones), so this is Online-only despite the
- * generic name. Kept as `promptGridRows` since only one caller remains and renaming buys nothing.
+ * voice-recordable custom slots instead of 2 static ones), so this is Local-Server-only despite
+ * the generic name.
  *
- * The two custom-prompt cells here are still populated only via the general (non-slot-targeted)
- * voice query — [ModelButtonContext.customPromptTexts]/`customPromptTitles` indices 0/1 — tapping
- * runs the stored prompt; there's no long-press-to-record for Online (that's an offline-only
- * addition, see [ModelButtonContext.onRecordCustomPrompt]).
+ * The two custom-prompt cells here are populated only via the general (non-slot-targeted) voice
+ * query - [ModelButtonContext.customPromptTexts]/`customPromptTitles` indices 0/1 - tapping runs
+ * the stored prompt; there's no long-press-to-record here (that's an on-device-only addition, see
+ * [ModelButtonContext.onRecordCustomPrompt]).
  */
 internal fun promptGridRows(ctx: ModelButtonContext): List<List<GridCell?>> {
     fun promptCell(label: String, promptId: String): GridCell {
@@ -31,7 +31,7 @@ internal fun promptGridRows(ctx: ModelButtonContext): List<List<GridCell?>> {
             promptCell("Brief Narration", "brief_narration"),
             promptCell("Detailed Scene", "detailed_scene"),
             promptCell("People and Outfit", "people_and_outfit"),
-            promptCell("Emotions", "emotions")
+            promptCell("Facial Expressions", "facial_expressions")
         ),
         listOf(
             promptCell("Objects", "objects"),

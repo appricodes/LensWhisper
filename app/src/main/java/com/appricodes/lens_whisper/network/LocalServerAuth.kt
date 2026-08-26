@@ -14,7 +14,7 @@ import javax.crypto.spec.SecretKeySpec
  * — the password the user types is never persisted. There's no separate "send it and let the
  * server compare it" step any more: the token *is* the raw AES-256 key (its hex digits decoded
  * back to bytes), so a request the server can decrypt is, by construction, an authorized one.
- * Local Server mode requires a password now — [com.appricodes.lens_whisper.network.XaiVisionEngine]
+ * Local Server mode requires a password now — [com.appricodes.lens_whisper.network.LocalServerEngine]
  * refuses to make any request while the token is blank, matching the desktop server's own refusal
  * to start without one.
  *

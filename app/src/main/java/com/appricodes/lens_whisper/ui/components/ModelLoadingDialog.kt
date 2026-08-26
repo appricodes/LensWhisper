@@ -51,6 +51,17 @@ fun ModelLoadingObserver(context: Context, selectedModelId: String, offlineModel
     LaunchedEffect(failed?.modelId) {
         if (failed != null) AccessibilityUtils.announceToTalkBack(context, "Failed to load model. ${failed.message}")
     }
+    // The dialog below is visual — TalkBack doesn't reliably announce a freshly-shown AlertDialog's
+    // text on every OEM/TalkBack version on its own, and this app announces every other state
+    // transition explicitly rather than relying on that, so this does too. Fires whenever loading
+    // genuinely starts, whatever triggered it — an explicit selection in ModelPickerPopup, or the
+    // proactive preload CameraActivity/MediaDescriberScreen now kick off as soon as they open.
+    LaunchedEffect(loading?.modelId) {
+        if (loading != null) {
+            val displayName = offlineModels.find { it.id == loading.modelId }?.displayName ?: "model"
+            AccessibilityUtils.announceToTalkBack(context, "Loading $displayName.")
+        }
+    }
 
     if (loading != null) {
         val displayName = offlineModels.find { it.id == loading.modelId }?.displayName ?: "model"

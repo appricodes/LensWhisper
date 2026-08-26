@@ -23,9 +23,11 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.appricodes.lens_whisper.data.PreferencesManager
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
+import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
@@ -96,6 +98,8 @@ fun SettingsScreen(
 	var showResultsInDialog by remember { mutableStateOf(sharedPrefs.getBoolean("show_results_in_dialog", false)) }
 	var offlineTranslationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("offline_translation_enabled", false)) }
 	var streamingEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("streaming_enabled", false)) }
+	var soundEffectsEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("sound_effects_enabled", true)) }
+	var vibrationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("vibration_enabled", true)) }
 
 	var localServerAddress by remember { mutableStateOf(sharedPrefs.getString("local_server_base_url", "") ?: "") }
 	var showLocalServerEditDialog by remember { mutableStateOf(false) }
@@ -112,8 +116,11 @@ fun SettingsScreen(
 	var personaDropdownExpanded by remember { mutableStateOf(false) }
 	var qualityDropdownExpanded by remember { mutableStateOf(false) }
 
-	val freeCredits by remember { mutableStateOf(sharedPrefs.getInt("free_credits", 0)) }
-	val purchasedCredits by remember { mutableStateOf(sharedPrefs.getInt("purchased_credits", 0)) }
+	var segmentationSize by remember { mutableStateOf(prefs.segmentationModelSize) }
+	var segmentationPrecision by remember { mutableStateOf(prefs.segmentationModelPrecision) }
+	var segmentationSizeDropdownExpanded by remember { mutableStateOf(false) }
+	var segmentationPrecisionDropdownExpanded by remember { mutableStateOf(false) }
+
 
 	Column(
 		modifier = Modifier
@@ -134,78 +141,22 @@ fun SettingsScreen(
 			) { Text("Close", fontSize = 18.sp) }
 		}
 
+		// Model selector and More button are both hidden here: switching models has no clear use
+		// from inside Settings, and the More menu leads back to Settings among other places. What's
+		// left is just the Support button — see ModelTopBar's doc. With no way to switch models from
+		// this screen, there's also nothing left for a download-progress/model-loading observer to
+		// ever have to show, so neither is wired up here any more.
 		val topBarController = rememberAnalysisSessionController(context, prefs)
-		var topBarSelectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
 		ModelTopBar(
 			prefs = prefs,
 			controller = topBarController,
-			selectedModelId = topBarSelectedModelId,
-			onModelSelected = { id -> prefs.selectedModelId = id; topBarSelectedModelId = id },
+			selectedModelId = prefs.selectedModelId,
+			onModelSelected = {},
+			showModelSelector = false,
+			showMoreButton = false,
 			modifier = Modifier.clip(RoundedCornerShape(12.dp)),
 			backgroundColor = MaterialTheme.colorScheme.surfaceVariant
 		)
-		topBarController.ObserveDownloads()
-		val topBarOfflineModels = remember { com.appricodes.lens_whisper.data.OfflineModelsRepository(context).loadModels() }
-		com.appricodes.lens_whisper.ui.components.ModelLoadingObserver(context = context, selectedModelId = topBarSelectedModelId, offlineModels = topBarOfflineModels)
-
-		Card(
-			modifier = Modifier
-				.fillMaxWidth()
-				.clearAndSetSemantics {
-					contentDescription = "You currently have $freeCredits free credits and $purchasedCredits purchased credits."
-				},
-			colors = CardDefaults.cardColors(
-				containerColor = MaterialTheme.colorScheme.primaryContainer
-			),
-			elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
-		) {
-			Column(
-				modifier = Modifier
-					.fillMaxWidth()
-					.padding(16.dp),
-				horizontalAlignment = Alignment.CenterHorizontally
-			) {
-				Text(
-					text = "Your Credits",
-					fontSize = 16.sp,
-					fontWeight = FontWeight.SemiBold,
-					color = MaterialTheme.colorScheme.onPrimaryContainer
-				)
-				Spacer(modifier = Modifier.height(8.dp))
-				Row(
-					modifier = Modifier.fillMaxWidth(),
-					horizontalArrangement = Arrangement.SpaceEvenly,
-					verticalAlignment = Alignment.CenterVertically
-				) {
-					Column(horizontalAlignment = Alignment.CenterHorizontally) {
-						Text(
-							text = freeCredits.toString(),
-							fontSize = 32.sp,
-							fontWeight = FontWeight.Bold,
-							color = MaterialTheme.colorScheme.onPrimaryContainer
-						)
-						Text(
-							text = "Free",
-							fontSize = 14.sp,
-							color = MaterialTheme.colorScheme.onPrimaryContainer
-						)
-					}
-					Column(horizontalAlignment = Alignment.CenterHorizontally) {
-						Text(
-							text = purchasedCredits.toString(),
-							fontSize = 32.sp,
-							fontWeight = FontWeight.Bold,
-							color = MaterialTheme.colorScheme.onPrimaryContainer
-						)
-						Text(
-							text = "Purchased",
-							fontSize = 14.sp,
-							color = MaterialTheme.colorScheme.onPrimaryContainer
-						)
-					}
-				}
-			}
-		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text(text = "AI Analysis Quality", fontSize = 18.sp, color = Color.Gray)
@@ -229,6 +180,69 @@ fun SettingsScreen(
 					}
 				}
 			}
+		}
+
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Object Detection Model Size", fontSize = 18.sp, color = Color.Gray)
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { segmentationSizeDropdownExpanded = true }
+					.padding(16.dp)
+					.clearAndSetSemantics {
+						contentDescription = "Object detection model size is ${OfflineSegmentationDetector.sizeDisplayName(segmentationSize)}. Double tap to change."
+					},
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = OfflineSegmentationDetector.sizeDisplayName(segmentationSize), fontSize = 18.sp)
+				DropdownMenu(expanded = segmentationSizeDropdownExpanded, onDismissRequest = { segmentationSizeDropdownExpanded = false }) {
+					OfflineSegmentationDetector.ALL_SIZES.forEach { size ->
+						DropdownMenuItem(text = { Text(OfflineSegmentationDetector.sizeDisplayName(size)) }, onClick = {
+							segmentationSize = size
+							prefs.segmentationModelSize = size
+							segmentationSizeDropdownExpanded = false
+						})
+					}
+				}
+			}
+			Text(
+				text = "Used by Object Detection, Object and Color Detection, and both Explore screens. " +
+					"Larger models are slower but notice more, and get colors and mask edges more precisely.",
+				fontSize = 13.sp,
+				color = Color.Gray
+			)
+		}
+
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Object Detection Model Precision", fontSize = 18.sp, color = Color.Gray)
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { segmentationPrecisionDropdownExpanded = true }
+					.padding(16.dp)
+					.clearAndSetSemantics {
+						contentDescription = "Object detection model precision is ${OfflineSegmentationDetector.precisionDisplayName(segmentationPrecision)}. Double tap to change."
+					},
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = OfflineSegmentationDetector.precisionDisplayName(segmentationPrecision), fontSize = 18.sp)
+				DropdownMenu(expanded = segmentationPrecisionDropdownExpanded, onDismissRequest = { segmentationPrecisionDropdownExpanded = false }) {
+					OfflineSegmentationDetector.ALL_PRECISIONS.forEach { precision ->
+						DropdownMenuItem(text = { Text(OfflineSegmentationDetector.precisionDisplayName(precision)) }, onClick = {
+							segmentationPrecision = precision
+							prefs.segmentationModelPrecision = precision
+							segmentationPrecisionDropdownExpanded = false
+						})
+					}
+				}
+			}
+			Text(
+				text = "int8 is smaller and faster; float16 keeps more numeric detail at some extra size and time.",
+				fontSize = 13.sp,
+				color = Color.Gray
+			)
 		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -266,12 +280,12 @@ fun SettingsScreen(
 					}
 					.clearAndSetSemantics {
 						val status = if (offlineTranslationEnabled) "enabled" else "disabled"
-						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Applies to MLKit and to on-device AI model responses, when a translation is available. Double tap to toggle."
+						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Applies to Basic Models and to on-device AI model responses, when a translation is available. Double tap to toggle."
 					},
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.SpaceBetween
 			) {
-				Text(text = "Translate Offline Results (MLKit + On-Device AI)", fontSize = 16.sp, color = Color.LightGray)
+				Text(text = "Translate Offline Results (Basic Models + On-Device AI)", fontSize = 16.sp, color = Color.LightGray)
 				Checkbox(checked = offlineTranslationEnabled, onCheckedChange = { targetState ->
 					offlineTranslationEnabled = targetState
 					sharedPrefs.edit().putBoolean("offline_translation_enabled", targetState).apply()
@@ -371,71 +385,118 @@ fun SettingsScreen(
 			})
 		}
 
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Local Server Address", fontSize = 18.sp, color = Color.Gray)
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { localServerEditText = localServerAddress; showLocalServerEditDialog = true }
-					.padding(16.dp)
-					.clearAndSetSemantics {
-						contentDescription = if (localServerAddress.isBlank())
-							"Local Server address not found yet. Double tap to enter one manually."
-						else "Local Server address is $localServerAddress. Double tap to edit."
-					},
-				contentAlignment = Alignment.CenterStart
-			) {
-				Text(text = localServerAddress.ifBlank { "Not found — tap to enter manually" }, fontSize = 18.sp)
-			}
-			Text(
-				text = "Auto-detected when you select Local Server and it's reachable on your Wi-Fi network. " +
-					"Only needed here if auto-detection doesn't find it (e.g. a different subnet).",
-				fontSize = 13.sp,
-				color = Color.Gray
-			)
-			TextButton(
-				onClick = {
-					isScanningForLocalServer = true
-					coroutineScope.launch {
-						val found = LocalServerDiscovery.discover(context)
-						if (found != null) {
-							localServerAddress = found
-							sharedPrefs.edit().putString("local_server_base_url", found).apply()
-						}
-						isScanningForLocalServer = false
-					}
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.clickable {
+					val targetState = !soundEffectsEnabled
+					soundEffectsEnabled = targetState
+					sharedPrefs.edit().putBoolean("sound_effects_enabled", targetState).apply()
+				}
+				.clearAndSetSemantics {
+					val statusText = if (soundEffectsEnabled) "enabled" else "disabled"
+					contentDescription = "Sound effects option is currently $statusText. Covers the shutter click, the waiting-for-results tone, and Explore's touch tones. Double tap to toggle."
 				},
-				enabled = !isScanningForLocalServer
-			) {
-				Text(if (isScanningForLocalServer) "Scanning…" else "Rescan Network")
-			}
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.SpaceBetween
+		) {
+			Text(text = "Sound Effects", fontSize = 18.sp)
+			Checkbox(checked = soundEffectsEnabled, onCheckedChange = { targetState ->
+				soundEffectsEnabled = targetState
+				sharedPrefs.edit().putBoolean("sound_effects_enabled", targetState).apply()
+			})
 		}
 
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Local Server Password", fontSize = 18.sp, color = Color.Gray)
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { passwordEditText = ""; showPasswordEditDialog = true }
-					.padding(16.dp)
-					.clearAndSetSemantics {
-						contentDescription = if (hasLocalServerPassword)
-							"Local Server password is set. Double tap to change or remove it."
-						else "No Local Server password set. Double tap to set one."
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.clickable {
+					val targetState = !vibrationEnabled
+					vibrationEnabled = targetState
+					sharedPrefs.edit().putBoolean("vibration_enabled", targetState).apply()
+				}
+				.clearAndSetSemantics {
+					val statusText = if (vibrationEnabled) "enabled" else "disabled"
+					contentDescription = "Vibration option is currently $statusText. Covers Explore's touch feedback when moving your finger over a photo. Double tap to toggle."
+				},
+			verticalAlignment = Alignment.CenterVertically,
+			horizontalArrangement = Arrangement.SpaceBetween
+		) {
+			Text(text = "Vibration", fontSize = 18.sp)
+			Checkbox(checked = vibrationEnabled, onCheckedChange = { targetState ->
+				vibrationEnabled = targetState
+				sharedPrefs.edit().putBoolean("vibration_enabled", targetState).apply()
+			})
+		}
+
+		if (LocalServerFeature.ENABLED) {
+			// Hidden while the LAN feature is switched off - there is nothing to point these at.
+			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+				Text(text = "Local Server Address", fontSize = 18.sp, color = Color.Gray)
+				Box(
+					modifier = Modifier
+						.fillMaxWidth()
+						.background(MaterialTheme.colorScheme.surfaceVariant)
+						.clickable { localServerEditText = localServerAddress; showLocalServerEditDialog = true }
+						.padding(16.dp)
+						.clearAndSetSemantics {
+							contentDescription = if (localServerAddress.isBlank())
+								"Local Server address not found yet. Double tap to enter one manually."
+							else "Local Server address is $localServerAddress. Double tap to edit."
+						},
+					contentAlignment = Alignment.CenterStart
+				) {
+					Text(text = localServerAddress.ifBlank { "Not found — tap to enter manually" }, fontSize = 18.sp)
+				}
+				Text(
+					text = "Auto-detected when you select Local Server and it's reachable on your Wi-Fi network. " +
+						"Only needed here if auto-detection doesn't find it (e.g. a different subnet).",
+					fontSize = 13.sp,
+					color = Color.Gray
+				)
+				TextButton(
+					onClick = {
+						isScanningForLocalServer = true
+						coroutineScope.launch {
+							val found = LocalServerDiscovery.discover(context)
+							if (found != null) {
+								localServerAddress = found
+								sharedPrefs.edit().putString("local_server_base_url", found).apply()
+							}
+							isScanningForLocalServer = false
+						}
 					},
-				contentAlignment = Alignment.CenterStart
-			) {
-				Text(text = if (hasLocalServerPassword) "Password set" else "Not set — tap to set a password", fontSize = 18.sp)
+					enabled = !isScanningForLocalServer
+				) {
+					Text(if (isScanningForLocalServer) "Scanning…" else "Rescan Network")
+				}
 			}
-			Text(
-				text = "Required to use Local Server mode — must match the password set on the computer. " +
-					"Every request and response between this phone and that computer is encrypted using " +
-					"it; only the password's token is ever stored here, never the password itself.",
-				fontSize = 13.sp,
-				color = Color.Gray
-			)
+
+			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+				Text(text = "Local Server Password", fontSize = 18.sp, color = Color.Gray)
+				Box(
+					modifier = Modifier
+						.fillMaxWidth()
+						.background(MaterialTheme.colorScheme.surfaceVariant)
+						.clickable { passwordEditText = ""; showPasswordEditDialog = true }
+						.padding(16.dp)
+						.clearAndSetSemantics {
+							contentDescription = if (hasLocalServerPassword)
+								"Local Server password is set. Double tap to change or remove it."
+							else "No Local Server password set. Double tap to set one."
+						},
+					contentAlignment = Alignment.CenterStart
+				) {
+					Text(text = if (hasLocalServerPassword) "Password set" else "Not set — tap to set a password", fontSize = 18.sp)
+				}
+				Text(
+					text = "Required to use Local Server mode — must match the password set on the computer. " +
+						"Every request and response between this phone and that computer is encrypted using " +
+						"it; only the password's token is ever stored here, never the password itself.",
+					fontSize = 13.sp,
+					color = Color.Gray
+				)
+			}
 		}
 	}
 

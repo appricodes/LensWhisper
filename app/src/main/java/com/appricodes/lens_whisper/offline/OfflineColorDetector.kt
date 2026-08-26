@@ -65,6 +65,21 @@ object OfflineColorDetector {
 	}
 
 	/**
+	 * The same Palette-based ranking [detect] uses internally, exposed directly for a caller that
+	 * has already isolated the region to name colors for — e.g.
+	 * [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector], which gets both an
+	 * object's identity and its exact pixel mask from a single detector pass and has no need for
+	 * [detect]'s own ML Kit subject-discovery step to find it a second time. [bitmap] should have
+	 * a transparent background outside the region of interest, matching what
+	 * [findProminentColorsPalette] already expects (see its doc) — a masked instance crop with
+	 * non-member pixels set to alpha=0 satisfies this exactly.
+	 */
+	fun namedDominantColors(bitmap: Bitmap, k: Int = 2): List<String> {
+		val prominentColors = findProminentColorsPalette(bitmap, k)
+		return prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
+	}
+
+	/**
 	 * Detects the main subject(s) and their colors in [bitmap]. If [onResult] is null (the
 	 * default), the result is spoken immediately via [OfflineTranslator]. If provided, [onResult]
 	 * receives the raw English sentence instead — used by continuous mode, which only speaks

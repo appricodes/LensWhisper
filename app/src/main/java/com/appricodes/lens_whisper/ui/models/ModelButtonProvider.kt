@@ -35,7 +35,7 @@ data class ModelButtonContext(
  * Declares the button set for one model (or model family) and wires each cell to an action.
  * See `res/raw/offline_models.json`/`OfflineModelsRepository` for how models are catalogued, and
  * [com.appricodes.lens_whisper.data.PreferencesManager.selectedModelId] for the selection key
- * ("mlkit", "online", or an [OfflineModelInfo.id]).
+ * ("mlkit", "local_server", or an [OfflineModelInfo.id]).
  */
 interface ModelButtonProvider {
     /**

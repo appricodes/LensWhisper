@@ -7,7 +7,6 @@ import androidx.camera.camera2.interop.Camera2CameraControl
 import androidx.camera.camera2.interop.CaptureRequestOptions
 import androidx.camera.camera2.interop.ExperimentalCamera2Interop
 import androidx.camera.core.Camera
-import androidx.camera.lifecycle.ProcessCameraProvider
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -15,30 +14,41 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 
-/** Unbinds the camera on pause and rebinds on resume — shared by any headless-camera screen. */
+/**
+ * Releases the camera on pause. There is deliberately no rebind-on-resume counterpart any more:
+ * since [CameraController] only binds for the duration of a capture or a live analysis feed,
+ * there is nothing to restore — the next button press opens the camera itself.
+ *
+ * [onPauseTasks] is where the screen stops anything that was holding the camera open (MLKit's
+ * continuous/light modes), and it runs *before* the release so those stop cleanly rather than
+ * having the feed pulled out from under them.
+ */
 @Composable
 fun AppLifecycleCameraHandler(
     context: Context,
     lifecycleOwner: LifecycleOwner,
-    onPauseTasks: () -> Unit,
-    onBindCamera: () -> Unit
+    onPauseTasks: () -> Unit
 ) {
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_PAUSE) {
                 onPauseTasks()
-                try {
-                    ProcessCameraProvider.getInstance(context).get().unbindAll()
-                } catch (e: Exception) { e.printStackTrace() }
-            } else if (event == Lifecycle.Event.ON_RESUME) {
-                onBindCamera()
+                CameraController.releaseAllCameras(context)
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
-        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+        onDispose {
+            lifecycleOwner.lifecycle.removeObserver(observer)
+            CameraController.releaseAllCameras(context)
+        }
     }
 }
 
+/**
+ * Applies MLKit Light Level mode's exposure setup to the live analysis feed. Only meaningful while
+ * that mode holds the camera open — [activeCamera] is null the rest of the time, which is now the
+ * normal case, and this then does nothing.
+ */
 @OptIn(ExperimentalCamera2Interop::class)
 @Composable
 fun CameraExposureFlashHandler(
@@ -57,8 +67,6 @@ fun CameraExposureFlashHandler(
                 val builder = CaptureRequestOptions.Builder()
                     .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, true)
                     .setCaptureRequestOption(CaptureRequest.FLASH_MODE, CaptureRequest.FLASH_MODE_OFF)
-
-                // FIX: Use the explicit setter method instead of property assignment
                 camera2Control.setCaptureRequestOptions(builder.build())
 
                 val range = cameraInfo.exposureState.exposureCompensationRange
@@ -71,8 +79,6 @@ fun CameraExposureFlashHandler(
                 val builder = CaptureRequestOptions.Builder()
                     .setCaptureRequestOption(CaptureRequest.CONTROL_AE_LOCK, false)
                     .setCaptureRequestOption(CaptureRequest.CONTROL_AE_MODE, CaptureRequest.CONTROL_AE_MODE_ON_AUTO_FLASH)
-
-                // FIX: Use the explicit setter method instead of property assignment
                 camera2Control.setCaptureRequestOptions(builder.build())
 
                 val range = cameraInfo.exposureState.exposureCompensationRange

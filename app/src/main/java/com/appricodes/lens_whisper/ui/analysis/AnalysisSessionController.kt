@@ -27,6 +27,7 @@ import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.runSelectedModelAnalysis
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.inference.runSelectedOfflineModelAnalysisStreaming
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.service.ModelDownloadService
@@ -45,13 +46,16 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
 /** What a screen-specific frame source hands back to [AnalysisSessionController.runAnalysis].
- *  [onlineCallStreaming]/[localServerCallStreaming] are null wherever streaming isn't offered for
- *  that capture (Explore) — [AnalysisSessionController] falls back to [onlineCall]/[localServerCall]
- *  in that case regardless of the user's streaming setting. */
+ *
+ *  [offlineImages] is the only field that matters in the shipping configuration — every model runs
+ *  on-device. The Local Server fields feed the switched-off LAN path (see
+ *  [com.appricodes.lens_whisper.network.LocalServerFeature]) and are kept so re-enabling it needs
+ *  no rework here; [localServerCallStreaming] is null wherever streaming isn't offered for that
+ *  capture (Explore), in which case [localServerCall] is used regardless of the streaming setting.
+ *
+ *  The cloud-backend fields this used to carry are gone with the backend itself. */
 data class CapturedBundle(
     val offlineImages: List<Bitmap>,
-    val onlineCall: suspend () -> String,
-    val onlineCallStreaming: (() -> Flow<String>)? = null,
     val localServerCall: suspend () -> String = { "ERROR: Local Server isn't available for this action." },
     val localServerCallStreaming: (() -> Flow<String>)? = null
 )
@@ -100,9 +104,6 @@ class AnalysisSessionController(
     var showExploreUnsupportedDialog by mutableStateOf(false)
         private set
 
-    var showOnlineGateDialog by mutableStateOf(false)
-        private set
-
     var pendingDownloadModel by mutableStateOf<OfflineModelInfo?>(null)
         private set
     private var pendingDownloadAction: (() -> Unit)? = null
@@ -114,10 +115,10 @@ class AnalysisSessionController(
     var stillDownloadingModel by mutableStateOf<OfflineModelInfo?>(null)
         private set
 
-    // 4 slots: Online only ever populates/reads indices 0-1 (via the general, non-slot-targeted
-    // voice query below); the offline catalog uses all 4, each independently voice-recordable via
-    // long-press (see OfflineVlmButtonProvider). Backed by SnapshotStateList so mutating an
-    // element in place (not reassigning the whole list) still triggers recomposition.
+    // 4 slots: the Local Server grid only ever populates/reads indices 0-1 (via the general,
+    // non-slot-targeted voice query below); the on-device catalog uses all 4, each independently
+    // voice-recordable via long-press (see OfflineVlmButtonProvider). Backed by SnapshotStateList
+    // so mutating an element in place (not reassigning the whole list) still triggers recomposition.
     private val _customPromptTexts = mutableStateListOf("", "", "", "")
     private val _customPromptTitles = mutableStateListOf("Custom 1", "Custom 2", "Custom 3", "Custom 4")
     val customPromptTexts: List<String> get() = _customPromptTexts
@@ -140,13 +141,13 @@ class AnalysisSessionController(
         AccessibilityUtils.announceToTalkBack(context, "Please wait for the current analysis to finish.")
     }
 
-    /** True for the on-device VLM catalog (Gemma4/FastVLM/Qwen-VL/...) — those models are asked
+    /** True for the on-device VLM catalog (Gemma4/SmolVLM2/Qwen-VL/...) — those models are asked
      *  to answer in the target language via their system instruction, but small on-device models
      *  frequently ignore that, so [OfflineTranslator.translate] is applied as a fallback. Not
-     *  MLKit (which never routes through here — see `MlkitButtonProvider`), Online, or Local
-     *  Server (both already answer in the target language via the same system instruction). */
+     *  MLKit (which never routes through here — see `MlkitButtonProvider`) and not the Local
+     *  Server (which answers in the target language via the same system instruction). */
     private fun isOfflineVlmSelected(): Boolean =
-        prefs.selectedModelId != "online" && prefs.selectedModelId != "mlkit" && prefs.selectedModelId != "local_server"
+        prefs.selectedModelId != "mlkit" && prefs.selectedModelId != LocalServerFeature.MODEL_ID
 
     private suspend fun handleResponse(response: String) {
         activeAudioFeedbackJob?.cancel()
@@ -162,16 +163,16 @@ class AnalysisSessionController(
 
     fun dismissDialog() { dialogState = null }
     fun dismissExploreUnsupportedDialog() { showExploreUnsupportedDialog = false }
-    fun dismissOnlineGateDialog() { showOnlineGateDialog = false }
     fun dismissDownloadPrompt() { pendingDownloadModel = null; pendingDownloadAction = null; downloadDialogHidden = false }
     fun hideDownloadDialog() { downloadDialogHidden = true }
     fun dismissStillDownloadingDialog() { stillDownloadingModel = null }
 
-    /** Starts the repeating "processing" chime — call once frames are actually ready to send. */
+    /** Starts the repeating "waiting for the model" tone — call once frames are actually ready to
+     *  send (i.e. after capture/extraction has finished, not before — see each caller). */
     fun startProcessingChime() {
         activeAudioFeedbackJob = coroutineScope.launch(Dispatchers.IO) {
             while (true) {
-                ProcessingSoundPlayer.playChime()
+                ProcessingSoundPlayer.playWaitingTone(context)
                 delay(1100)
             }
         }
@@ -196,20 +197,34 @@ class AnalysisSessionController(
                 handleResponse("ERROR: Could not capture the image.")
                 return
             }
-            // Offline models always stream; Online streams only when the user opted in (Settings,
-            // default off — see PreferencesManager.streamingEnabled) since it changes the wire
-            // protocol process.php speaks (NDJSON vs. one JSON object, see backend/readme.md).
-            // MLKit never reaches either branch (see isOfflineVlmSelected). Explore is excluded from
-            // both — its structured grid-JSON response isn't sentence-shaped (OfflineVlmButtonProvider
-            // doesn't even offer Explore offline, and bundle.onlineCallStreaming is null for it).
-            val streamingFlow: Flow<String>? = when {
-                isOfflineVlmSelected() && config.id != "explore" ->
-                    runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages)
-                prefs.selectedModelId == "online" && prefs.streamingEnabled && config.id != "explore" ->
-                    bundle.onlineCallStreaming?.invoke()
-                prefs.selectedModelId == "local_server" && prefs.streamingEnabled && config.id != "explore" ->
-                    bundle.localServerCallStreaming?.invoke()
-                else -> null
+            // On-device models always stream; the Local Server streams only when the user opted in
+            // (Settings, default off — see PreferencesManager.streamingEnabled) since it changes the
+            // wire protocol /process.php speaks (NDJSON vs. one JSON object). MLKit never reaches
+            // either branch (see isOfflineVlmSelected). Explore is excluded from both — its
+            // structured grid-JSON response isn't sentence-shaped (OfflineVlmButtonProvider doesn't
+            // even offer Explore on-device, and localServerCallStreaming is null for it).
+            //
+            // Wrapped in its own try/catch: unlike runSelectedModelAnalysis (which reports setup
+            // problems by returning an "ERROR: ..." string), runSelectedOfflineModelAnalysisStreaming
+            // throws for the exact same class of problem (model missing, not downloaded, no images,
+            // now also "device too hot" — see ThermalGuard) — and it throws *eagerly*, before
+            // returning a Flow, not from inside one. Left uncaught, that exception would escape this
+            // function's try/finally (which has no catch of its own) and crash the coroutine this
+            // runs in. It's a real, easily-reached path — a phone legitimately gets hot from
+            // sustained on-device inference, so "too hot" is not a rare edge case here.
+            val streamingFlow: Flow<String>? = try {
+                when {
+                    isOfflineVlmSelected() && config.id != "explore" ->
+                        runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages)
+                    prefs.selectedModelId == LocalServerFeature.MODEL_ID && prefs.streamingEnabled && config.id != "explore" ->
+                        bundle.localServerCallStreaming?.invoke()
+                    else -> null
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                handleResponse("ERROR: ${e.localizedMessage ?: "Setup failed."}")
+                return
             }
             if (streamingFlow != null) {
                 runStreamingAnalysis(streamingFlow, translate = isOfflineVlmSelected())
@@ -219,7 +234,6 @@ class AnalysisSessionController(
                     prefs = prefs,
                     config = config,
                     offlineImages = bundle.offlineImages,
-                    onlineCall = bundle.onlineCall,
                     localServerCall = bundle.localServerCall
                 )
                 handleResponse(response)
@@ -232,21 +246,20 @@ class AnalysisSessionController(
 
     /**
      * Streaming counterpart to [handleResponse] — used for on-device models always, and for the
-     * Online Describer when [PreferencesManager.streamingEnabled] is on (see the two branches in
+     * Local Server when [PreferencesManager.streamingEnabled] is on (see the two branches in
      * [runAnalysis] that decide which [Flow] gets passed in here, if any). Speaks each complete
      * sentence (ending in `.`/`!`/`?`/newline, or their CJK/Persian equivalents — see
      * [findSentenceEnd]) via TalkBack as soon as it's been generated — and translated, if
      * [translate] is true — instead of waiting for and speaking the full response as one block.
      * [translate] mirrors [isOfflineVlmSelected]'s reasoning: only on-device models need the
-     * client-side translation fallback, since Online already answers in the target language via
+     * client-side translation fallback, since the Local Server already answers in the target language via
      * its own system prompt. See [runSelectedOfflineModelAnalysisStreaming] /
-     * `OfflineInferenceEngine.analyzeStreaming` (offline) and `XaiVisionEngine`'s `*Streaming`
-     * functions / backend/readme.md's "Streaming" section (online).
+     * `OfflineInferenceEngine.analyzeStreaming` (on-device) and `LocalServerEngine`'s `*Streaming`
+     * functions.
      */
     private suspend fun runStreamingAnalysis(flow: Flow<String>, translate: Boolean) {
         val fullText = StringBuilder()
         val pending = StringBuilder()
-        var chimeStopped = false
 
         suspend fun speak(sentence: String) {
             val trimmed = sentence.trim()
@@ -257,13 +270,9 @@ class AnalysisSessionController(
 
         try {
             flow.collect { delta ->
-                if (!chimeStopped) {
-                    // The chime represents "still waiting" — the moment real output starts
-                    // arriving, it's no longer accurate (unlike the non-streaming path, which only
-                    // learns a response exists once the whole thing is ready).
-                    activeAudioFeedbackJob?.cancel()
-                    chimeStopped = true
-                }
+                // The waiting tone deliberately keeps playing through the *entire* stream, not just
+                // until the first delta arrives — it means "the model is still working", which
+                // stays true until the last token, not just until the first one.
                 fullText.append(delta)
                 pending.append(delta)
                 var end = findSentenceEnd(pending)
@@ -273,6 +282,7 @@ class AnalysisSessionController(
                     end = findSentenceEnd(pending)
                 }
             }
+            activeAudioFeedbackJob?.cancel()
             speak(pending.toString()) // whatever's left over (no trailing punctuation) still gets spoken
             if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
         } catch (e: CancellationException) {
@@ -288,7 +298,7 @@ class AnalysisSessionController(
      * Repeats the last prompt run (voice query, tap, or custom), if any. [selectedModelId] guards
      * against the one way a multi-frame Story prompt can reach an on-device model even though no
      * offline button ever offers Story directly (see [com.appricodes.lens_whisper.ui.models.OfflineVlmButtonProvider]):
-     * run Story while on Online, switch to an offline model, tap Repeat — [lastPrompt] is tracked
+     * run Story on the Local Server, switch to an on-device model, tap Repeat — [lastPrompt] is tracked
      * regardless of which model ran it, so without this check it would resurface here. Currently
      * blocks it for every offline model, not just `fastvlm_0_5b` — the request that added this was
      * scoped to FastVLM specifically, but the leak itself isn't model-specific, so neither is the fix.
@@ -297,7 +307,7 @@ class AnalysisSessionController(
         val prompt = lastPrompt
         when {
             prompt == null -> AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
-            selectedModelId != "online" && selectedModelId != "local_server" && prompt.framesCount > 1 ->
+            selectedModelId != LocalServerFeature.MODEL_ID && prompt.framesCount > 1 ->
                 AccessibilityUtils.announceToTalkBack(context, "Story mode isn't available for on-device models.")
             else -> runAnalysis(prompt, prompt.title, captureFrames)
         }
@@ -417,7 +427,7 @@ class AnalysisSessionController(
     /**
      * If [model] isn't downloaded yet, opens the download-size prompt instead of running
      * [action], and auto-resumes [action] once that model finishes downloading (observed via
-     * [ObserveDownloads]). No-op passthrough for MLKit/Online (`model == null`). If [model] is
+     * [ObserveDownloads]). No-op passthrough for MLKit/Local Server (`model == null`). If [model] is
      * *already* downloading right now (e.g. the user backed the progress dialog into the
      * background via "Continue in Background" and then tapped one of that model's buttons),
      * shows a "still downloading, wait or pick another model" notice instead of the download
@@ -445,22 +455,11 @@ class AnalysisSessionController(
         }
     }
 
-    /** Mirrors `ModelManagementActivity`'s online-eligibility check; gates every Online button tap. */
-    fun checkOnlineEligibleOrGate(action: () -> Unit) {
-        val eligible = prefs.freeCredits > 0 || prefs.purchasedCredits > 0
-        if (eligible) action() else showOnlineGateDialog = true
-    }
-
-    /** The one gate every model-specific button (prompt tap, Explore, Repeat) should run
-     *  through, regardless of which provider is active: online eligibility for the online model,
-     *  download-redirect for an on-device catalog model, or straight through for MLKit/Local
-     *  Server (no credits needed for the latter — its server doesn't meter usage). */
+    /** The one gate every model-specific button (prompt tap, Explore, Repeat) runs through. Now
+     *  that nothing is metered or paid for, the only thing left to gate on is whether an on-device
+     *  catalog model has actually been downloaded; MLKit and the Local Server go straight through. */
     fun gateForSelectedModel(selectedModelId: String, selectedOfflineModel: OfflineModelInfo?, action: () -> Unit) {
-        when {
-            selectedModelId == "online" -> checkOnlineEligibleOrGate(action)
-            selectedOfflineModel != null -> checkDownloadedOrRedirect(selectedOfflineModel, action)
-            else -> action()
-        }
+        if (selectedOfflineModel != null) checkDownloadedOrRedirect(selectedOfflineModel, action) else action()
     }
 
     /** Must be called once, in composition, by the host — auto-resumes a gated action once its
@@ -530,22 +529,6 @@ class AnalysisSessionController(
         }
     }
 
-    /** Renders the "watch an ad to use the Online Describer" gate. Call once in composition.
-     *  [onGetCredits] should open [com.appricodes.lens_whisper.ui.components.CreditsDialog]. */
-    @Composable
-    fun OnlineGateDialog(onGetCredits: () -> Unit) {
-        if (!showOnlineGateDialog) return
-        AlertDialog(
-            onDismissRequest = { dismissOnlineGateDialog() },
-            title = { Text("Online Describer") },
-            text = {
-                Text("You need credits (watch a short ad to earn some) to use the Online Describer.", fontSize = 16.sp)
-            },
-            confirmButton = {
-                Button(onClick = { dismissOnlineGateDialog(); onGetCredits() }) { Text("Get Credits") }
-            }
-        )
-    }
 }
 
 /** Creates and remembers an [AnalysisSessionController] scoped to this composition, disposing

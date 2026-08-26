@@ -12,7 +12,7 @@ import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.media.MediaSessionHandler
-import com.appricodes.lens_whisper.network.XaiVisionEngine
+import com.appricodes.lens_whisper.ui.components.CameraController
 import com.appricodes.lens_whisper.ui.screens.MediaDescriberScreen
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -20,14 +20,19 @@ import com.appricodes.lens_whisper.utils.VolumeKeyGestureHandler
 import androidx.lifecycle.lifecycleScope
 
 /**
- * Online AI description for a video/image file. Registered to open shared video/image files
+ * On-device AI description for a video/image file. Registered to open shared video/image files
  * (see AndroidManifest). Owns the app's single ExoPlayer + MediaSession for headset controls.
+ *
+ * This screen has no camera of its own, and [onResume] asserts that by releasing any CameraX
+ * binding and torch the process may still be holding from the camera screen - which, since
+ * `ProcessCameraProvider` is a process singleton, is possible whenever that screen was paused
+ * rather than destroyed. "No camera, no flash while looking at a file" is then true by
+ * construction rather than by assumption.
  */
 class MediaDescriberActivity : ComponentActivity() {
     private var initialFileUri: Uri? = null
     private lateinit var prefs: PreferencesManager
     private lateinit var appSettings: AppSettings
-    private lateinit var apiClient: XaiVisionEngine
     private var mediaSessionHandler: MediaSessionHandler? = null
     private var exoPlayer: ExoPlayer? = null
 
@@ -50,9 +55,7 @@ class MediaDescriberActivity : ComponentActivity() {
             onMicStop = { globalMicStop?.invoke() }
         )
 
-        // A login gate used to sit here — see LOGIN_AND_PURCHASES_REMOVED.md at the repo root.
         appSettings = SettingsRepository(this).loadSettingsFromAssets()
-        apiClient = XaiVisionEngine()
 
         if (intent?.data != null) initialFileUri = intent.data
 
@@ -71,6 +74,8 @@ class MediaDescriberActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        // See this class's doc: nothing here uses the camera, so nothing may be left holding it.
+        CameraController.releaseAllCameras(this)
         mediaSessionHandler?.setActive(true)
 
         val player = exoPlayer ?: ExoPlayer.Builder(this).build().apply { setWakeMode(C.WAKE_MODE_LOCAL) }.also { exoPlayer = it }
@@ -91,7 +96,6 @@ class MediaDescriberActivity : ComponentActivity() {
                 MediaDescriberScreen(
                     prefs = prefs,
                     settings = appSettings,
-                    apiClient = apiClient,
                     initialFileUri = initialFileUri,
                     exoPlayer = player,
                     onVoiceTriggerReady = { globalVoiceTrigger = it },

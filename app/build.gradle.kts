@@ -52,8 +52,10 @@ dependencies {
     implementation(libs.androidx.camera.view)
     implementation(libs.androidx.media)
 
-    // for using crypto-secured preferences
-    implementation(libs.androidx.security.crypto)
+    // (EncryptedSharedPreferences used to live here. Its only two consumers were the signed-in
+    // user's email and Google id, and there is no account system any more — nothing the app stores
+    // is a secret. The Local Server password is never stored at all; only a token derived from it
+    // is, and that token is useless without the server. See data/PreferencesManager.kt.)
 
     // Palette API for dominant color extraction
     implementation(libs.androidx.palette)
@@ -108,6 +110,16 @@ dependencies {
     // LiteRT-LM on-device model inference (Manage Advanced Models)
     implementation(libs.litertlm.android)
 
+    // Plain LiteRT (the classic Interpreter API — NOT litertlm-android above, which is a
+    // separate, LLM-specific runtime that can't load an ordinary CNN). Runs the bundled
+    // YOLOv8n-seg object-and-mask detector — see offline/OfflineSegmentationDetector.kt.
+    // CPU-only deliberately: no GPU delegate is added. This exact codebase has already hit one
+    // GPU-vision-delegate compatibility failure on real hardware (Exynos 2100/Mali, see
+    // PreferencesManager.getVisionBackendOverride's doc) that needed a runtime CPU fallback for
+    // the VLM catalog; YOLOv8n is small enough (3.2M params) that CPU-only should be fast enough
+    // for a single-shot capture without repeating that failure mode for a second model family.
+    implementation(libs.litert)
+
     // Forces kotlinx-coroutines-core/-android to 1.11.0+ instead of whatever transitive
     // resolution would otherwise pick (1.9.0, as of writing — see litertlm-android's own POM,
     // which is what actually drives that). This isn't a version *preference*, it's a hard
@@ -125,12 +137,15 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
-    // RevenueCat: manages Google Play Billing purchases for credit packages
-    implementation("com.revenuecat.purchases:purchases:9.23.1")
-
-    // Google Mobile Ads: rewarded ads let users earn free credits without paying — see
-    // ads/RewardedAdManager.kt and REVENUECAT_SETUP.md-style setup notes there.
+    // Google Mobile Ads: one optional rewarded ad behind "Support Development". It grants
+    // nothing — see ads/RewardedAdManager.kt. (RevenueCat/Play Billing used to sit alongside this
+    // for credit-pack purchases; both the credits and the purchases are gone.)
     implementation("com.google.android.gms:play-services-ads:23.6.0")
+
+    // Google's certified Consent Management Platform. Required before an ad may be requested from
+    // an EEA/UK user, both by §25 TDDDG and by Google's own EU User Consent Policy — see
+    // ads/AdConsentManager.kt, which is the only thing that starts the Ads SDK at all.
+    implementation("com.google.android.ump:user-messaging-platform:3.1.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

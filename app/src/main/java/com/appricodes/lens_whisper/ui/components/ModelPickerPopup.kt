@@ -15,13 +15,15 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
 import kotlinx.coroutines.launch
 
 /**
- * Inline quick-switch dropdown anchored to [ModelTopBar]'s model name — replaces the old direct
- * navigation to `ModelManagementActivity` on tap. Lists MLKit, Online, and every catalog model;
+ * Inline quick-switch dropdown anchored to [ModelTopBar]'s model name - replaces the old direct
+ * navigation to `ModelManagementActivity` on tap. Lists MLKit and every catalog model (plus the
+ * Local Server, when [LocalServerFeature] is switched on, which it is not);
  * `ModelManagementActivity` remains the separate "manage downloads" destination (full
  * descriptions, delete, image-size setting) reached via this popup's "Manage models…" item.
  *
@@ -37,7 +39,6 @@ fun ModelPickerPopup(
     selectedModelId: String,
     onModelSelected: (String) -> Unit,
     onOpenModelManager: () -> Unit,
-    onNeedCredits: () -> Unit,
     /** MLKit only operates on a live camera feed — hidden on file-based screens (the Video/Image
      *  describer) where it would have nothing to do. */
     showMlkitOption: Boolean = true
@@ -70,8 +71,11 @@ fun ModelPickerPopup(
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
         if (showMlkitOption) {
             DropdownMenuItem(
-                text = { Text("MLKit (Offline)" + if (selectedModelId == "mlkit") " ✓" else "") },
-                onClick = { onDismiss(); onModelSelected("mlkit") }
+                text = { Text("Basic Models (Offline)" + if (selectedModelId == "mlkit") " ✓" else "") },
+                // MLKit doesn't use OfflineInferenceEngine at all — whatever on-device VLM was
+                // loaded has nothing left to do once this is selected, so free it right away
+                // rather than leaving it resident until something else happens to release it.
+                onClick = { onDismiss(); OfflineInferenceEngine.release(); onModelSelected("mlkit") }
             )
         }
         offlineModels.forEach { model ->
@@ -84,25 +88,20 @@ fun ModelPickerPopup(
             }
             DropdownMenuItem(text = { Text(label) }, onClick = { onDismiss(); selectOffline(model) })
         }
-        DropdownMenuItem(
-            text = { Text("Online Describer" + if (selectedModelId == "online") " ✓" else "") },
-            onClick = {
-                onDismiss()
-                val eligible = prefs.freeCredits > 0 || prefs.purchasedCredits > 0
-                if (eligible) onModelSelected("online") else onNeedCredits()
-            }
-        )
-        DropdownMenuItem(
-            text = { Text("Local Server" + if (selectedModelId == "local_server") " ✓" else "") },
-            onClick = {
-                onDismiss()
-                onModelSelected("local_server")
-                if (!prefs.hasSeenLocalServerIntro) {
-                    prefs.hasSeenLocalServerIntro = true
-                    showLocalServerInfo = true
+        if (LocalServerFeature.ENABLED) {
+            DropdownMenuItem(
+                text = { Text("Local Server" + if (selectedModelId == LocalServerFeature.MODEL_ID) " ✓" else "") },
+                onClick = {
+                    onDismiss()
+                    OfflineInferenceEngine.release()
+                    onModelSelected(LocalServerFeature.MODEL_ID)
+                    if (!prefs.hasSeenLocalServerIntro) {
+                        prefs.hasSeenLocalServerIntro = true
+                        showLocalServerInfo = true
+                    }
                 }
-            }
-        )
+            )
+        }
         HorizontalDivider()
         DropdownMenuItem(text = { Text("Manage models…") }, onClick = { onDismiss(); onOpenModelManager() })
     }

@@ -4,6 +4,7 @@ import android.content.Context
 import android.util.Log
 import com.appricodes.lens_whisper.R
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
+import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.utils.DeviceHardwareDetector
 import org.json.JSONObject
 import java.io.File
@@ -91,9 +92,9 @@ class OfflineModelsRepository(private val context: Context) {
 
     fun deleteDownload(model: OfflineModelInfo): Boolean = localFileFor(model).delete()
 
-    /** The Online Describer and Local Server always support Explore; an offline model must declare
-     *  it via supportsExplore. */
+    /** The Local Server always supports Explore (a desktop can afford the spatial-grid pass);
+     *  an on-device model must declare it via supportsExplore. */
     fun isExploreSupported(selectedModelId: String): Boolean =
-        selectedModelId == "online" || selectedModelId == "local_server" ||
+        selectedModelId == LocalServerFeature.MODEL_ID ||
             loadModels().find { it.id == selectedModelId }?.supportsExplore ?: true
 }

@@ -47,7 +47,7 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                 promptCell("Brief Narration", "brief_narration"),
                 promptCell("Detailed Scene", "detailed_scene"),
                 promptCell("People and Outfit", "people_and_outfit"),
-                promptCell("Emotions", "emotions")
+                promptCell("Facial Expressions", "facial_expressions")
             ),
             listOf(
                 promptCell("Objects", "objects"),

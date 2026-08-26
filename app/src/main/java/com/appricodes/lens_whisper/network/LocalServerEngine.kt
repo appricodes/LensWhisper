@@ -28,71 +28,60 @@ import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 /**
- * @param baseUrl Where to POST `/process.php`. Defaults to the cloud backend; pass a LAN address
- *   (e.g. "http://192.168.1.42:8765", from [com.appricodes.lens_whisper.network.LocalServerDiscovery])
- *   to talk to a user's LensWhisper Desktop companion app instead — same JSON contract, so every
- *   method below works unchanged except that [isLocalServer] suppresses writing the response's
- *   (dummy, server doesn't meter usage) credit fields back into [PreferencesManager].
+ * HTTP client for a user's own LensWhisper Desktop companion app on the local network (see
+ * `desktop/`), which serves the `/process.php` contract this class speaks.
+ *
+ * This used to double as the client for a hosted cloud backend, with [baseUrl] defaulting to it.
+ * That backend is gone — no image this app handles leaves the device any more — so [baseUrl] is
+ * now mandatory and always a LAN address, every request/response body is always encrypted (see
+ * [LocalServerAuth]), and the credit fields the cloud responses used to carry are ignored.
+ *
+ * Currently unreachable: [LocalServerFeature] gates every entry point and is switched off.
+ *
+ * @param baseUrl e.g. "http://192.168.1.42:8765", from [LocalServerDiscovery].
  */
-class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
-	private val isLocalServer get() = baseUrl != DEFAULT_BASE_URL
+class LocalServerEngine(private val baseUrl: String) {
 
 	private val client = OkHttpClient.Builder()
 		.connectTimeout(60, TimeUnit.SECONDS)
-		// Local models on modest CPU hardware can take longer than the cloud backend does.
-		.readTimeout(if (isLocalServer) 180 else 60, TimeUnit.SECONDS)
+		// Local models on modest CPU hardware are slow; this is not a network-latency budget.
+		.readTimeout(180, TimeUnit.SECONDS)
 		.writeTimeout(60, TimeUnit.SECONDS)
 		.build()
-
-	companion object {
-		const val DEFAULT_BASE_URL = "https://lw.wikiponder.com"
-	}
 
 	/** Local Server mode requires a password (matching the desktop server's own refusal to start
 	 *  without one) — every request/response is encrypted with the token derived from it, so
 	 *  without one there's no key to encrypt with in the first place. Returns a user-facing
 	 *  "ERROR: ..." message when blocked, or null when it's fine to proceed. */
 	private fun blockedByMissingLocalServerPassword(prefs: PreferencesManager): String? =
-		if (isLocalServer && prefs.localServerPasswordToken.isBlank())
+		if (prefs.localServerPasswordToken.isBlank())
 			"ERROR: Set a Local Server password in Settings before using Local Server mode."
 		else null
 
-	/** Builds the outgoing `/process.php` body: AES-256-GCM encrypted raw bytes for a Local
-	 *  Server request (see [LocalServerAuth]), or plain JSON text for the cloud backend —
-	 *  unchanged from before this encryption was added. */
-	private fun buildRequestBody(payload: JSONObject, prefs: PreferencesManager): RequestBody =
-		if (isLocalServer) {
-			val key = LocalServerAuth.keyFor(prefs.localServerPasswordToken)
-			LocalServerAuth.encrypt(key, payload.toString().toByteArray(Charsets.UTF_8))
-				.toRequestBody("application/octet-stream".toMediaType())
-		} else {
-			payload.toString().toRequestBody("application/json".toMediaType())
-		}
+	/** Builds the outgoing `/process.php` body: always AES-256-GCM encrypted raw bytes (see
+	 *  [LocalServerAuth]). The plain-JSON alternative existed only for the cloud backend. */
+	private fun buildRequestBody(payload: JSONObject, prefs: PreferencesManager): RequestBody {
+		val key = LocalServerAuth.keyFor(prefs.localServerPasswordToken)
+		return LocalServerAuth.encrypt(key, payload.toString().toByteArray(Charsets.UTF_8))
+			.toRequestBody("application/octet-stream".toMediaType())
+	}
 
-	private fun requestContentType(): String = if (isLocalServer) "application/octet-stream" else "application/json"
+	private fun requestContentType(): String = "application/octet-stream"
 
-	/** Decrypts [rawBytes] with the stored Local Server token for a Local Server request; a
-	 *  no-op UTF-8 decode for the cloud backend (still plain JSON over HTTPS, unaffected by any
-	 *  of this). Returns null only when decryption itself fails — a wrong/mismatched password —
-	 *  never merely because the body happens to be empty. */
-	private fun decryptResponseBody(rawBytes: ByteArray, prefs: PreferencesManager): String? =
-		if (isLocalServer) {
-			val key = LocalServerAuth.keyFor(prefs.localServerPasswordToken)
-			LocalServerAuth.decrypt(key, rawBytes)?.toString(Charsets.UTF_8)
-		} else {
-			rawBytes.toString(Charsets.UTF_8)
-		}
+	/** Decrypts [rawBytes] with the stored Local Server token. Returns null only when decryption
+	 *  itself fails - a wrong/mismatched password - never merely because the body happens to be
+	 *  empty. */
+	private fun decryptResponseBody(rawBytes: ByteArray, prefs: PreferencesManager): String? {
+		val key = LocalServerAuth.keyFor(prefs.localServerPasswordToken)
+		return LocalServerAuth.decrypt(key, rawBytes)?.toString(Charsets.UTF_8)
+	}
 
 	/** Shared by [callBackendApi] and [callBackendApiStreaming] so the two request payloads can
 	 *  never drift apart on field names/values — the only difference between them is [streaming]. */
 	private fun buildPayload(base64Images: List<String>, config: PromptConfig, prefs: PreferencesManager, streaming: Boolean): JSONObject =
 		JSONObject().apply {
-			put("email", prefs.userEmail ?: "")
-			put("google_id", prefs.googleId ?: "")
-			// Anonymous identity — the only one currently reachable, since login is
-			// disconnected (see LOGIN_AND_PURCHASES_REMOVED.md). process.php falls back to
-			// this whenever email/google_id above are blank.
-			put("install_id", prefs.installId)
+			// No identity of any kind is sent. The account/install fields this payload used to
+			// carry existed only for the cloud backend's credit metering, which no longer exists.
 			put("prompt_id", config.id)
 			put("language", prefs.selectedLanguage)
 			put("persona", prefs.selectedMode)
@@ -114,7 +103,7 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 	suspend fun analyzeStaticImageFile(
 		context: Context, uri: Uri, config: PromptConfig, prefs: PreferencesManager
 	): String = withContext(Dispatchers.IO) {
-		Log.i("XaiVisionEngine", "--- Starting Backend AI Request [Type: Static Image] ---")
+		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Static Image] ---")
 		try {
 			val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
 			val baseBitmap = BitmapFactory.decodeStream(inputStream)
@@ -135,7 +124,7 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 	suspend fun analyzeVideoFrame(
 		context: Context, uri: Uri, positionMs: Long, config: PromptConfig, prefs: PreferencesManager
 	): String = withContext(Dispatchers.IO) {
-		Log.i("XaiVisionEngine", "--- Starting Backend AI Request [Type: Video Frames] ---")
+		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Video Frames] ---")
 		try {
 			val retriever = MediaMetadataRetriever()
 			retriever.setDataSource(context, uri)
@@ -166,7 +155,7 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 	suspend fun analyzeMultipleStaticImages(
 		context: Context, uris: List<Uri>, config: PromptConfig, prefs: PreferencesManager
 	): String = withContext(Dispatchers.IO) {
-		Log.i("XaiVisionEngine", "--- Starting Backend AI Request [Type: Camera Story Frames] ---")
+		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Camera Story Frames] ---")
 		try {
 			val base64Images = mutableListOf<String>()
 			for (uri in uris) {
@@ -269,7 +258,7 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 					val errJson = errText?.let { runCatching { JSONObject(it) }.getOrNull() }
 					val errMsg = errJson?.optString("model_response")?.takeIf { it.isNotBlank() }
 						?: errJson?.optString("message")?.takeIf { it.isNotBlank() }
-						?: if (isLocalServer && errText == null) "Could not securely read the local server's response. Check that its password matches yours."
+						?: if (errText == null) "Could not securely read the local server's response. Check that its password matches yours."
 						else "Server error code ${response.code}"
 					throw IllegalStateException(errMsg)
 				}
@@ -279,36 +268,30 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 				while (!source.exhausted()) {
 					val line = source.readUtf8Line() ?: break
 					if (line.isBlank()) continue
-					// A Local Server's lines are base64(AES-GCM(IV || ciphertext)) — decode+decrypt
-					// before this can be parsed as the plaintext JSON line the cloud backend sends
-					// directly. A decrypt failure here means the phone and server's passwords have
-					// drifted apart (e.g. changed on one side only) — surfaced the same way as any
-					// other streaming failure, not silently skipped like a blank/unparseable line.
-					val decryptedLine = if (isLocalServer) {
+					// Each line is base64(AES-GCM(IV || ciphertext)) — decode+decrypt before it can
+					// be parsed as JSON. A decrypt failure here means the phone's and the server's
+					// passwords have drifted apart (e.g. changed on one side only) — surfaced the
+					// same way as any other streaming failure, not silently skipped like a
+					// blank/unparseable line.
+					val decryptedLine = run {
 						val key = LocalServerAuth.keyFor(prefs.localServerPasswordToken)
 						val raw = runCatching { Base64.decode(line, Base64.NO_WRAP) }.getOrNull()
 						val plaintext = raw?.let { LocalServerAuth.decrypt(key, it) }
 							?: throw IllegalStateException("Could not securely read the local server's response. Check that its password matches yours.")
 						plaintext.toString(Charsets.UTF_8)
-					} else line
+					}
 					val json = runCatching { JSONObject(decryptedLine) }.getOrNull() ?: continue
 					when {
 						json.has("error") -> throw IllegalStateException(json.optString("model_response", "Streaming request failed."))
-						json.has("done") -> {
-							// Local server always sends dummy 9999/9999 values (it doesn't meter usage) —
-							// never let those overwrite the user's real cloud credit balance.
-							if (!isLocalServer && json.has("free_credits") && json.has("purchased_credits")) {
-								prefs.freeCredits = json.getInt("free_credits")
-								prefs.purchasedCredits = json.getInt("purchased_credits")
-							}
-							finished = true
-						}
+						// Any credit fields the server sends are ignored — the desktop server emits
+						// dummy values for contract compatibility and nothing meters usage any more.
+						json.has("done") -> finished = true
 						json.has("delta") -> {
 							val delta = json.optString("delta")
 							if (delta.isNotEmpty()) {
 								// Verifies this is genuinely streaming, not one lump at the end —
 								// compare consecutive timestamps of this exact line in logcat.
-								Log.d("XaiVisionEngine", "STREAM[online/${config.id}] chunk (${delta.length} chars): ${delta.take(60).replace("\n", "\\n")}")
+								Log.d("LocalServerEngine", "STREAM[local/${config.id}] chunk (${delta.length} chars): ${delta.take(60).replace("\n", "\\n")}")
 								emit(delta)
 							}
 						}
@@ -324,7 +307,7 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 	suspend fun analyzeFrameSpatialGrid(
 		context: Context, uri: Uri, positionMs: Long, gridSize: Int, isStaticImage: Boolean, prefs: PreferencesManager
 	): String = withContext(Dispatchers.IO) {
-		Log.i("XaiVisionEngine", "--- Starting Backend AI Request [Type: Spatial Grid] ---")
+		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Spatial Grid] ---")
 		try {
 			val bitmap = if (isStaticImage) {
 				val inputStream = context.contentResolver.openInputStream(uri)
@@ -348,24 +331,6 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 			Log.e("LensWhisperExplore", "Spatial Extraction Error", e)
 			"ERROR: Spatial map extraction failed. ${e.localizedMessage}"
 		}
-	}
-
-	fun parseSpatialJson(jsonResponse: String, gridSize: Int): Map<String, String> {
-		return runCatching {
-			val sanitized = jsonResponse.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
-			val rootJson = JSONObject(sanitized)
-			val metricMap = mutableMapOf<String, String>()
-
-			for (row in 1..gridSize) {
-				for (col in 1..gridSize) {
-					val coordinateToken = "row${row}_col${col}"
-					if (rootJson.has(coordinateToken)) {
-						metricMap[coordinateToken] = rootJson.getString(coordinateToken)
-					}
-				}
-			}
-			metricMap
-		}.getOrElse { emptyMap() }
 	}
 
 	private fun encodeBitmapToBase64(bitmap: Bitmap): String {
@@ -395,20 +360,13 @@ class XaiVisionEngine(private val baseUrl: String = DEFAULT_BASE_URL) {
 					val errJson = responseBodyString?.let { runCatching { JSONObject(it) }.getOrNull() }
 					val errMsg = errJson?.optString("model_response")
 						?: errJson?.optString("message")
-						?: if (isLocalServer && rawBytes != null && responseBodyString == null)
+						?: if (rawBytes != null && responseBodyString == null)
 							"Could not securely communicate with the local server. Check that its password matches yours."
 						else "Server error code ${response.code}"
 					return "ERROR: $errMsg"
 				}
 
 				val jsonResponse = JSONObject(responseBodyString)
-
-				// Update local credits — never for the local server, which always sends dummy
-				// 9999/9999 values (it doesn't meter usage).
-				if (!isLocalServer && jsonResponse.has("free_credits") && jsonResponse.has("purchased_credits")) {
-					prefs.freeCredits = jsonResponse.getInt("free_credits")
-					prefs.purchasedCredits = jsonResponse.getInt("purchased_credits")
-				}
 
 				return jsonResponse.optString("model_response", "ERROR: Response mapped incorrectly.")
 			}

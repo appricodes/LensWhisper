@@ -55,6 +55,13 @@ object OfflineInferenceEngine {
     private const val LOAD_TIMEOUT_MS = 60_000L
     private const val INFERENCE_TIMEOUT_MS = 90_000L
 
+    /** Caps every on-device response at 60 tokens (roughly 45-55 words for these models). This is
+     *  a hard backstop on top of the word limits in [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]
+     *  ("under 15/40 words"), which the model is free to ignore — small models routinely run past a
+     *  word count asked for in the prompt. This caps generation time and battery cost on-device
+     *  regardless of whether the model cooperates. */
+    private const val MAX_OUTPUT_TOKENS = 60
+
     /** Published so the UI can show a blocking "Loading <model>…" alert while a model is
      *  actually loading into memory, and auto-dismiss once it's ready — whether loading was
      *  triggered eagerly by [preload] (right when the model is selected) or lazily by the first
@@ -85,13 +92,33 @@ object OfflineInferenceEngine {
     // whatever the UI does next — see the class doc.
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
-    /** Registers for system memory-pressure callbacks — call once from `LensWhisperApplication.onCreate`. */
+    /** Registers for system memory-pressure callbacks — call once from `LensWhisperApplication.onCreate`.
+     *
+     *  Also releases the loaded model the moment the user leaves the app: [ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN]
+     *  is Android's one-shot signal that none of the process's UI is visible any more — fired on
+     *  Home, on switching to another app, or on backing out of the last activity, regardless of
+     *  which of the app's several activities was in front. That makes it a better hook here than
+     *  an `onDestroy`/`onStop` in each activity individually: this app has no single "root"
+     *  activity whose lifecycle stands in for the whole app, and per-activity `onPause` already
+     *  fires on the ordinary "camera screen resumes MediaDescriber's onResume runs first" activity
+     *  swaps this app does internally, which would release the model on every such swap, not just
+     *  on actually leaving the app.
+     *
+     *  Trade-off worth knowing: a brief switch away and straight back (checking a notification,
+     *  say) now costs a full reload — up to [LOAD_TIMEOUT_MS] worst case, ~10s normally — on
+     *  return, where previously the model stayed warm. That's the deliberate exchange for not
+     *  holding a 1-3GB model in memory for a backgrounded, screen-reader-driven app the user isn't
+     *  looking at. */
     fun registerMemoryPressureMonitor(app: android.app.Application) {
         app.registerComponentCallbacks(object : ComponentCallbacks2 {
             override fun onTrimMemory(level: Int) {
                 if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                     _lowMemoryPressure.value = true
                     Log.w(TAG, "System reported critical memory pressure (level=$level) while loadState=${_loadState.value}")
+                }
+                if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN && loadedEngine != null) {
+                    Log.i(TAG, "App backgrounded (all UI hidden) — releasing ${loadedModelId}")
+                    release()
                 }
             }
             override fun onConfigurationChanged(newConfig: Configuration) {}
@@ -102,6 +129,17 @@ object OfflineInferenceEngine {
     @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     private suspend fun ensureEngine(context: Context, model: OfflineModelInfo): Engine = mutex.withLock {
         loadedEngine?.let { if (loadedModelId == model.id) { _loadState.value = LoadState.Ready(model.id); return@withLock it } }
+
+        // Release whatever's currently loaded (a different model, if any) BEFORE checking whether
+        // the new one will fit. The check below reads system-wide available memory, so it has to
+        // see memory as it will actually be once the old model is gone — checking first and
+        // closing after would spuriously fail a switch between two similarly-sized models whose
+        // combined size doesn't fit, even though either one alone fits fine. This is also the
+        // actual point where "switching models frees the old one's memory" happens.
+        loadedEngine?.close()
+        loadedEngine = null
+        loadedModelId = null
+        _loadState.value = LoadState.Idle
 
         // Hard pre-check, right before actually starting: if free memory is already below the
         // model's raw file size, it cannot possibly load — fail immediately with a clear message
@@ -118,9 +156,6 @@ object OfflineInferenceEngine {
 
         _loadState.value = LoadState.Loading(model.id)
         _lowMemoryPressure.value = false
-        loadedEngine?.close()
-        loadedEngine = null
-        loadedModelId = null
 
         val modelFile = OfflineModelsRepository(context.applicationContext).localFileFor(model)
 
@@ -191,7 +226,7 @@ object OfflineInferenceEngine {
 
     /**
      * Runs one query against [model] with the given image(s) and prompt. Returns the model's
-     * text response, or an "ERROR: ..." string on failure — matching [com.appricodes.lens_whisper.network.XaiVisionEngine]'s
+     * text response, or an "ERROR: ..." string on failure — matching [com.appricodes.lens_whisper.network.LocalServerEngine]'s
      * convention so callers can handle both the same way.
      */
     suspend fun analyze(
@@ -207,7 +242,8 @@ object OfflineInferenceEngine {
         suspend fun runOnce(): String {
             val engine = ensureEngine(context, model)
             val conversationConfig = ConversationConfig(
-                systemInstruction = Contents.of(Content.Text(systemInstruction))
+                systemInstruction = Contents.of(Content.Text(systemInstruction)),
+                maxOutputToken = MAX_OUTPUT_TOKENS
             )
             return engine.createConversation(conversationConfig).use { conversation ->
                 val contents = mutableListOf<Content>()
@@ -297,7 +333,8 @@ object OfflineInferenceEngine {
         suspend fun collectOnce(emit: suspend (String) -> Unit) {
             val engine = ensureEngine(context, model)
             val conversationConfig = ConversationConfig(
-                systemInstruction = Contents.of(Content.Text(systemInstruction))
+                systemInstruction = Contents.of(Content.Text(systemInstruction)),
+                maxOutputToken = MAX_OUTPUT_TOKENS
             )
             engine.createConversation(conversationConfig).use { conversation ->
                 val contents = mutableListOf<Content>()

@@ -2,135 +2,106 @@ package com.appricodes.lens_whisper.ads
 
 import android.app.Activity
 import android.content.Context
+import android.os.Bundle
 import android.util.Log
-import com.appricodes.lens_whisper.data.PreferencesManager
-import com.appricodes.lens_whisper.network.AdRevenueClient
+import com.google.ads.mediation.admob.AdMobAdapter
 import com.google.android.gms.ads.AdError
 import com.google.android.gms.ads.AdRequest
 import com.google.android.gms.ads.FullScreenContentCallback
 import com.google.android.gms.ads.LoadAdError
-import com.google.android.gms.ads.OnPaidEventListener
 import com.google.android.gms.ads.rewarded.RewardedAd
 import com.google.android.gms.ads.rewarded.RewardedAdLoadCallback
-import com.google.android.gms.ads.rewarded.ServerSideVerificationOptions
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 
 /**
- * Lets a user earn free credits by watching a rewarded (video) ad — see the "Watch an Ad" section
- * of `ui/components/CreditsDialog.kt`, which is the only caller. No purchase alternative right now
- * — see LOGIN_AND_PURCHASES_REMOVED.md at the repo root for why.
+ * Plays one optional video advertisement when the user chooses "Support Development".
  *
- * **Setup note (same pattern as [com.appricodes.lens_whisper.REVENUECAT_PUBLIC_SDK_KEY]):**
- * [AD_UNIT_ID] and the `APPLICATION_ID` meta-data in `AndroidManifest.xml` are the real IDs from
- * the developer's own AdMob console (set 2026-08-24, replacing Google's placeholder test IDs).
- * Still required as a one-time console step, not doable from this file: configure this ad unit's
- * Server-Side Verification callback URL to `https://lw.wikiponder.com/admob_ssv_callback.php`
- * (AdMob console > this ad unit > Server-side verification) — until that's set, Google's ad
- * servers never call the endpoint at all, so no credit is ever granted no matter what the PHP
- * side does.
+ * **The ad grants nothing.** There is no reward, no credit, no unlock and no server round trip —
+ * every model in the app runs on-device, so nothing costs anything per use and there is nothing
+ * to meter. Watching is purely a way to support the developer, and the app is fully functional
+ * for a user who never does. That is also what makes the consent [AdConsentManager] collects
+ * genuinely freely given: declining costs the user no functionality at all.
  *
- * **Crediting happens server-side, not here.** [showAd]'s `onEarned` callback is only the
- * client-side "the SDK saw a reward" signal — trusting that alone to grant credits is trivially
- * spoofable on a modified client. The actual grant happens when Google's ad servers call
- * `backend/admob_ssv_callback.php` directly, keyed by the `installId` [showAd] attaches to
- * the ad via [ServerSideVerificationOptions] before showing it. `onEarned` here just triggers a
- * "thanks, your balance will update shortly" message and a delayed re-fetch — see `CreditsDialog.kt`.
+ * Consequences worth keeping in mind before "improving" any of this:
+ * - No `ServerSideVerificationOptions` and no custom data. There is nothing for a reward callback
+ *   to verify, and the install identifier that used to be attached here no longer exists.
+ * - No `OnPaidEventListener` revenue logging. That reported to a backend this app no longer has.
+ * - **Non-personalised only.** [nonPersonalizedRequest] pins `npa=1` on every request. This app's
+ *   install base is overwhelmingly blind and low-vision users, so the package name alone
+ *   correlates with disability — feeding that into interest-based targeting would push data that
+ *   is health-adjacent into an ad profile. Do not remove this to raise eCPM.
+ * - **Rewarded format only — never a banner or an interstitial.** A banner is invisible to a
+ *   screen-reader user but still lands in the TalkBack swipe order, so it gets activated by
+ *   accident constantly; that is both a miserable experience and an invalid-traffic risk to the
+ *   AdMob account.
  *
- * **Revenue logging is separate from all of the above.** [showAd] also attaches an
- * [OnPaidEventListener], the only per-impression revenue figure Google exposes anywhere (the SSV
- * callback carries no monetary value) — see [AdRevenueClient]'s doc for why that makes it
- * best-effort/analytics-only, never something crediting depends on.
+ * [AD_UNIT_ID] and the `APPLICATION_ID` meta-data in `AndroidManifest.xml` are the developer's own
+ * AdMob IDs.
  */
 object RewardedAdManager {
     private const val TAG = "RewardedAdManager"
 
     private const val AD_UNIT_ID = "ca-app-pub-9386480260190622/6395336158"
 
-    const val CREDITS_PER_AD = 2
-
     private var rewardedAd: RewardedAd? = null
     private var isLoading = false
 
-    // Fire-and-forget scope for AdRevenueClient posts — deliberately outlives any single showAd()
-    // call (a slow/late-arriving OnPaidEventListener callback shouldn't get cancelled just because
-    // the dialog that triggered it was dismissed in the meantime).
-    private val revenueLogScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    /** Every request this app makes, personalisation explicitly off. */
+    private fun nonPersonalizedRequest(): AdRequest {
+        val extras = Bundle().apply { putString("npa", "1") }
+        return AdRequest.Builder()
+            .addNetworkExtrasBundle(AdMobAdapter::class.java, extras)
+            .build()
+    }
 
-    /** Starts loading an ad into memory ahead of time so it's ready the moment the user taps
-     *  "Watch an Ad" — call from `LensWhisperApplication.onCreate` and again whenever the credits
-     *  dialog opens (a no-op if one's already loaded or loading). */
-    fun preload(context: Context) {
-        if (rewardedAd != null || isLoading) return
+    /**
+     * Loads an ad into memory. Only ever called after [AdConsentManager] has confirmed ads may be
+     * requested — never from `Application.onCreate`, which is what it used to be called from.
+     */
+    fun load(context: Context, onLoaded: () -> Unit = {}, onFailed: () -> Unit = {}) {
+        if (rewardedAd != null) { onLoaded(); return }
+        if (isLoading) return
         isLoading = true
-        RewardedAd.load(context.applicationContext, AD_UNIT_ID, AdRequest.Builder().build(), object : RewardedAdLoadCallback() {
+        RewardedAd.load(context.applicationContext, AD_UNIT_ID, nonPersonalizedRequest(), object : RewardedAdLoadCallback() {
             override fun onAdLoaded(ad: RewardedAd) {
                 isLoading = false
                 rewardedAd = ad
+                onLoaded()
             }
 
             override fun onAdFailedToLoad(error: LoadAdError) {
                 isLoading = false
                 rewardedAd = null
                 Log.w(TAG, "Rewarded ad failed to load: ${error.message}")
+                onFailed()
             }
         })
     }
 
     /**
-     * Shows the preloaded ad if one is ready. Exactly one of [onEarned]/[onUnavailable] fires;
-     * [onDismissedWithoutReward] additionally fires if the user closes the ad before it finishes
-     * (no reward in that case, even though it played).
-     *
-     * [installId] must be [com.appricodes.lens_whisper.data.PreferencesManager.installId] — it's
-     * what `backend/admob_ssv_callback.php` matches against `install_credits.install_id` to know
-     * whose balance to credit once Google confirms the reward.
+     * Shows a loaded ad. [onFinished] fires once the ad is gone, however it went — watched fully,
+     * closed early, or failed to show — because nothing depends on the difference any more.
+     * [onUnavailable] fires when there was no ad to show in the first place.
      */
-    fun showAd(
-        activity: Activity,
-        installId: String,
-        onEarned: () -> Unit,
-        onUnavailable: () -> Unit,
-        onDismissedWithoutReward: () -> Unit = {}
-    ) {
+    fun showAd(activity: Activity, onFinished: () -> Unit, onUnavailable: () -> Unit) {
         val ad = rewardedAd
         if (ad == null) {
-            preload(activity)
             onUnavailable()
             return
         }
 
-        ad.setServerSideVerificationOptions(
-            ServerSideVerificationOptions.Builder().setCustomData(installId).build()
-        )
-
-        // The only per-impression revenue signal that exists anywhere — see AdRevenueClient's
-        // doc. Not tied to crediting in any way, purely a best-effort analytics log.
-        ad.onPaidEventListener = OnPaidEventListener { adValue ->
-            revenueLogScope.launch { AdRevenueClient.logRevenue(installId, AD_UNIT_ID, adValue) }
-        }
-
-        var earnedReward = false
         ad.fullScreenContentCallback = object : FullScreenContentCallback() {
             override fun onAdDismissedFullScreenContent() {
                 rewardedAd = null
-                preload(activity)
-                if (!earnedReward) onDismissedWithoutReward()
+                onFinished()
             }
 
             override fun onAdFailedToShowFullScreenContent(adError: AdError) {
                 rewardedAd = null
-                preload(activity)
                 Log.w(TAG, "Rewarded ad failed to show: ${adError.message}")
                 onUnavailable()
             }
         }
 
-        ad.show(activity) { _ ->
-            earnedReward = true
-            onEarned()
-        }
+        ad.show(activity) { /* No reward is granted — see this object's doc. */ }
     }
 }
