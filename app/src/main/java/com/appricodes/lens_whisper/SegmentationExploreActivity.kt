@@ -59,10 +59,15 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import com.appricodes.lens_whisper.data.PreferencesManager
+import com.appricodes.lens_whisper.data.SettingsRepository
+import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineColorDetector
+import com.appricodes.lens_whisper.offline.SegmentationIsolation
 import com.appricodes.lens_whisper.offline.SegmentationSpeedGate
+import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
+import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.CameraController
 import com.appricodes.lens_whisper.ui.components.ImmersiveBackButton
 import com.appricodes.lens_whisper.ui.components.ImmersiveFullScreen
@@ -77,6 +82,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -94,16 +100,27 @@ private const val MAX_CAPTURE_DIMENSION = 2500
  * exact per-pixel masks rather than a coarse VLM-described grid, so a finger genuinely has to be
  * *on* an object (not just inside its rough bounding area) to name it.
  *
- * Two ways to learn what's in the photo, both on [HoverExploreLayer]:
+ * Two ways to learn what's in the photo, both on [HoverExploreLayer] — hover works identically in
+ * either of this Activity's two modes; only what a *tap* does differs:
  * - **Continuous hover**: move a finger over the photo to hear whatever is under it, with haptic +
  *   tone feedback on crossing into/out of an object (see [HoverFeedback]) so a blind user can feel
  *   an edge, not just hear about it after the fact. Every object also gets a visible outline (dark
  *   red normally, brightening while the finger is on it) — sighted-assistant/low-vision use, not
  *   needed for the audio path itself.
- * - **A single tap** opens [ExploreMenu] — Color Report (a toggle, see [HoverExploreLayer]'s doc),
- *   Share Photo, Capture New Photo, then every detected object at once with a coarse spatial
- *   location (read-only — a fully TalkBack-navigable list needs no finger-precision at all, unlike
- *   a grid of small cells, but doesn't need to be actionable either).
+ * - **A single tap**, in the default mode reached from Basic Tasks' "Explore Photo by Touch",
+ *   opens [ExploreMenu] — Color Report (a toggle, see [HoverExploreLayer]'s doc), Share Photo,
+ *   Capture New Photo, then every detected object at once with a coarse spatial location
+ *   (read-only — a fully TalkBack-navigable list needs no finger-precision at all, unlike a grid of
+ *   small cells, but doesn't need to be actionable either).
+ *
+ * **Describe-mode** — reached only from the on-device VLM catalog's "Explore and Describe" (see
+ * `OfflineVlmButtonProvider`), signaled by the `VLM_DESCRIBE_MODE` intent extra — replaces that tap
+ * behavior entirely: a tap sends whatever object is currently under the finger, isolated onto a
+ * white background at full sensor resolution (see [SegmentationIsolation], fed from the
+ * `HIGH_RES_IMAGE_URI` extra this mode also requires), to the selected on-device model for a
+ * detailed description, cancelling and replacing any still-in-flight analysis from a previous tap.
+ * No [ExploreMenu] in this mode — see [analyzeTappedObject]'s doc for why "Capture New Photo" isn't
+ * offered as a long-press instead.
  *
  * Full-screen ([ImmersiveFullScreen]): no status/nav bar, a small [ImmersiveBackButton] in the
  * bottom-right corner instead.
@@ -112,11 +129,21 @@ class SegmentationExploreActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val imageUri = intent?.getStringExtra("IMAGE_URI")?.let { Uri.parse(it) }
+        val highResImageUri = intent?.getStringExtra("HIGH_RES_IMAGE_URI")?.let { Uri.parse(it) }
+        val describeMode = intent?.getBooleanExtra("VLM_DESCRIBE_MODE", false) ?: false
         val prefs = PreferencesManager(this)
+        val settings = SettingsRepository(this).loadSettingsFromAssets()
 
         setContent {
             LensWhisperTheme {
-                SegmentationExploreScreen(prefs = prefs, imageUri = imageUri, onClose = { finish() })
+                SegmentationExploreScreen(
+                    prefs = prefs,
+                    settings = settings,
+                    imageUri = imageUri,
+                    highResImageUri = highResImageUri,
+                    describeMode = describeMode,
+                    onClose = { finish() }
+                )
             }
         }
     }
@@ -166,11 +193,22 @@ private suspend fun <T> coroutineScopeWithWaitingTone(context: Context, external
     }
 
 @Composable
-private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?, onClose: () -> Unit) {
+private fun SegmentationExploreScreen(
+    prefs: PreferencesManager,
+    settings: AppSettings,
+    imageUri: Uri?,
+    highResImageUri: Uri?,
+    describeMode: Boolean,
+    onClose: () -> Unit
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
     val cameraController = remember { CameraController(context) }
+    // Only actually used in describeMode (see analyzeTappedObject) — created unconditionally
+    // anyway, same as every other Compose remember in this function, rather than only sometimes
+    // calling it depending on a runtime value.
+    val controller = rememberAnalysisSessionController(context, prefs)
 
     var isLoading by remember { mutableStateOf(true) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -178,6 +216,11 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
     // file (see MlkitButtonProvider.launchSegmentationExplore's Uri.fromFile), and "Capture new
     // photo" below writes a fresh one the same way.
     var currentPhotoFile by remember { mutableStateOf(imageUri?.path?.let { File(it) }) }
+    // describeMode's high-res source file for SegmentationIsolation — see CameraActivity's
+    // captureMaxResPair/DualResCapture doc for why this is a file, not a held bitmap. Never
+    // replaced after launch: describeMode offers no "Capture New Photo" (see analyzeTappedObject's
+    // doc), so there is no second high-res file to switch to mid-session.
+    val highResFile = remember(highResImageUri) { highResImageUri?.path?.let { File(it) } }
     var instances by remember { mutableStateOf<List<DetectedInstance>>(emptyList()) }
     // Each instance's full spoken sentence, built via DetectionPhrasing.describeDetection and
     // computed once right after detection rather than on every hover/touch — Palette color
@@ -187,10 +230,87 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
     var showPopup by remember { mutableStateOf(false) }
     var colorReportEnabled by remember { mutableStateOf(false) }
     var showSlowModelDialog by remember { mutableStateOf(false) }
+    // describeMode's tap-serialization state — see startDescribe's doc for why this queues rather
+    // The coroutine currently running one describeMode tap's isolate+analyze pipeline, if any —
+    // cancelled and replaced the moment a new tap names a different object. activeDescribeInstance
+    // is which object that is, so a repeat tap on the same one (still active) is a no-op instead of
+    // restarting it. See analyzeTappedObject.
+    var activeDescribeJob by remember { mutableStateOf<Job?>(null) }
+    var activeDescribeInstance by remember { mutableStateOf<DetectedInstance?>(null) }
 
     BackHandler { onClose() }
     DisposableEffect(cameraController) { onDispose { cameraController.shutdown() } }
     ImmersiveFullScreen()
+
+    /**
+     * describeMode's tap handler: isolates [hit] from the full-resolution original (see
+     * [SegmentationIsolation]) and asks the selected on-device model to describe it, cancelling
+     * whatever the *previous* tap started first — a deliberate replace, not a busy-block, which is
+     * why this calls [AnalysisSessionController.runAnalysisOnBitmap] directly rather than going
+     * through [AnalysisSessionController.runGuarded]. Tapping the object already active is a no-op.
+     *
+     * **Waits for the previous job to fully finish unwinding ([Job.cancelAndJoin]) before starting
+     * the new one — plain `cancel()` alone is not safe here**, and neither is `cancelAndJoin` on
+     * its own: confirmed the hard way on a real device, twice, with an identical native SIGSEGV
+     * inside the vendored LiteRT-LM/GPU-delegate library. The actual cause turned out to be one
+     * step further down than the Kotlin cancellation itself — see
+     * [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.analyzeStreaming]'s own
+     * `CancellationException` handler, which now calls `Conversation.cancelProcess()` before its
+     * `use{}` block's implicit `close()` runs, exactly because closing a `Conversation` while it's
+     * still generating (rather than properly halting it first) is what actually crashed. With that
+     * fixed at the source, `cancelAndJoin()` here is correct again: it just needs to guarantee the
+     * previous job's cancellation has *fully* unwound (cancelProcess + close both done) before this
+     * function's own new `Conversation` opens, which is exactly what it does.
+     *
+     * The waiting tone is deliberately started/stopped as a *child* of this same job
+     * ([describeScope], mirroring [captureNewPhoto]'s own `captureScope` pattern below) rather than
+     * via [AnalysisSessionController.startProcessingChime]/`stopProcessingChime` — that pair lives
+     * on the controller's own field, so cancelling one tap's job and immediately starting the next
+     * one's `startProcessingChime()` call can reassign that field to the *new* tone before the
+     * cancelled job's `finally` gets a chance to stop what it thinks is still "its" tone (cancellation
+     * only requests a stop; it doesn't wait for one) — silently killing the new tap's tone instead
+     * of the old one's. A tone job that dies with its own parent job can't have that race.
+     *
+     * No "Capture New Photo" affordance in this mode: the natural place to add one would be a
+     * long-press, but this layer's whole interaction model is *resting/moving a finger on an
+     * object* — a long-press and a deliberate dwell are the same physical gesture here, so the two
+     * would conflict. Backing out and pressing "Explore and Describe" again re-captures instead.
+     */
+    fun analyzeTappedObject(hit: DetectedInstance) {
+        if (hit == activeDescribeInstance) return
+        val loadedBitmap = bitmap
+        val file = highResFile
+        if (loadedBitmap == null || file == null) {
+            AccessibilityUtils.announceToTalkBack(context, "Could not analyze that object.")
+            return
+        }
+        val previousJob = activeDescribeJob
+        activeDescribeInstance = hit
+        activeDescribeJob = coroutineScope.launch {
+            // See this function's doc — must fully finish before a new native inference call
+            // starts, not just be asked to stop.
+            previousJob?.cancelAndJoin()
+            val describeScope = this
+            val toneJob = describeScope.launch(Dispatchers.IO) {
+                while (true) {
+                    ProcessingSoundPlayer.playWaitingTone(context)
+                    delay(1100)
+                }
+            }
+            try {
+                val isolated = withContext(Dispatchers.Default) { SegmentationIsolation.isolate(loadedBitmap, hit, file) }
+                if (isolated == null) {
+                    AccessibilityUtils.announceToTalkBack(context, "Could not isolate that object.")
+                    return@launch
+                }
+                val config = settings.prompts.find { it.id == "detailed_scene" } ?: return@launch
+                controller.runAnalysisOnBitmap(config, isolated)
+            } finally {
+                toneJob.cancel()
+                if (activeDescribeInstance == hit) activeDescribeInstance = null
+            }
+        }
+    }
 
     suspend fun runDetection(loadedBitmap: Bitmap, externalToneJob: Job? = null) {
         isLoading = true
@@ -206,7 +326,12 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
             instances = detected
             descriptions = described
             ProcessingSoundPlayer.playScreenOpened(context)
-            AccessibilityUtils.announceToTalkBack(context, "Touch the screen to hear what's there. Tap anywhere for more options.")
+            val hint = if (describeMode) {
+                "Touch the screen to hear what's there. Tap an object for a detailed AI description."
+            } else {
+                "Touch the screen to hear what's there. Tap anywhere for more options."
+            }
+            AccessibilityUtils.announceToTalkBack(context, hint)
         }
     }
 
@@ -291,7 +416,15 @@ private fun SegmentationExploreScreen(prefs: PreferencesManager, imageUri: Uri?,
                 instances = instances,
                 descriptions = descriptions,
                 colorReportEnabled = colorReportEnabled,
-                onTap = { showPopup = true }
+                describeMode = describeMode,
+                onTap = { hit ->
+                    if (describeMode) {
+                        if (hit != null) analyzeTappedObject(hit)
+                        else AccessibilityUtils.announceToTalkBack(context, "No object under your finger.")
+                    } else {
+                        showPopup = true
+                    }
+                }
             )
         }
 
@@ -467,7 +600,11 @@ private val OUTLINE_COLOR_ACTIVE = Color(0xFFFF4444) // bright red — the objec
  * in between) — the raw-touch path for a sighted/mouse/stylus user. A TalkBack user reaches the
  * same thing through the ordinary double-tap-to-activate gesture, wired via `semantics { onClick }`
  * below — TalkBack consumes that gesture at the accessibility-service level before it ever becomes
- * a raw Press/Release pair here, so the two paths never double-fire for the same tap.
+ * a raw Press/Release pair here, so the two paths never double-fire for the same tap. Receives
+ * whatever object was under the finger at that exact instant ([currentHitInstance] — null over
+ * empty space) rather than the caller having to track hover state of its own: the default mode
+ * ignores it and opens the options menu regardless, but describeMode (see
+ * [SegmentationExploreActivity]'s doc) needs to know exactly which object to analyze.
  */
 @Composable
 private fun HoverExploreLayer(
@@ -475,7 +612,8 @@ private fun HoverExploreLayer(
     instances: List<DetectedInstance>,
     descriptions: Map<DetectedInstance, String>,
     colorReportEnabled: Boolean,
-    onTap: () -> Unit
+    describeMode: Boolean,
+    onTap: (DetectedInstance?) -> Unit
 ) {
     val context = LocalContext.current
     var currentHitInstance by remember { mutableStateOf<DetectedInstance?>(null) }
@@ -550,8 +688,12 @@ private fun HoverExploreLayer(
             .fillMaxSize()
             .onSizeChanged { containerSize = it }
             .semantics {
-                contentDescription = "Photo. Move your finger over it to hear what's there, or double tap for more options."
-                onClick { onTap(); true }
+                contentDescription = if (describeMode) {
+                    "Photo. Move your finger over it to hear what's there, or double tap an object for a detailed AI description."
+                } else {
+                    "Photo. Move your finger over it to hear what's there, or double tap for more options."
+                }
+                onClick { onTap(currentHitInstance); true }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -594,7 +736,7 @@ private fun HoverExploreLayer(
                                         val releasePos = event.changes.first().position
                                         val moved = (releasePos - downPos).getDistance()
                                         val elapsed = System.currentTimeMillis() - pressTimeMs
-                                        if (moved < 24f && elapsed < 400) onTap()
+                                        if (moved < 24f && elapsed < 400) onTap(currentHitInstance)
                                     }
                                     pressPosition = null
                                 }

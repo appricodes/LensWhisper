@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
@@ -48,6 +49,8 @@ import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.legal.LegalTexts
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.LocalServerFeature
+import com.appricodes.lens_whisper.offline.SegmentationIsolation
+import com.appricodes.lens_whisper.offline.SegmentationSpeedGate
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
@@ -65,13 +68,18 @@ import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.ImageScaling
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import com.appricodes.lens_whisper.utils.VolumeKeyGestureHandler
 import androidx.lifecycle.lifecycleScope
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
 
 /**
  * The app's launcher: one screen for every camera-based model. No live camera preview is ever
@@ -130,6 +138,18 @@ class CameraActivity : ComponentActivity() {
 
 private const val MAX_CAPTURE_DIMENSION = 2500
 private const val EXIT_CONFIRM_WINDOW_MS = 2000L
+
+// "Describe TV Image"/"Explore and Describe" — the long edge of the 720p segmentation copy
+// captureMaxResPair derives from the max-resolution original, matching CameraController's own
+// RESOLUTION_720P convention (every other segmentation-driven button already detects at this size).
+private const val SEGMENTATION_COPY_MAX_DIM = 1280
+
+/** What [captureMaxResPair] hands back: a 720p copy (for segmentation and, in
+ *  [SegmentationExploreActivity]'s describe-mode, for display) plus the *file* the same capture was
+ *  written to at full sensor resolution — a File, not a decoded Bitmap, so nothing here holds the
+ *  ~35MB+ full decode in memory a moment longer than it takes to produce [lowResBitmap]; see
+ *  [SegmentationIsolation]'s doc for why. */
+private data class DualResCapture(val lowResBitmap: Bitmap, val highResFile: File)
 
 private fun cameraFacingName(lensFacing: Int) =
     if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back"
@@ -310,6 +330,114 @@ private fun CameraScreen(
         }
     }
 
+    /**
+     * Captures once at the camera's maximum resolution and derives a 720p copy from it — shared by
+     * "Describe TV Image" and "Explore and Describe" (see [DualResCapture]'s doc for why the
+     * high-res side is a file, not a held bitmap). [onShutter] fires at the exact moment of
+     * exposure, same as every other capture path — see [CameraController.capturePhotoInternal].
+     */
+    suspend fun captureMaxResPair(onShutter: () -> Unit): DualResCapture? {
+        if (!cameraPermissionGranted) return null
+        return try {
+            val frame = cameraController.withCaptureSession(lifecycleOwner, flashEnabled, maxResolution = true) {
+                // No maxDim cap here (Int.MAX_VALUE) — the whole point of this capture tier is to
+                // keep the sensor's actual resolution intact for SegmentationIsolation to crop from.
+                cameraController.capturePhotoToFile(Int.MAX_VALUE, onShutter)
+            }
+            val highResFile = frame.uri.path?.let { File(it) } ?: return null
+            val lowRes = ImageScaling.scaleToMax(frame.bitmap, SEGMENTATION_COPY_MAX_DIM)
+            // Free the full-resolution decode the instant the 720p copy exists — SegmentationIsolation
+            // re-decodes only what it needs from highResFile later, so nothing needs this bitmap
+            // again. Guarded: scaleToMax returns the same instance, unchanged, when it's already
+            // within bounds, and recycling that would recycle what we're about to return as lowRes.
+            if (lowRes !== frame.bitmap) frame.bitmap.recycle()
+            DualResCapture(lowRes, highResFile)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * "Describe TV Image": captures the max-res/720p pair above, detects on the 720p copy, picks
+     * the highest-confidence "tv" instance (COCO has no distinct "picture frame"/monitor class to
+     * fall back to — see [com.appricodes.lens_whisper.offline.CocoLabels] — and YOLO-COCO's `tv`
+     * class already tends to fire on framed screens/monitors generally), isolates it from the
+     * full-resolution original via [SegmentationIsolation], and asks the selected on-device model
+     * to describe it in detail. Wrapped in [AnalysisSessionController.runGuarded] by its caller so
+     * the whole pipeline — not just the final model call — is covered by the usual busy gate.
+     */
+    suspend fun runDescribeTv() {
+        controller.runGuarded {
+            ProcessingSoundPlayer.playCaptureAcknowledge(context)
+            // Tone starts the instant the shutter fires, same as every other segmentation-driven
+            // button — it covers detection + isolation + the model call, not just the last of those.
+            val capture = captureMaxResPair { controller.startProcessingChime() }
+            if (capture == null) {
+                controller.stopProcessingChime()
+                AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                return@runGuarded
+            }
+            val instances = withContext(Dispatchers.Default) {
+                SegmentationSpeedGate.detect(context, capture.lowResBitmap, prefs) { mlkitProvider.showSlowModelPrompt() }
+            }
+            val tvInstance = instances.filter { it.label == "tv" }.maxByOrNull { it.confidence }
+            if (tvInstance == null) {
+                controller.stopProcessingChime()
+                AccessibilityUtils.announceToTalkBack(context, "No TV or screen found.")
+                return@runGuarded
+            }
+            val isolated = withContext(Dispatchers.Default) {
+                SegmentationIsolation.isolate(capture.lowResBitmap, tvInstance, capture.highResFile)
+            }
+            if (isolated == null) {
+                controller.stopProcessingChime()
+                AccessibilityUtils.announceToTalkBack(context, "Could not isolate the TV image.")
+                return@runGuarded
+            }
+            val config = settings.prompts.find { it.id == "detailed_scene" }
+            if (config == null) {
+                controller.stopProcessingChime()
+                return@runGuarded
+            }
+            controller.runAnalysisOnBitmap(config, isolated)
+        }
+    }
+
+    /**
+     * "Explore and Describe": captures the same max-res/720p pair as [runDescribeTv], then opens
+     * [SegmentationExploreActivity] in its describe-mode — same detection/hover UI as the Basic
+     * Tasks "Explore Photo by Touch" screen, but a tap analyzes the touched object with the on
+     * -device model instead of opening the options menu (see that Activity's own doc). Passes the
+     * full-res *file* through the Intent (a Bitmap can't safely cross one, and holding the decoded
+     * bitmap for the whole Explore session is exactly what [DualResCapture] avoids).
+     */
+    suspend fun launchExploreAndDescribeFlow() {
+        controller.runGuarded {
+            ProcessingSoundPlayer.playCaptureAcknowledge(context)
+            // No tone starts here — SegmentationExploreActivity owns its own "waiting for the
+            // model" cue for the initial detection pass, started once it actually receives the
+            // image, same convention launchSegmentationExplore already follows.
+            val capture = captureMaxResPair {}
+            if (capture == null) {
+                AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                return@runGuarded
+            }
+            val lowResUri = withContext(Dispatchers.IO) {
+                val file = File(context.cacheDir, "explore_describe_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(file).use { capture.lowResBitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                Uri.fromFile(file)
+            }
+            context.startActivity(
+                Intent(context, SegmentationExploreActivity::class.java)
+                    .putExtra("IMAGE_URI", lowResUri.toString())
+                    .putExtra("HIGH_RES_IMAGE_URI", Uri.fromFile(capture.highResFile).toString())
+                    .putExtra("VLM_DESCRIBE_MODE", true)
+            )
+        }
+    }
+
     fun gate(action: () -> Unit) = controller.gateForSelectedModel(selectedModelId, selectedOfflineModel, action)
 
     val ctx = ModelButtonContext(
@@ -332,6 +460,8 @@ private fun CameraScreen(
             if (selectedModelId == "mlkit") mlkitProvider.repeatLastSpoken()
             else gate { coroutineScope.launch { controller.onRepeat(selectedModelId, captureFrames) } }
         },
+        onDescribeTv = { gate { coroutineScope.launch { runDescribeTv() } } },
+        onExploreAndDescribe = { gate { coroutineScope.launch { launchExploreAndDescribeFlow() } } },
         onRecordCustomPrompt = { slotIndex ->
             gate { controller.startVoiceRecognition(targetCustomSlot = slotIndex, captureFrames = captureFrames) }
         }

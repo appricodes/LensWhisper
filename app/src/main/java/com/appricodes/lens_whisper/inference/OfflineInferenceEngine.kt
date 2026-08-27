@@ -349,19 +349,35 @@ object OfflineInferenceEngine {
                 contents.add(Content.Text(userPrompt))
 
                 var cumulativeSoFar = ""
-                val completed = withTimeoutOrNull(INFERENCE_TIMEOUT_MS) {
-                    conversation.sendMessageAsync(Contents.of(contents)).collect { message ->
-                        val text = message.toString()
-                        val delta = if (text.startsWith(cumulativeSoFar)) text.substring(cumulativeSoFar.length) else text
-                        cumulativeSoFar += delta
-                        if (delta.isNotEmpty()) {
-                            // Verifies this is genuinely streaming, not one lump at the end — compare
-                            // consecutive timestamps of this exact line in logcat.
-                            Log.d(TAG, "STREAM[offline/${model.id}] chunk (${delta.length} chars): ${delta.take(60).replace("\n", "\\n")}")
-                            emit(delta)
+                val completed = try {
+                    withTimeoutOrNull(INFERENCE_TIMEOUT_MS) {
+                        conversation.sendMessageAsync(Contents.of(contents)).collect { message ->
+                            val text = message.toString()
+                            val delta = if (text.startsWith(cumulativeSoFar)) text.substring(cumulativeSoFar.length) else text
+                            cumulativeSoFar += delta
+                            if (delta.isNotEmpty()) {
+                                // Verifies this is genuinely streaming, not one lump at the end — compare
+                                // consecutive timestamps of this exact line in logcat.
+                                Log.d(TAG, "STREAM[offline/${model.id}] chunk (${delta.length} chars): ${delta.take(60).replace("\n", "\\n")}")
+                                emit(delta)
+                            }
                         }
+                        true
                     }
-                    true
+                } catch (e: CancellationException) {
+                    // A caller cancelling this collection mid-stream (e.g. "Explore and Describe"
+                    // replacing an in-flight tap's analysis with a new one — see
+                    // SegmentationExploreActivity) propagates a CancellationException through here,
+                    // straight into this use{} block's implicit close() right after this rethrows.
+                    // Closing the native Conversation while generation is still active crashes the
+                    // whole process with a native SIGSEGV inside the GPU delegate — confirmed
+                    // on-device, twice, identical signature both times. cancelProcess() halts
+                    // generation immediately and synchronously (per litertlm-android's own contract:
+                    // "you do not need to destroy and recreate the session to free up resources"),
+                    // so by the time close() actually runs, there's nothing active left to tear down
+                    // out from under.
+                    conversation.cancelProcess()
+                    throw e
                 }
                 if (completed != true) {
                     Log.w(TAG, "Streaming inference on ${model.id} exceeded ${INFERENCE_TIMEOUT_MS}ms — likely a low-memory thrash")

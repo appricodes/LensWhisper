@@ -164,6 +164,11 @@ class CameraController(private val context: Context) {
         lifecycleOwner: LifecycleOwner,
         flashEnabled: Boolean,
         highResolution: Boolean = false,
+        // "Describe TV Image"/"Explore and Describe" pass true — they isolate one object out of
+        // the rest of the photo at full detail (see SegmentationIsolation), which needs whatever
+        // resolution the sensor actually has, not just 1080p. Takes priority over [highResolution]
+        // if both are somehow true. Left false by every other caller.
+        maxResolution: Boolean = false,
         block: suspend () -> T
     ): T {
         cameraMutex.withLock {
@@ -172,9 +177,10 @@ class CameraController(private val context: Context) {
             captureSessionDepth++
             boundLifecycleOwner = lifecycleOwner
             captureFlashEnabled = flashEnabled
-            // Read Text/Read Document pass true; every other capture leaves this at the 720p
-            // default — see RESOLUTION_1080P/RESOLUTION_720P's doc.
-            captureTargetResolution = if (highResolution) RESOLUTION_1080P else RESOLUTION_720P
+            // Read Text/Read Document pass highResolution; Describe TV Image/Explore and Describe
+            // pass maxResolution; every other capture leaves both false for the 720p default — see
+            // RESOLUTION_MAX/RESOLUTION_1080P/RESOLUTION_720P's doc.
+            captureTargetResolution = if (maxResolution) RESOLUTION_MAX else if (highResolution) RESOLUTION_1080P else RESOLUTION_720P
             rebind()
         }
         try {
@@ -426,6 +432,13 @@ class CameraController(private val context: Context) {
         // sizes, same convention as the 32x32 analysis-resolution selector below.
         private val RESOLUTION_1080P = Size(1920, 1080)
         private val RESOLUTION_720P = Size(1280, 720)
+
+        // Describe TV Image/Explore and Describe's tier — deliberately larger than any real sensor
+        // reports. FALLBACK_RULE_CLOSEST_HIGHER_THEN_LOWER then has nothing "higher" to pick, so it
+        // falls back to the closest lower size, i.e. the largest 16:9 resolution the camera actually
+        // offers. Still pinned to 16:9 (see the AspectRatioStrategy below) rather than letting these
+        // two buttons alone see a wider field of view than every other capture in the app.
+        private val RESOLUTION_MAX = Size(9999, 5625)
 
         /**
          * Process-wide belt-and-braces release: unbinds every CameraX use case and turns any torch

@@ -25,6 +25,14 @@ data class ModelButtonContext(
     val onRunPrompt: (config: PromptConfig, label: String) -> Unit,
     val onExplore: () -> Unit,
     val onRepeat: () -> Unit,
+    /** "Describe TV Image"/"Explore and Describe" ([OfflineVlmButtonProvider] only) — both need a
+     *  fresh, live camera capture (max resolution + a 720p segmentation copy from the very same
+     *  shot), so they're null wherever there's no live camera to capture from (MediaDescriberScreen,
+     *  which works from an already-picked video/image) — mirroring [MlkitButtonProvider]'s own
+     *  `capturePhoto` nullability. The provider renders the corresponding cell disabled when null
+     *  rather than wiring it to a no-op. */
+    val onDescribeTv: (() -> Unit)?,
+    val onExploreAndDescribe: (() -> Unit)?,
     /** Long-press on a custom-prompt cell (offline models only, see [com.appricodes.lens_whisper.ui.models.OfflineVlmButtonProvider]) —
      *  starts voice recognition targeting that slot index (0-3): what the user says becomes the
      *  slot's new prompt (and runs immediately); silence clears it back to "Custom N". */

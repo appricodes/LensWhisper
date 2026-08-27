@@ -178,6 +178,64 @@ class AnalysisSessionController(
         }
     }
 
+    /** Stops the tone started by [startProcessingChime] right away, rather than waiting for
+     *  [runAnalysis]/[runAnalysisOnBitmap]'s own `finally` — needed by a caller that starts the
+     *  tone itself (at shutter time, before this controller is even involved) and then finds out
+     *  partway through its own capture/detect/isolate pipeline that there's nothing to analyze
+     *  after all (e.g. "Describe TV Image" finding no `tv` instance) — see [CameraActivity]. */
+    fun stopProcessingChime() {
+        activeAudioFeedbackJob?.cancel()
+    }
+
+    /** Runs [action] under the same busy-gate/[isAnalyzing] bookkeeping [runAnalysis] itself uses,
+     *  for a caller whose actual capture/detect/isolate work happens outside this controller
+     *  (see "Describe TV Image" in [CameraActivity], which segments and isolates one object before
+     *  ever reaching [runAnalysisOnBitmap]) — so the busy-check covers that whole pipeline, not
+     *  just the final model call. Not used by "Explore and Describe"'s per-tap analysis, which
+     *  deliberately does *not* want busy-blocking — see [runAnalysisOnBitmap]'s doc. */
+    suspend fun runGuarded(action: suspend () -> Unit) {
+        if (isAnalyzing) {
+            announceBusy()
+            return
+        }
+        isAnalyzing = true
+        try {
+            action()
+        } finally {
+            isAnalyzing = false
+            activeAudioFeedbackJob?.cancel()
+        }
+    }
+
+    /**
+     * Runs one analysis request directly against an already-prepared [bitmap] — no capture step of
+     * its own, unlike [runAnalysis] — shared by "Describe TV Image" (wrapped in [runGuarded] by its
+     * caller) and "Explore and Describe"'s per-tap analysis (see [SegmentationExploreActivity]),
+     * both of which build their own isolated-object bitmap via
+     * [com.appricodes.lens_whisper.offline.SegmentationIsolation] rather than routing through a
+     * screen's normal capture flow.
+     *
+     * Deliberately does not touch [isAnalyzing] or [lastPrompt]: "Explore and Describe" needs to
+     * cancel one in-flight call and immediately start another as the user keeps exploring (its own
+     * caller tracks and cancels the [kotlinx.coroutines.Job] this runs in — cancelling it here mid
+     * -stream, via [runStreamingAnalysis]'s shared `flow.collect`, also genuinely stops the model
+     * from generating further tokens, same as [RepeatedSentenceDetected] already relies on), which
+     * an internal busy-block would prevent; and there is no `captureFrames` closure here for
+     * [onRepeat] to later re-invoke, so leaving [lastPrompt] alone means Repeat simply falls back to
+     * whatever normal prompt ran last, rather than trying to "repeat" a one-off isolated crop.
+     */
+    suspend fun runAnalysisOnBitmap(config: PromptConfig, bitmap: Bitmap) {
+        val streamingFlow = try {
+            runSelectedOfflineModelAnalysisStreaming(context, prefs, config, listOf(bitmap))
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            handleResponse("ERROR: ${e.localizedMessage ?: "Setup failed."}")
+            return
+        }
+        runStreamingAnalysis(streamingFlow, translate = isOfflineVlmSelected())
+    }
+
     /**
      * Runs one analysis request: [captureFrames] does whatever screen-specific work is needed
      * (capture a camera photo, extract video frames, load a static image) and returns a

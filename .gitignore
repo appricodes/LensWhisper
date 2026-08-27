@@ -28,3 +28,11 @@ desktop/test_images/
 # Backup copies of segmentation model files no longer bundled in the app (kept locally in case a
 # dropped size/precision is ever wanted back - see app/src/main/assets/models/)
 /model_backups/
+
+# Downloaded bulk product dumps and generated lookup DBs for the barcode DB builder - large
+# binary artifacts, regenerate with tools/barcode_db/build_barcode_db.py instead of committing
+tools/barcode_db/cache/
+tools/barcode_db/*.sqlite3
+tools/barcode_db/*.sqlite3-wal
+tools/barcode_db/*.sqlite3-shm
+tools/barcode_db/__pycache__/

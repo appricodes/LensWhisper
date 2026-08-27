@@ -266,6 +266,11 @@ fun MediaDescriberScreen(
             }
         },
         onRepeat = { gate { coroutineScope.launch { controller.onRepeat(selectedModelId, captureFrames) } } },
+        // Both need a live camera capture (max resolution + a 720p segmentation copy from the same
+        // shot) — this screen works from an already-picked video/image file, not a camera, so
+        // there's nothing for either to capture from. See ModelButtonContext's doc.
+        onDescribeTv = null,
+        onExploreAndDescribe = null,
         onRecordCustomPrompt = { slotIndex ->
             gate {
                 if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()

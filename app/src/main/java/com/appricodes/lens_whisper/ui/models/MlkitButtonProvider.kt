@@ -37,6 +37,8 @@ import java.io.FileOutputStream
 
 private const val CONTINUOUS_INTERVAL_MS = 3000L
 private const val MAX_CAPTURE_DIMENSION = 2500
+// "Simple Color Detection" — a plain pixel square (not a fraction of the frame), per its own spec.
+private const val SIMPLE_COLOR_CROP_SIZE = 50
 
 /**
  * "Basic Models"' button set (the on-screen label; [PreferencesManager.selectedModelId] is still
@@ -332,6 +334,50 @@ class MlkitButtonProvider(
         }
     }
 
+    /**
+     * "Simple Color Detection": a plain, non-segmentation color reading — captures a photo at the
+     * usual 720p, crops a fixed 50x50-pixel square from its exact center, and announces the crop's
+     * top 2 colors via [OfflineColorDetector.namedDominantColors] (the same Palette-based ranking
+     * "Identify Objects and Colors" uses, just over a plain rectangular center crop instead of a
+     * detected instance's own mask). No detector run at all, unlike every other color-aware button
+     * on this grid — this one is deliberately just "what color is the middle of the frame".
+     */
+    private fun launchSimpleColorDetection() {
+        if (isBusy) {
+            announceBusy()
+            return
+        }
+        val capture = capturePhoto ?: return
+        isBusy = true
+        ProcessingSoundPlayer.playCaptureAcknowledge(context)
+        coroutineScope.launch {
+            try {
+                val bitmap = try {
+                    capture(MAX_CAPTURE_DIMENSION, false) {}
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                    return@launch
+                }
+                val colors = withContext(Dispatchers.Default) {
+                    OfflineColorDetector.namedDominantColors(centerCrop(bitmap, SIMPLE_COLOR_CROP_SIZE), k = 2)
+                }
+                speak(if (colors.isEmpty()) "Could not detect a color." else colors.joinToString(" and "))
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    private fun centerCrop(bitmap: Bitmap, size: Int): Bitmap {
+        val w = size.coerceAtMost(bitmap.width)
+        val h = size.coerceAtMost(bitmap.height)
+        val left = (bitmap.width - w) / 2
+        val top = (bitmap.height - h) / 2
+        return Bitmap.createBitmap(bitmap, left, top, w, h)
+    }
+
     private fun selectSingleShot(mode: Mode, prefs: PreferencesManager) {
         activeMode = mode
         continuousEnabled = false
@@ -376,6 +422,14 @@ class MlkitButtonProvider(
         SlowModelSwitchDialog(context = context, prefs = prefs, show = showSlowModelDialog, onDone = { showSlowModelDialog = false })
     }
 
+    /** Surfaces the same one-time slow-model dialog above for a caller outside this class that
+     *  also runs [SegmentationSpeedGate.detect] — "Describe TV Image" (see `CameraActivity`), which
+     *  shares this app's one segmentation-model-size preference and should offer the same one-time
+     *  "switch to the smaller model?" prompt rather than a second, duplicate one. */
+    fun showSlowModelPrompt() {
+        showSlowModelDialog = true
+    }
+
     override fun rows(ctx: ModelButtonContext): List<List<GridCell?>> {
         if (capturePhoto == null) return List(3) { listOf(null, null, null, null) }
         return listOf(
@@ -415,7 +469,11 @@ class MlkitButtonProvider(
                     contentDescription = if (isLightActive) "Light level meter is on. Double tap to stop." else "Light level meter. Double tap to hear tones matching the brightness in front of the camera.",
                     onClick = { toggleLight() }
                 ),
-                null,
+                GridCell(
+                    label = "Simple Color Detection",
+                    contentDescription = "Simple color detection. Captures a photo and announces the two main colors at the center of the frame.",
+                    onClick = { launchSimpleColorDetection() }
+                ),
                 null
             ),
             listOf(null, null, null, null)
