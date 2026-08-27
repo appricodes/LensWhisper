@@ -53,11 +53,13 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * instead of going through the shared
  * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController]. The plain ML Kit
  * object/color detectors this grid used to expose directly (`OfflineObjectDetector`, and
- * [OfflineColorDetector]'s own `detect`) were dropped once the segmentation-based Detect
- * Objects/Object and Color Detection buttons took over their slots — genuinely superseded, not
- * worth carrying forward unused (`OfflineObjectDetector.kt` was deleted outright;
- * [OfflineColorDetector]'s `detect` is simply unused now, kept only because
- * [OfflineColorDetector.namedDominantColors] in the same file is still very much alive).
+ * [OfflineColorDetector]'s own `detect`, which used ML Kit Subject Segmentation + Image Labeling)
+ * were dropped once the segmentation-based Detect Objects/Object and Color Detection buttons took
+ * over their slots — genuinely superseded, not worth carrying forward unused
+ * (`OfflineObjectDetector.kt` and `OfflineColorDetector.detect` were both deleted outright, 2026-08-27,
+ * along with the play-services-mlkit-subject-segmentation and ML Kit image-labeling dependencies
+ * that `detect` was their only consumer of; [OfflineColorDetector.namedDominantColors] in the same
+ * file is still very much alive).
  *
  * [capturePhoto] is null when there's no live camera to capture from (e.g. if ever hosted on a
  * file-based screen) — in that case this provider renders an empty (all-null) grid rather than

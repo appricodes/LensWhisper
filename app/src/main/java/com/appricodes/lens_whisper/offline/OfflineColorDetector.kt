@@ -1,23 +1,11 @@
 package com.appricodes.lens_whisper.offline
 
-import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Color
-import android.util.Log
 import androidx.palette.graphics.Palette
-import com.appricodes.lens_whisper.data.PreferencesManager
-import com.google.mlkit.vision.common.InputImage
-import com.google.mlkit.vision.label.ImageLabeling
-import com.google.mlkit.vision.label.defaults.ImageLabelerOptions
-import com.google.mlkit.vision.segmentation.subject.SubjectSegmentation
-import com.google.mlkit.vision.segmentation.subject.SubjectSegmenterOptions
-import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.pow
 
 object OfflineColorDetector {
-	// Set processing flag to prevent concurrent executions
-	private val isProcessing = AtomicBoolean(false)
-
 	private class NamedColor(val name: String, val r: Int, val g: Int, val b: Int)
 	private val colors = listOf(
 		// Base Colors
@@ -65,142 +53,17 @@ object OfflineColorDetector {
 	}
 
 	/**
-	 * The same Palette-based ranking [detect] uses internally, exposed directly for a caller that
-	 * has already isolated the region to name colors for — e.g.
-	 * [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector], which gets both an
-	 * object's identity and its exact pixel mask from a single detector pass and has no need for
-	 * [detect]'s own ML Kit subject-discovery step to find it a second time. [bitmap] should have
-	 * a transparent background outside the region of interest, matching what
+	 * The same Palette-based ranking used internally by the (now-removed) ML Kit subject-detection
+	 * path this object used to expose, kept for a caller that has already isolated the region to
+	 * name colors for — e.g. [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector],
+	 * which gets both an object's identity and its exact pixel mask from a single detector pass.
+	 * [bitmap] should have a transparent background outside the region of interest, matching what
 	 * [findProminentColorsPalette] already expects (see its doc) — a masked instance crop with
 	 * non-member pixels set to alpha=0 satisfies this exactly.
 	 */
 	fun namedDominantColors(bitmap: Bitmap, k: Int = 2): List<String> {
 		val prominentColors = findProminentColorsPalette(bitmap, k)
 		return prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
-	}
-
-	/**
-	 * Detects the main subject(s) and their colors in [bitmap]. If [onResult] is null (the
-	 * default), the result is spoken immediately via [OfflineTranslator]. If provided, [onResult]
-	 * receives the raw English sentence instead — used by continuous mode, which only speaks
-	 * when the text changes.
-	 */
-	fun detect(context: Context, bitmap: Bitmap, prefs: PreferencesManager, onResult: ((String) -> Unit)? = null) {
-		if (!isProcessing.compareAndSet(false, true)) return
-
-		try {
-			// Resize bitmap to max dimension of 1024
-			val resizedBitmap = resizeToMax(bitmap, 1024)
-			val image = InputImage.fromBitmap(resizedBitmap, 0)
-
-			val subjectResultOptions = SubjectSegmenterOptions.SubjectResultOptions.Builder()
-				.enableSubjectBitmap()
-				.build()
-
-			val options = SubjectSegmenterOptions.Builder()
-				.enableMultipleSubjects(subjectResultOptions)
-				.build()
-
-			val segmenter = SubjectSegmentation.getClient(options)
-			val labeler = ImageLabeling.getClient(ImageLabelerOptions.DEFAULT_OPTIONS)
-
-			segmenter.process(image)
-				.addOnSuccessListener { result ->
-					// Guarded end-to-end: this callback (and everything it kicks off) runs on the
-					// main thread, and must never crash the app if a frame or ML Kit result is
-					// malformed — an uncaught exception here isn't caught by the try/catch below,
-					// since that only covers this function's synchronous setup, not callbacks that
-					// fire later.
-					try {
-						val subjects = result.subjects.take(2)
-
-						// Requirement 3: If no subjects found, apply Palette on 10% center crop
-						if (subjects.isEmpty()) {
-							val cropWidth = (resizedBitmap.width * 0.1f).toInt().coerceAtLeast(1)
-							val cropHeight = (resizedBitmap.height * 0.1f).toInt().coerceAtLeast(1)
-							val startX = (resizedBitmap.width - cropWidth) / 2
-							val startY = (resizedBitmap.height - cropHeight) / 2
-
-							val centerCrop = Bitmap.createBitmap(resizedBitmap, startX, startY, cropWidth, cropHeight)
-
-							// Get top 2 prominent colors
-							val prominentColors = findProminentColorsPalette(centerCrop, k = 2)
-							val colorNames = prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
-
-							val finalResult = if (colorNames.isNotEmpty()) colorNames.joinToString(" and ") else "unknown colors"
-							finishProcessing(context, finalResult, prefs, onResult)
-							return@addOnSuccessListener
-						}
-
-						val subjectDescriptions = mutableListOf<String>()
-						var subjectsProcessedCount = 0
-
-						for (subject in subjects) {
-							val subjectBitmap = subject.bitmap
-							if (subjectBitmap == null) {
-								subjectsProcessedCount++
-								if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs, onResult)
-								continue
-							}
-
-							// Object labeler to determine type
-							val subImage = InputImage.fromBitmap(subjectBitmap, 0)
-							labeler.process(subImage)
-								.addOnSuccessListener { labels ->
-									// Guarded: this callback runs on the main thread, and Palette/bitmap work
-									// here must never crash the whole app if a frame is malformed.
-									try {
-										// Requirement 1: "Unknown" if no label found
-										val labelName = labels.firstOrNull()?.text?.replaceFirstChar { it.uppercase() } ?: "Unknown"
-
-										// Palette swatches are sorted by population descending, so the dominant color is first.
-										val prominentColors = findProminentColorsPalette(subjectBitmap, k = 2)
-										val colorNames = prominentColors.map { getColorNameFromRgb(it[0], it[1], it[2]) }.distinct()
-
-										// Format text
-										val colorString = if (colorNames.isNotEmpty()) colorNames.joinToString(" and ") else "unknown colors"
-										subjectDescriptions.add("$labelName: $colorString")
-									} catch (e: Exception) {
-										Log.e("OfflineColorDetector", "Color analysis error", e)
-									}
-
-									subjectsProcessedCount++
-									if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs, onResult)
-								}
-								.addOnFailureListener {
-									subjectsProcessedCount++
-									if (subjectsProcessedCount == subjects.size) finalizeOutput(context, subjectDescriptions, prefs, onResult)
-								}
-						}
-					} catch (e: Exception) {
-						Log.e("OfflineColorDetector", "Subject processing error", e)
-						finishProcessing(context, "Could not analyze colors.", prefs, onResult)
-					}
-				}
-				.addOnFailureListener {
-					finishProcessing(context, "Failed to segment subjects.", prefs, onResult)
-				}
-
-		} catch (e: Exception) {
-			Log.e("OfflineColorDetector", "Processing Error", e)
-			finishProcessing(context, "Error analyzing colors.", prefs, onResult)
-		}
-	}
-
-	private fun finalizeOutput(context: Context, descriptions: List<String>, prefs: PreferencesManager, onResult: ((String) -> Unit)?) {
-		val finalResult = if (descriptions.isNotEmpty()) descriptions.joinToString(", ") else "Could not identify subjects."
-		finishProcessing(context, finalResult, prefs, onResult)
-	}
-
-	private fun finishProcessing(context: Context, finalResult: String, prefs: PreferencesManager, onResult: ((String) -> Unit)?) {
-		if (onResult != null) onResult(finalResult) else OfflineTranslator.translateAndSpeak(context, finalResult, prefs)
-		isProcessing.set(false)
-	}
-
-	private fun resizeToMax(bitmap: Bitmap, maxDim: Int): Bitmap {
-		val scale = minOf(maxDim.toFloat() / bitmap.width, maxDim.toFloat() / bitmap.height)
-		if (scale >= 1f) return bitmap
-		return Bitmap.createScaledBitmap(bitmap, (bitmap.width * scale).toInt(), (bitmap.height * scale).toInt(), true)
 	}
 
 	/**

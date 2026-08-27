@@ -95,17 +95,20 @@ dependencies {
     // Devanagari Script (Hindi, Marathi, Nepali, Sanskrit, etc.)
     implementation(libs.text.recognition.devanagari)
 
-    // ML Kit Image Labeling (Bundled base model - increases APK size by ~5MB but works instantly offline)
-    implementation(libs.image.labeling)
-
-    // subject segmentation
-    implementation("com.google.android.gms:play-services-mlkit-subject-segmentation:16.0.0-beta1")
+    // (ML Kit Image Labeling and play-services-mlkit-subject-segmentation used to live here,
+    // powering OfflineColorDetector's own `detect`. That path was dropped once the
+    // segmentation-based Detect Objects/Object and Color Detection buttons took over its slot —
+    // see MlkitButtonProvider's doc — leaving these two as the single biggest dead weight in the
+    // APK: image-labeling alone pulls in vision-internal-vkp, whose native lib
+    // (libmlkitcommonpipeline.so) was shipping four times over, once per ABI, unused. Removed
+    // 2026-08-27.)
 
     // MLKit translator
     implementation(libs.translate)
 
-    // google signing
-    implementation(libs.play.services.auth)
+    // (play-services-auth — Google Sign-In — used to live here for the old account system. There
+    // is no account system any more (see data/PreferencesManager.kt's note above) and nothing in
+    // this codebase references GoogleSignIn*. Removed 2026-08-27.)
 
     // LiteRT-LM on-device model inference (Manage Advanced Models)
     implementation(libs.litertlm.android)
