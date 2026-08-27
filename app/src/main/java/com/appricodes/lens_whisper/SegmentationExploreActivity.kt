@@ -1,6 +1,7 @@
 package com.appricodes.lens_whisper
 
 import android.content.Context
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.net.Uri
@@ -444,6 +445,13 @@ private fun SegmentationExploreScreen(
         }
 
         SlowModelSwitchDialog(context = context, prefs = prefs, show = showSlowModelDialog, onDone = { showSlowModelDialog = false })
+
+        // describeMode's per-tap analysis (analyzeTappedObject -> runAnalysisOnBitmap) can surface
+        // the thermal warning — without these two calls that state would flip with nothing ever
+        // rendering it, since this screen never otherwise touches AnalysisSessionController's own
+        // dialogs (unlike CameraActivity/MediaDescriberScreen, which already call both).
+        controller.ObserveDownloads()
+        controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })
 
         ImmersiveBackButton(onClick = onClose)
     }

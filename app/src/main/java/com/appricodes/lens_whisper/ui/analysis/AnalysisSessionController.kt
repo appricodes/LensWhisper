@@ -37,6 +37,7 @@ import com.appricodes.lens_whisper.ui.components.DownloadPromptDialog
 import com.appricodes.lens_whisper.ui.components.StillDownloadingDialog
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
+import com.appricodes.lens_whisper.utils.ThermalGuard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -104,6 +105,10 @@ class AnalysisSessionController(
     var showExploreUnsupportedDialog by mutableStateOf(false)
         private set
 
+    /** See [blockedByHeat]/[continueDespiteHeat]. */
+    var showThermalWarning by mutableStateOf(false)
+        private set
+
     var pendingDownloadModel by mutableStateOf<OfflineModelInfo?>(null)
         private set
     private var pendingDownloadAction: (() -> Unit)? = null
@@ -163,6 +168,33 @@ class AnalysisSessionController(
 
     fun dismissDialog() { dialogState = null }
     fun dismissExploreUnsupportedDialog() { showExploreUnsupportedDialog = false }
+
+    /** Checked at the top of every entry point that would otherwise reach
+     *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] — before any capture/detect/
+     *  isolate work starts, so a refusal doesn't burn a shutter+segmentation cycle for nothing. True
+     *  (and surfaces [showThermalWarning]) refuses; false lets the caller proceed. Never blocks the
+     *  Local Server branch (nothing runs on this phone for that path) or MLKit (which never reaches
+     *  this controller's analysis methods at all) — same exclusion [com.appricodes.lens_whisper.inference.AnalysisRouter]'s
+     *  own, deeper check already applies, kept in sync here rather than trusting only that backstop. */
+    private fun blockedByHeat(): Boolean {
+        if (prefs.selectedModelId == LocalServerFeature.MODEL_ID) return false
+        if (ThermalGuard.blockingMessageOrNull(context) == null) return false
+        showThermalWarning = true
+        AccessibilityUtils.announceToTalkBack(context, ThermalGuard.HOT_MESSAGE)
+        return true
+    }
+
+    fun dismissThermalWarning() { showThermalWarning = false }
+
+    /** User chose "Continue Anyway" on the heat warning — stops blocking (and asking again) for
+     *  the rest of this app process, per explicit instruction: dismissing it should hold until the
+     *  app is closed, not forever (see [ThermalGuard.dismissForThisSession]'s own doc for why
+     *  that's in-memory only). Doesn't retry whatever action was just refused — the user presses
+     *  the same button again, same as dismissing any other blocking dialog in this app. */
+    fun continueDespiteHeat() {
+        ThermalGuard.dismissForThisSession()
+        showThermalWarning = false
+    }
     fun dismissDownloadPrompt() { pendingDownloadModel = null; pendingDownloadAction = null; downloadDialogHidden = false }
     fun hideDownloadDialog() { downloadDialogHidden = true }
     fun dismissStillDownloadingDialog() { stillDownloadingModel = null }
@@ -198,6 +230,7 @@ class AnalysisSessionController(
             announceBusy()
             return
         }
+        if (blockedByHeat()) return
         isAnalyzing = true
         try {
             action()
@@ -225,6 +258,7 @@ class AnalysisSessionController(
      * whatever normal prompt ran last, rather than trying to "repeat" a one-off isolated crop.
      */
     suspend fun runAnalysisOnBitmap(config: PromptConfig, bitmap: Bitmap) {
+        if (blockedByHeat()) return
         val streamingFlow = try {
             runSelectedOfflineModelAnalysisStreaming(context, prefs, config, listOf(bitmap))
         } catch (e: CancellationException) {
@@ -247,6 +281,7 @@ class AnalysisSessionController(
             announceBusy()
             return
         }
+        if (blockedByHeat()) return
         isAnalyzing = true
         lastPrompt = config
         try {
@@ -584,7 +619,8 @@ class AnalysisSessionController(
         }
     }
 
-    /** Renders the result/error dialog and the Explore-unsupported dialog. Call once in composition. */
+    /** Renders the result/error dialog, the Explore-unsupported dialog, and the heat warning. Call
+     *  once in composition. */
     @Composable
     fun ResultDialogs(onOpenModelManager: () -> Unit) {
         dialogState?.let { (title, msg) ->
@@ -604,6 +640,18 @@ class AnalysisSessionController(
                     Button(onClick = { dismissExploreUnsupportedDialog(); onOpenModelManager() }) { Text("Open Model Manager") }
                 },
                 dismissButton = { Button(onClick = { dismissExploreUnsupportedDialog() }) { Text("Cancel") } }
+            )
+        }
+        // "Continue Anyway" calls ThermalGuard.dismissForThisSession() and just closes the dialog —
+        // it doesn't retry whatever was refused; the user presses the same button again, same as
+        // dismissing any other blocking dialog here. See blockedByHeat()'s doc for why.
+        if (showThermalWarning) {
+            AlertDialog(
+                onDismissRequest = { dismissThermalWarning() },
+                title = { Text("Phone Is Hot") },
+                text = { Text(ThermalGuard.HOT_MESSAGE, fontSize = 18.sp) },
+                confirmButton = { Button(onClick = { dismissThermalWarning() }) { Text("Wait") } },
+                dismissButton = { Button(onClick = { continueDespiteHeat() }) { Text("Continue Anyway") } }
             )
         }
     }
