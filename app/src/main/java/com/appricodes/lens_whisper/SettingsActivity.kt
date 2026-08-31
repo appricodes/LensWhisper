@@ -25,7 +25,6 @@ import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
-import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import kotlinx.coroutines.launch
@@ -107,10 +106,6 @@ fun SettingsScreen(
 	var ocrDropdownExpanded by remember { mutableStateOf(false) }
 	var personaDropdownExpanded by remember { mutableStateOf(false) }
 
-	var segmentationSize by remember { mutableStateOf(prefs.segmentationModelSize) }
-	var segmentationSizeDropdownExpanded by remember { mutableStateOf(false) }
-
-
 	Column(
 		modifier = Modifier
 			.fillMaxSize()
@@ -128,38 +123,6 @@ fun SettingsScreen(
 				onClick = onBack,
 				modifier = Modifier.clearAndSetSemantics { contentDescription = "Close settings and return to layout panel." }
 			) { Text("Close", fontSize = 18.sp) }
-		}
-
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Object Detection Model Size", fontSize = 18.sp, color = Color.Gray)
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { segmentationSizeDropdownExpanded = true }
-					.padding(16.dp)
-					.clearAndSetSemantics {
-						contentDescription = "Object detection model size is ${OfflineSegmentationDetector.sizeDisplayName(segmentationSize)}. Double tap to change."
-					},
-				contentAlignment = Alignment.CenterStart
-			) {
-				Text(text = OfflineSegmentationDetector.sizeDisplayName(segmentationSize), fontSize = 18.sp)
-				DropdownMenu(expanded = segmentationSizeDropdownExpanded, onDismissRequest = { segmentationSizeDropdownExpanded = false }) {
-					OfflineSegmentationDetector.ALL_SIZES.forEach { size ->
-						DropdownMenuItem(text = { Text(OfflineSegmentationDetector.sizeDisplayName(size)) }, onClick = {
-							segmentationSize = size
-							prefs.segmentationModelSize = size
-							segmentationSizeDropdownExpanded = false
-						})
-					}
-				}
-			}
-			Text(
-				text = "Used by Detect Objects, Identify Objects and Colors, and Explore. " +
-					"The larger model is slower but notices more, and gets colors and mask edges more precisely.",
-				fontSize = 13.sp,
-				color = Color.Gray
-			)
 		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

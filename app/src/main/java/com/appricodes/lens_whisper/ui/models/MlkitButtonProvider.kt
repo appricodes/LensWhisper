@@ -17,10 +17,8 @@ import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineColorDetector
 import com.appricodes.lens_whisper.offline.OfflineLightDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
-import com.appricodes.lens_whisper.offline.SegmentationSpeedGate
 import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.ui.components.GridCell
-import com.appricodes.lens_whisper.ui.components.SlowModelSwitchDialog
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import com.appricodes.lens_whisper.utils.VolumeShortcuts
@@ -85,8 +83,6 @@ class MlkitButtonProvider(
     // failed) — every entry point that can trigger a capture checks this first and refuses a
     // second one while it's still set, rather than letting two requests race each other.
     private var isBusy by mutableStateOf(false)
-    // Drives SlowModelSwitchDialog — see ObserveSlowModelDialog and SegmentationSpeedGate.
-    private var showSlowModelDialog by mutableStateOf(false)
     private var lastTextText: String? = null
     private var lastSegmentText: String? = null
     private var lastSegmentColorText: String? = null
@@ -206,7 +202,7 @@ class MlkitButtonProvider(
                     else { speak(text); lastTextText = text }
                 }
                 Mode.SEGMENT -> {
-                    val text = summarizeInstances(context, bitmap, prefs, withColors = false)
+                    val text = summarizeInstances(context, bitmap, withColors = false)
                     // Stop the tone the instant there's something to say, not after — otherwise a
                     // tone dispatched a moment earlier can land right on top of the announcement.
                     toneJob?.cancel()
@@ -214,7 +210,7 @@ class MlkitButtonProvider(
                     else { speak(text); lastSegmentText = text }
                 }
                 Mode.SEGMENT_COLOR -> {
-                    val text = summarizeInstances(context, bitmap, prefs, withColors = true)
+                    val text = summarizeInstances(context, bitmap, withColors = true)
                     toneJob?.cancel()
                     if (continuousEnabled) speakIfChanged(lastSegmentColorText, text) { lastSegmentColorText = it }
                     else { speak(text); lastSegmentColorText = text }
@@ -240,9 +236,9 @@ class MlkitButtonProvider(
      * own confidence is hedged into its phrasing by [DetectionPhrasing.describeDetection] rather
      * than spoken plainly regardless of how sure the model actually is.
      */
-    private suspend fun summarizeInstances(context: Context, bitmap: Bitmap, prefs: PreferencesManager, withColors: Boolean): String {
+    private suspend fun summarizeInstances(context: Context, bitmap: Bitmap, withColors: Boolean): String {
         val instances = withContext(Dispatchers.Default) {
-            SegmentationSpeedGate.detect(context, bitmap, prefs) { showSlowModelDialog = true }
+            OfflineSegmentationDetector.detect(context, bitmap)
         }
         if (instances.isEmpty()) return "No objects detected."
         // A plain for-loop, not joinToString { ... } — its transform lambda isn't a suspend
@@ -423,22 +419,6 @@ class MlkitButtonProvider(
                 }
             }
         }
-    }
-
-    /** Must be called once, in composition, by the host screen — renders the one-time slow-model
-     *  prompt (see [SegmentationSpeedGate]) when a "Detect Objects"/"Object and Color Detection"
-     *  run triggers it. */
-    @Composable
-    fun ObserveSlowModelDialog(prefs: PreferencesManager) {
-        SlowModelSwitchDialog(context = context, prefs = prefs, show = showSlowModelDialog, onDone = { showSlowModelDialog = false })
-    }
-
-    /** Surfaces the same one-time slow-model dialog above for a caller outside this class that
-     *  also runs [SegmentationSpeedGate.detect] — "Describe TV Image" (see `CameraActivity`), which
-     *  shares this app's one segmentation-model-size preference and should offer the same one-time
-     *  "switch to the smaller model?" prompt rather than a second, duplicate one. */
-    fun showSlowModelPrompt() {
-        showSlowModelDialog = true
     }
 
     override fun rows(ctx: ModelButtonContext): List<List<GridCell?>> {

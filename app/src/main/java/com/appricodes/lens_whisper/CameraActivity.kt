@@ -50,8 +50,8 @@ import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.legal.LegalTexts
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.LocalServerFeature
+import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.SegmentationIsolation
-import com.appricodes.lens_whisper.offline.SegmentationSpeedGate
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
@@ -224,7 +224,6 @@ private fun CameraScreen(
         )
     }
     mlkitProvider.ObserveContinuousLoop(prefs)
-    mlkitProvider.ObserveSlowModelDialog(prefs)
 
     var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
     // See ResyncSelectedModelOnResume's own doc — without this, switching or deleting the selected
@@ -403,7 +402,7 @@ private fun CameraScreen(
                 return@runGuarded
             }
             val instances = withContext(Dispatchers.Default) {
-                SegmentationSpeedGate.detect(context, capture.lowResBitmap, prefs) { mlkitProvider.showSlowModelPrompt() }
+                OfflineSegmentationDetector.detect(context, capture.lowResBitmap)
             }
             val tvInstance = instances.filter { it.label == "tv" }.maxByOrNull { it.confidence }
             if (tvInstance == null) {

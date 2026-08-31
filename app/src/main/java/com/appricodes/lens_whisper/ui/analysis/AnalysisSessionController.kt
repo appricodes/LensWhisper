@@ -255,7 +255,7 @@ class AnalysisSessionController(
      *
      * Also catches (and reports, rather than crashing) any non-cancellation exception [body]
      * itself doesn't already handle — e.g. a detector failure inside "Describe TV Image"'s
-     * `SegmentationSpeedGate.detect` call, which [runGuarded] adds no catch of its own around.
+     * `OfflineSegmentationDetector.detect` call, which [runGuarded] adds no catch of its own around.
      * Every job launched here runs on this same [coroutineScope]; that scope is not a
      * `SupervisorJob`, so an uncaught throw wouldn't just fail *this* job — it would kill the
      * whole scope, silently turning every later button press into a no-op for the rest of this

@@ -65,14 +65,13 @@ import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineColorDetector
+import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.SegmentationIsolation
-import com.appricodes.lens_whisper.offline.SegmentationSpeedGate
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.CameraController
 import com.appricodes.lens_whisper.ui.components.ImmersiveBackButton
 import com.appricodes.lens_whisper.ui.components.ImmersiveFullScreen
-import com.appricodes.lens_whisper.ui.components.SlowModelSwitchDialog
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.HoverFeedback
@@ -152,22 +151,19 @@ class SegmentationExploreActivity : ComponentActivity() {
 
 /** Runs detection + per-instance color naming + confidence phrasing on [loadedBitmap], with the
  *  "waiting for the model" tone looping for the duration — shared by the initial load and by
- *  "Capture new photo" so the two paths can't drift apart. [onSlowFirstDetected] surfaces
- *  [SegmentationSpeedGate]'s one-time slow-model signal up to the caller. */
+ *  "Capture new photo" so the two paths can't drift apart. */
 private suspend fun detectAndDescribe(
     context: Context,
     loadedBitmap: Bitmap,
-    prefs: PreferencesManager,
     // Non-null when the caller (captureNewPhoto) already started the waiting tone itself, from
     // CameraController's onShutter callback, the instant the shutter fired — this function then
     // just adopts and eventually cancels that job instead of starting a second, later one. Null
     // for the initial-load path, where there's no shutter event and detectAndDescribe starting
     // its own tone right away already means "exactly when the image is received".
-    externalToneJob: Job? = null,
-    onSlowFirstDetected: () -> Unit
+    externalToneJob: Job? = null
 ): Pair<List<DetectedInstance>, Map<DetectedInstance, String>> = coroutineScopeWithWaitingTone(context, externalToneJob) {
     val detected = withContext(Dispatchers.Default) {
-        SegmentationSpeedGate.detect(context, loadedBitmap, prefs, onSlowFirstDetected)
+        OfflineSegmentationDetector.detect(context, loadedBitmap)
     }
     val described = withContext(Dispatchers.Default) {
         detected.associateWith { instance ->
@@ -230,7 +226,6 @@ private fun SegmentationExploreScreen(
     var descriptions by remember { mutableStateOf<Map<DetectedInstance, String>>(emptyMap()) }
     var showPopup by remember { mutableStateOf(false) }
     var colorReportEnabled by remember { mutableStateOf(false) }
-    var showSlowModelDialog by remember { mutableStateOf(false) }
     // describeMode's tap-serialization state — see startDescribe's doc for why this queues rather
     // The coroutine currently running one describeMode tap's isolate+analyze pipeline, if any —
     // cancelled and replaced the moment a new tap names a different object. activeDescribeInstance
@@ -317,7 +312,7 @@ private fun SegmentationExploreScreen(
         isLoading = true
         bitmap = loadedBitmap
         AccessibilityUtils.announceToTalkBack(context, "Analyzing objects.")
-        val (detected, described) = detectAndDescribe(context, loadedBitmap, prefs, externalToneJob) { showSlowModelDialog = true }
+        val (detected, described) = detectAndDescribe(context, loadedBitmap, externalToneJob)
         isLoading = false
         if (detected.isEmpty()) {
             instances = emptyList()
@@ -443,8 +438,6 @@ private fun SegmentationExploreScreen(
                 onDismiss = { showPopup = false }
             )
         }
-
-        SlowModelSwitchDialog(context = context, prefs = prefs, show = showSlowModelDialog, onDone = { showSlowModelDialog = false })
 
         // describeMode's per-tap analysis (analyzeTappedObject -> runAnalysisOnBitmap) can surface
         // the thermal warning — without these two calls that state would flip with nothing ever
