@@ -11,11 +11,13 @@ import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
 import com.appricodes.lens_whisper.utils.ImageScaling
 import com.google.ai.edge.litertlm.Backend
+import com.google.ai.edge.litertlm.Channel
 import com.google.ai.edge.litertlm.Content
 import com.google.ai.edge.litertlm.Contents
 import com.google.ai.edge.litertlm.ConversationConfig
 import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
+import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,7 +63,11 @@ object OfflineInferenceEngine {
      *  word count asked for in the prompt. This caps generation time and battery cost on-device
      *  regardless of whether the model cooperates; the streaming path also has its own
      *  repeated-sentence cutoff (see `AnalysisSessionController.runStreamingAnalysis`) for the more
-     *  common failure mode of a small model looping well before this token cap is reached. */
+     *  common failure mode of a small model looping well before this token cap is reached.
+     *
+     *  This is the baseline for every call. A Gemma call with reasoning enabled uses a higher,
+     *  effort-scaled cap instead — see [reasoningPlanFor] — since the model's chain-of-thought has
+     *  to fit inside the same budget as its actual answer. */
     private const val MAX_OUTPUT_TOKENS = 200
 
     /** Published so the UI can show a blocking "Loading <model>…" alert while a model is
@@ -226,10 +232,155 @@ object OfflineInferenceEngine {
         }
     }
 
+    // ─────────────────────────────────────────────────────────────────────────
+    // Reasoning effort — Gemma 4 only.
+    //
+    // LiteRT-LM's Thinking Mode (ai.google.dev/gemma/docs/core/prompt-formatting-gemma4) is a
+    // Gemma-4-family feature, not a generic LiteRT-LM one: enabled by putting the literal control
+    // token "<|think|>" at the start of the system turn, after which the model emits its reasoning
+    // wrapped as "<|channel>thought ... <channel|>" before its real answer, in the same turn.
+    // Qwen2-VL-2B (this predates Qwen3's own hybrid thinking mode), SmolVLM2 and LFM2.5-VL have no
+    // such mode — nothing in their model cards, litert-community's docs, or LiteRT-LM's own
+    // announcement (which scopes Thinking Mode explicitly to "the Gemma 4 model family") mentions
+    // one — so [reasoningPlanFor] returns a no-op plan for every model but Gemma, regardless of
+    // [PreferencesManager.reasoningEffort]: sending Gemma-only control tokens to a model that was
+    // never trained on them risks degrading its output for no benefit, not just doing nothing.
+    //
+    // [ThinkingConfig] (enableThinking/thinkingTokenBudget) is a genuine, native-wired parameter —
+    // confirmed by decompiling litertlm-android 0.16.1: Engine.createConversation and every
+    // Conversation.sendMessage*/sendMessageAsync* overload pass it straight into the matching
+    // LiteRtLmJni.native* call, not an inert field — so it's set here too, alongside the literal
+    // prompt token, on the theory a redundant enable is harmless where a missing one would silently
+    // produce no reasoning at all. Whether thinkingTokenBudget is actually *enforced* by the native
+    // side is less certain — google-ai-edge/LiteRT-LM#2424 is an open, unanswered feature request
+    // (filed 2026-06-01) asking for exactly this. If it turns out not to be, Low/Medium/High simply
+    // collapse to "reasoning on, unbounded", which is degraded, not wrong.
+
+    /** [PreferencesManager.reasoningEffort]'s valid values. */
+    const val REASONING_NONE = "none"
+    const val REASONING_LOW = "low"
+    const val REASONING_MEDIUM = "medium"
+    const val REASONING_HIGH = "high"
+    val ALL_REASONING_EFFORTS = listOf(REASONING_NONE, REASONING_LOW, REASONING_MEDIUM, REASONING_HIGH)
+
+    /** One line per level for the Settings picker. */
+    fun reasoningEffortDisplayName(effort: String): String = when (effort) {
+        REASONING_NONE -> "No reasoning"
+        REASONING_LOW -> "Low"
+        REASONING_MEDIUM -> "Medium"
+        REASONING_HIGH -> "High"
+        else -> effort
+    }
+
+    /** Only Gemma is known to support Thinking Mode — see this section's doc. Matches
+     *  [OfflineModelInfo.family] as declared in res/raw/offline_models.json. */
+    private const val GEMMA_FAMILY = "Gemma 4"
+
+    /** Gemma 4's own reasoning-channel wrapper (see this section's doc): the literal control token
+     *  that turns reasoning on, and the literal start/end text the model wraps its chain-of-thought
+     *  in, before its real answer, in the same turn. */
+    private const val THINK_ENABLE_TOKEN = "<|think|>"
+    private const val THOUGHT_CHANNEL_NAME = "thinking"
+    private const val THOUGHT_START = "<|channel>thought"
+    private const val THOUGHT_END = "<channel|>"
+
+    private class ReasoningPlan(
+        val systemInstructionPrefix: String,
+        val thinkingConfig: ThinkingConfig?,
+        val channels: List<Channel>,
+        val maxOutputToken: Int,
+        val inferenceTimeoutMs: Long
+    )
+
+    private val NO_REASONING = ReasoningPlan(
+        systemInstructionPrefix = "",
+        thinkingConfig = null,
+        channels = emptyList(),
+        maxOutputToken = MAX_OUTPUT_TOKENS,
+        inferenceTimeoutMs = INFERENCE_TIMEOUT_MS
+    )
+
+    /** Everything [analyze]/[analyzeStreaming] need to run one query at [effort] against [model] —
+     *  [NO_REASONING] (a no-op, byte-identical-to-before plan) for every model but Gemma, when
+     *  [effort] is [REASONING_NONE], or when [structuredOutput] is true. That last one matters for
+     *  its own reason, not just as another way to end up at [NO_REASONING]: `buildExploreSystemInstruction`
+     *  demands a strict, machine-parsed JSON reply, and this system has two independent ways to
+     *  suppress the reasoning-channel text a Gemma response can carry (the SDK's own [Channel]
+     *  separation, and [visiblePrefix]'s defensive backstop) — either one either removes it cleanly
+     *  or, in the backstop's case, suppresses the *rest of the response* if a thought span never
+     *  closes. Both outcomes are fine for prose; neither is compatible with "the whole reply must be
+     *  one parseable JSON object", so Explore-shaped calls skip reasoning entirely rather than risk
+     *  a parse failure on a screen whose whole purpose is the resulting spatial grid.
+     *
+     *  Budgets are real token counts, not just an on/off switch, in case thinkingTokenBudget turns
+     *  out to be enforced (see this section's doc); [maxOutputToken] and [inferenceTimeoutMs] are
+     *  both widened well past the reasoning budget so a thinking pass doesn't eat into, or time out,
+     *  the answer that's meant to follow it. */
+    private fun reasoningPlanFor(model: OfflineModelInfo, effort: String, structuredOutput: Boolean): ReasoningPlan {
+        if (model.family != GEMMA_FAMILY || effort == REASONING_NONE || structuredOutput) return NO_REASONING
+        // Token budget and timeout are both set per tier directly, not derived from one another by
+        // a formula: [INFERENCE_TIMEOUT_MS]'s own 90s for 200 tokens is dominated by a mostly-fixed
+        // image-prefill cost, not a flat per-token rate, so naively scaling it by token count would
+        // wildly overestimate what a longer response actually needs — and REASONING_HIGH's budget is
+        // deliberately a large finite number to begin with (2000, not -1/unbounded), for the same
+        // "don't let an actually-unbounded pass trip the low-memory-thrash timeout" reason the
+        // timeout itself has to stay bounded (see this object's class doc for what that timeout is
+        // guarding against).
+        val (thinkingTokenBudget, timeoutMs) = when (effort) {
+            REASONING_LOW -> 256 to 150_000L
+            REASONING_MEDIUM -> 1024 to 240_000L
+            else -> 2000 to 360_000L // REASONING_HIGH
+        }
+        return ReasoningPlan(
+            systemInstructionPrefix = THINK_ENABLE_TOKEN,
+            thinkingConfig = ThinkingConfig(enableThinking = true, thinkingTokenBudget = thinkingTokenBudget),
+            channels = listOf(Channel(channelName = THOUGHT_CHANNEL_NAME, start = THOUGHT_START, end = THOUGHT_END)),
+            maxOutputToken = MAX_OUTPUT_TOKENS + thinkingTokenBudget,
+            inferenceTimeoutMs = timeoutMs
+        )
+    }
+
+    /** Removes every *complete* `<|channel>thought ... <channel|>` span from [text] — the building
+     *  block [visiblePrefix] uses below. Does *not* by itself handle a span that opens and never
+     *  closes (see [visiblePrefix] for why that additional case matters and how it's covered); call
+     *  [visiblePrefix], not this, from [analyze]/[analyzeStreaming]. */
+    private fun stripThoughtChannel(text: String): String =
+        text.replace(Regex(Regex.escape(THOUGHT_START) + ".*?" + Regex.escape(THOUGHT_END), RegexOption.DOT_MATCHES_ALL), "")
+
+    /** How much of [rawCumulative] (everything received so far — the full response, for
+     *  [analyze]'s single-shot case, or the running total for one [analyzeStreaming] call) is safe
+     *  to show the user right now, when [plan] has reasoning enabled: [stripThoughtChannel] applied
+     *  first, then everything up to — but not including — any thought-channel span that *hasn't*
+     *  closed, and never a trailing fragment that could still turn into the start of one with more
+     *  text. That "unclosed span" case is deliberately handled the same way whether or not more text
+     *  is still coming: [analyzeStreaming] must not leak a chain-of-thought fragment before this
+     *  function has enough text to recognize a split marker, and [analyze] must not leak the *rest of
+     *  a whole response* if the model exhausts its output budget mid-thought and never reaches
+     *  `<channel|>` at all — both failure modes are "read raw reasoning aloud to a blind user" if
+     *  left unhandled, so both get the same defensive backstop, not just the SDK's own
+     *  [Channel]-based separation (which should normally make this whole function a no-op — it only
+     *  matters if that separation doesn't fire for some reason: an SDK version drift, a model
+     *  emitting a variant). Identity when [plan] has no reasoning enabled — true of every call
+     *  except a Gemma one with a non-"none" [PreferencesManager.reasoningEffort] — so every other
+     *  model and prompt is untouched by any of this. */
+    private fun visiblePrefix(rawCumulative: String, plan: ReasoningPlan): String {
+        if (plan.thinkingConfig == null) return rawCumulative
+        val cleaned = stripThoughtChannel(rawCumulative)
+        val openIdx = cleaned.indexOf(THOUGHT_START)
+        val truncated = if (openIdx >= 0) cleaned.substring(0, openIdx) else cleaned
+        for (len in minOf(THOUGHT_START.length, truncated.length) downTo 1) {
+            if (truncated.endsWith(THOUGHT_START.substring(0, len))) return truncated.substring(0, truncated.length - len)
+        }
+        return truncated
+    }
+
     /**
      * Runs one query against [model] with the given image(s) and prompt. Returns the model's
      * text response, or an "ERROR: ..." string on failure — matching [com.appricodes.lens_whisper.network.LocalServerEngine]'s
-     * convention so callers can handle both the same way.
+     * convention so callers can handle both the same way. [structuredOutput] should be true for a
+     * reply that must parse as something specific (currently: Explore's flat JSON grid) — see
+     * [reasoningPlanFor]'s doc for why that forces reasoning off regardless of
+     * [PreferencesManager.reasoningEffort].
      */
     suspend fun analyze(
         context: Context,
@@ -237,15 +388,19 @@ object OfflineInferenceEngine {
         images: List<Bitmap>,
         userPrompt: String,
         systemInstruction: String,
-        maxImageDimension: Int
+        maxImageDimension: Int,
+        structuredOutput: Boolean = false
     ): String = withContext(Dispatchers.IO) {
         val prefs = PreferencesManager(context.applicationContext)
+        val plan = reasoningPlanFor(model, prefs.reasoningEffort, structuredOutput)
 
         suspend fun runOnce(): String {
             val engine = ensureEngine(context, model)
             val conversationConfig = ConversationConfig(
-                systemInstruction = Contents.of(Content.Text(systemInstruction)),
-                maxOutputToken = MAX_OUTPUT_TOKENS
+                systemInstruction = Contents.of(Content.Text(plan.systemInstructionPrefix + systemInstruction)),
+                maxOutputToken = plan.maxOutputToken,
+                thinkingConfig = plan.thinkingConfig,
+                channels = plan.channels
             )
             return engine.createConversation(conversationConfig).use { conversation ->
                 val contents = mutableListOf<Content>()
@@ -259,15 +414,30 @@ object OfflineInferenceEngine {
                 contents.add(Content.Text(userPrompt))
 
                 val inferenceJob = engineScope.async { conversation.sendMessage(Contents.of(contents)).toString() }
-                withTimeoutOrNull(INFERENCE_TIMEOUT_MS) { inferenceJob.await() }
+                val rawResult = withTimeoutOrNull(plan.inferenceTimeoutMs) { inferenceJob.await() }
                     ?: run {
-                        Log.w(TAG, "Inference on ${model.id} exceeded ${INFERENCE_TIMEOUT_MS}ms — likely a low-memory thrash")
+                        Log.w(TAG, "Inference on ${model.id} exceeded ${plan.inferenceTimeoutMs}ms — likely a low-memory thrash")
                         inferenceJob.invokeOnCompletion { /* nothing owns the result; let it be discarded */ }
                         throw IllegalStateException(
                             "Analysis with ${model.displayName} is taking much longer than usual — your device " +
                                 "likely doesn't have enough free memory for this model right now."
                         )
                     }
+                // See visiblePrefix's doc — a no-op unless reasoning was actually enabled for this
+                // call, and expected to be a no-op even then (the Channel config above should
+                // already keep thought-channel text out of rawResult).
+                val visible = visiblePrefix(rawResult, plan)
+                // The model spent its whole budget still "thinking" and never reached a visible
+                // answer (see visiblePrefix's doc on why an unclosed thought span suppresses
+                // everything after it, not just the span itself) — silently returning "" here would
+                // read to the caller as a normal, empty response instead of the real cause, and
+                // AnalysisSessionController's speak() silently drops an empty string, so a blind user
+                // would get no answer and no explanation either. Say so instead.
+                if (visible.isBlank() && rawResult.isNotBlank()) {
+                    "Reasoning used the full response budget with no visible answer. Try again, or lower Reasoning Effort in Settings."
+                } else {
+                    visible
+                }
             }
         }
 
@@ -320,7 +490,7 @@ object OfflineInferenceEngine {
      * A caller can't tell mid-stream whether a retry happened; it only ever sees a clean sequence
      * of deltas or a thrown exception (unlike [analyze], errors are NOT converted to an "ERROR: ..."
      * string here — the caller decides how to surface a failure that happened after some deltas
-     * already went out).
+     * already went out). [structuredOutput]: see [analyze]'s own doc.
      */
     fun analyzeStreaming(
         context: Context,
@@ -328,15 +498,19 @@ object OfflineInferenceEngine {
         images: List<Bitmap>,
         userPrompt: String,
         systemInstruction: String,
-        maxImageDimension: Int
+        maxImageDimension: Int,
+        structuredOutput: Boolean = false
     ): Flow<String> = flow {
         val prefs = PreferencesManager(context.applicationContext)
+        val plan = reasoningPlanFor(model, prefs.reasoningEffort, structuredOutput)
 
         suspend fun collectOnce(emit: suspend (String) -> Unit) {
             val engine = ensureEngine(context, model)
             val conversationConfig = ConversationConfig(
-                systemInstruction = Contents.of(Content.Text(systemInstruction)),
-                maxOutputToken = MAX_OUTPUT_TOKENS
+                systemInstruction = Contents.of(Content.Text(plan.systemInstructionPrefix + systemInstruction)),
+                maxOutputToken = plan.maxOutputToken,
+                thinkingConfig = plan.thinkingConfig,
+                channels = plan.channels
             )
             engine.createConversation(conversationConfig).use { conversation ->
                 val contents = mutableListOf<Content>()
@@ -348,14 +522,25 @@ object OfflineInferenceEngine {
                 }
                 contents.add(Content.Text(userPrompt))
 
-                var cumulativeSoFar = ""
+                var cumulativeSoFar = ""   // raw SDK text, exactly as received — see below.
+                // How much of visiblePrefix(cumulativeSoFar, plan) has already been emitted. When
+                // plan.thinkingConfig is null (every call except a Gemma one with reasoning on),
+                // visiblePrefix is the identity function, so this behaves exactly like the plain
+                // delta-of-cumulativeSoFar logic this replaced — see visiblePrefix's own doc.
+                var emittedVisibleLength = 0
                 val completed = try {
-                    withTimeoutOrNull(INFERENCE_TIMEOUT_MS) {
+                    withTimeoutOrNull(plan.inferenceTimeoutMs) {
                         conversation.sendMessageAsync(Contents.of(contents)).collect { message ->
                             val text = message.toString()
-                            val delta = if (text.startsWith(cumulativeSoFar)) text.substring(cumulativeSoFar.length) else text
-                            cumulativeSoFar += delta
-                            if (delta.isNotEmpty()) {
+                            // Message.toString() isn't documented as cumulative-so-far vs. a fresh
+                            // delta — this self-corrects either way, from the first emission on.
+                            val rawDelta = if (text.startsWith(cumulativeSoFar)) text.substring(cumulativeSoFar.length) else text
+                            cumulativeSoFar += rawDelta
+                            if (rawDelta.isEmpty()) return@collect
+                            val visible = visiblePrefix(cumulativeSoFar, plan)
+                            if (visible.length > emittedVisibleLength) {
+                                val delta = visible.substring(emittedVisibleLength)
+                                emittedVisibleLength = visible.length
                                 // Verifies this is genuinely streaming, not one lump at the end — compare
                                 // consecutive timestamps of this exact line in logcat.
                                 Log.d(TAG, "STREAM[offline/${model.id}] chunk (${delta.length} chars): ${delta.take(60).replace("\n", "\\n")}")
@@ -380,11 +565,16 @@ object OfflineInferenceEngine {
                     throw e
                 }
                 if (completed != true) {
-                    Log.w(TAG, "Streaming inference on ${model.id} exceeded ${INFERENCE_TIMEOUT_MS}ms — likely a low-memory thrash")
+                    Log.w(TAG, "Streaming inference on ${model.id} exceeded ${plan.inferenceTimeoutMs}ms — likely a low-memory thrash")
                     throw IllegalStateException(
                         "Analysis with ${model.displayName} is taking much longer than usual — your device " +
                             "likely doesn't have enough free memory for this model right now."
                     )
+                }
+                // Same "spent the whole budget still thinking" case analyze() guards against — see
+                // its own comment. Here it means the loop above never emitted anything at all.
+                if (emittedVisibleLength == 0 && cumulativeSoFar.isNotBlank()) {
+                    emit("Reasoning used the full response budget with no visible answer. Try again, or lower Reasoning Effort in Settings.")
                 }
             }
         }

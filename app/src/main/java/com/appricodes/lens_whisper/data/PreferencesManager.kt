@@ -1,6 +1,7 @@
 ﻿package com.appricodes.lens_whisper.data
 
 import android.content.Context
+import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerFeature
 
 class PreferencesManager(val context: Context) {
@@ -84,6 +85,19 @@ class PreferencesManager(val context: Context) {
 	var selectedModelId: String
 		get() = LocalServerFeature.sanitizeSelectedModelId(standardPrefs.getString("selected_model_id", "mlkit") ?: "mlkit")
 		set(value) = standardPrefs.edit().putString("selected_model_id", value).apply()
+
+	/** How hard the model is asked to reason before answering — see
+	 *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.ALL_REASONING_EFFORTS] for the
+	 *  valid values and [com.appricodes.lens_whisper.inference.OfflineInferenceEngine]'s own doc for
+	 *  what this actually does and why it's a no-op for every model except Gemma. Default "none" —
+	 *  reasoning is opt-in, not opt-out, since it costs real time and battery on-device for models
+	 *  that support it at all. Set from Settings. */
+	var reasoningEffort: String
+		get() {
+			val stored = standardPrefs.getString("reasoning_effort", "none") ?: "none"
+			return if (stored in OfflineInferenceEngine.ALL_REASONING_EFFORTS) stored else "none"
+		}
+		set(value) = standardPrefs.edit().putString("reasoning_effort", value).apply()
 
 	/** Base URL (e.g. "http://192.168.1.42:8765") of the user's LensWhisper Desktop companion app
 	 *  on the local network — discovered automatically or entered manually in Settings, see

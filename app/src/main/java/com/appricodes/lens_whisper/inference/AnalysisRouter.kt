@@ -48,7 +48,10 @@ suspend fun runSelectedModelAnalysis(
     val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, config, offlineImages.size)
     return OfflineInferenceEngine.analyze(
         context, model, offlineImages, userPrompt, systemInstruction,
-        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)
+        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize),
+        // Explore's system instruction demands one parseable JSON object back — see
+        // OfflineInferenceEngine.analyze's own doc for why that's incompatible with reasoning on.
+        structuredOutput = config.id == "explore"
     )
 }
 
@@ -106,6 +109,8 @@ fun runSelectedOfflineModelAnalysisStreaming(
     val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, config, offlineImages.size)
     return OfflineInferenceEngine.analyzeStreaming(
         context, model, offlineImages, userPrompt, systemInstruction,
-        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)
+        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize),
+        // See the matching call in runSelectedModelAnalysis above for why this matters.
+        structuredOutput = config.id == "explore"
     )
 }

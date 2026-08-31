@@ -23,6 +23,7 @@ import androidx.compose.ui.unit.sp
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.data.SettingsRepository
+import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.offline.OfflineTranslator
@@ -105,6 +106,9 @@ fun SettingsScreen(
 	var langDropdownExpanded by remember { mutableStateOf(false) }
 	var ocrDropdownExpanded by remember { mutableStateOf(false) }
 	var personaDropdownExpanded by remember { mutableStateOf(false) }
+
+	var reasoningEffort by remember { mutableStateOf(prefs.reasoningEffort) }
+	var reasoningEffortDropdownExpanded by remember { mutableStateOf(false) }
 
 	Column(
 		modifier = Modifier
@@ -219,6 +223,38 @@ fun SettingsScreen(
 					}
 				}
 			}
+		}
+
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Reasoning Effort (Gemma models only)", fontSize = 18.sp, color = Color.Gray)
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { reasoningEffortDropdownExpanded = true }
+					.padding(16.dp)
+					.clearAndSetSemantics {
+						contentDescription = "Reasoning effort is ${OfflineInferenceEngine.reasoningEffortDisplayName(reasoningEffort)}. Double tap to change."
+					},
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = OfflineInferenceEngine.reasoningEffortDisplayName(reasoningEffort), fontSize = 18.sp)
+				DropdownMenu(expanded = reasoningEffortDropdownExpanded, onDismissRequest = { reasoningEffortDropdownExpanded = false }) {
+					OfflineInferenceEngine.ALL_REASONING_EFFORTS.forEach { effort ->
+						DropdownMenuItem(text = { Text(OfflineInferenceEngine.reasoningEffortDisplayName(effort)) }, onClick = {
+							reasoningEffort = effort
+							prefs.reasoningEffort = effort
+							reasoningEffortDropdownExpanded = false
+						})
+					}
+				}
+			}
+			Text(
+				text = "How much the model thinks before answering, when the selected model supports it — currently " +
+					"only Gemma. Higher takes longer and uses more battery. Has no effect on any other model.",
+				fontSize = 13.sp,
+				color = Color.Gray
+			)
 		}
 
 		Row(
