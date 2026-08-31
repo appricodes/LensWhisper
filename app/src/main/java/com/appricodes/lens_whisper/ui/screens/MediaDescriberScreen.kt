@@ -49,6 +49,7 @@ import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.components.MediaPreviewArea
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
+import com.appricodes.lens_whisper.ui.components.ResyncSelectedModelOnResume
 import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
@@ -92,6 +93,10 @@ fun MediaDescriberScreen(
     val mlkitProvider = remember { MlkitButtonProvider(context, coroutineScope, capturePhoto = null) }
 
     var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
+    // See ResyncSelectedModelOnResume's own doc — without this, switching or deleting the selected
+    // model from Manage Advanced Models and returning here leaves this screen's own selectedModelId
+    // stuck on whatever was selected when this screen was first composed.
+    ResyncSelectedModelOnResume(prefs) { selectedModelId = it }
     val (provider, selectedOfflineModel) = remember(selectedModelId) {
         ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
     }
@@ -254,7 +259,7 @@ fun MediaDescriberScreen(
         selectedOfflineModel = selectedOfflineModel,
         customPromptTexts = controller.customPromptTexts,
         customPromptTitles = controller.customPromptTitles,
-        onRunPrompt = { config, label -> gate { coroutineScope.launch { controller.runAnalysis(config, label, captureFrames) } } },
+        onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
         onExplore = {
             gate {
                 if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
@@ -265,7 +270,7 @@ fun MediaDescriberScreen(
                 )
             }
         },
-        onRepeat = { gate { coroutineScope.launch { controller.onRepeat(selectedModelId, captureFrames) } } },
+        onRepeat = { gate { controller.onRepeat(selectedModelId, captureFrames) } },
         // Both need a live camera capture (max resolution + a 720p segmentation copy from the same
         // shot) — this screen works from an already-picked video/image file, not a camera, so
         // there's nothing for either to capture from. See ModelButtonContext's doc.

@@ -146,3 +146,33 @@ fun ModelTopBar(
         SupportDialog(onDismiss = { showSupportDialog = false })
     }
 }
+
+/**
+ * Resyncs a screen's own `selectedModelId` Compose state from [PreferencesManager.selectedModelId]
+ * on every resume — call once, in composition, from [com.appricodes.lens_whisper.CameraActivity]
+ * and the Video/Image describer, right next to wherever each seeds that state with
+ * `remember { mutableStateOf(prefs.selectedModelId) }`.
+ *
+ * That seed only runs once, on first composition; it does not track later changes to the
+ * preference. `ModelManagementActivity` (reached via this same top bar's "Manage Advanced Models")
+ * writes `prefs.selectedModelId` directly — switching models, or falling back to `"mlkit"` when
+ * the currently-selected model gets deleted — while the calling screen is merely paused, not
+ * destroyed, underneath it. Without this, returning to that screen leaves its `selectedModelId`
+ * stale: the top bar's own [ModelTopBar] ON_RESUME `refresh()` above only recomputes the display
+ * name from whatever `selectedModelId` it's *handed*, so a stale caller means a stale display too,
+ * and the stale id also keeps driving [com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry]'s
+ * provider choice, [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController.gateForSelectedModel]'s
+ * gate, and the model-preload effect — i.e. exactly "the model shown at the top doesn't match the
+ * one that actually runs."
+ */
+@Composable
+fun ResyncSelectedModelOnResume(prefs: PreferencesManager, onResync: (String) -> Unit) {
+    val lifecycleOwner = LocalLifecycleOwner.current
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) onResync(prefs.selectedModelId)
+        }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+}

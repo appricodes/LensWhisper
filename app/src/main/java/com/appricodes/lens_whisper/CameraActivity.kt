@@ -8,6 +8,7 @@ import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.Toast
@@ -63,6 +64,7 @@ import com.appricodes.lens_whisper.ui.components.DisclaimerDialog
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
+import com.appricodes.lens_whisper.ui.components.ResyncSelectedModelOnResume
 import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
@@ -101,6 +103,20 @@ class CameraActivity : ComponentActivity() {
 
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
             .launch(Manifest.permission.RECORD_AUDIO)
+
+        // POST_NOTIFICATIONS (Android 13+ only — the permission doesn't exist before it) — without
+        // this, ModelDownloadService's ongoing-progress notification silently fails to display
+        // (the foreground service itself still runs and the download still completes; confirmed
+        // on-device — see the diagnosis for "Continue in Background doesn't work correctly"), which
+        // leaves a user who backgrounds a long download with zero visible indication anything is
+        // happening: no progress, no way to cancel from the shade, and a real risk they conclude
+        // it's stuck and force-close the app themselves, actually killing it. Requested once here,
+        // at the app's launcher Activity, rather than only right before a download starts — a grant
+        // is process-wide and persists across app runs, same as the RECORD_AUDIO request above.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+                .launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
 
         volumeKeyHandler = VolumeKeyGestureHandler(
             context = this,
@@ -211,6 +227,11 @@ private fun CameraScreen(
     mlkitProvider.ObserveSlowModelDialog(prefs)
 
     var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
+    // See ResyncSelectedModelOnResume's own doc — without this, switching or deleting the selected
+    // model from Manage Advanced Models and returning here leaves this screen's own selectedModelId
+    // (and everything keyed on it: the top bar's display, the provider, the download gate, the
+    // preload effect) stuck on whatever was selected when this screen was first composed.
+    ResyncSelectedModelOnResume(prefs) { selectedModelId = it }
     val (provider, selectedOfflineModel) = remember(selectedModelId) {
         ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
     }
@@ -366,7 +387,9 @@ private fun CameraScreen(
      * class already tends to fire on framed screens/monitors generally), isolates it from the
      * full-resolution original via [SegmentationIsolation], and asks the selected on-device model
      * to describe it in detail. Wrapped in [AnalysisSessionController.runGuarded] by its caller so
-     * the whole pipeline — not just the final model call — is covered by the usual busy gate.
+     * the whole pipeline — not just the final model call — gets the usual cancel-and-replace
+     * handling: pressing another button mid-pipeline cancels this and starts that one instead of
+     * being refused with "please wait".
      */
     suspend fun runDescribeTv() {
         controller.runGuarded {
@@ -416,11 +439,16 @@ private fun CameraScreen(
     suspend fun launchExploreAndDescribeFlow() {
         controller.runGuarded {
             ProcessingSoundPlayer.playCaptureAcknowledge(context)
-            // No tone starts here — SegmentationExploreActivity owns its own "waiting for the
-            // model" cue for the initial detection pass, started once it actually receives the
-            // image, same convention launchSegmentationExplore already follows.
-            val capture = captureMaxResPair {}
+            // Tone starts the instant the shutter fires, same as runDescribeTv above — the user
+            // should hear "the model is working" from the moment the photo is taken, not only once
+            // SegmentationExploreActivity is fully on screen and has decoded the image back from
+            // disk (Activity launch + bitmap decode is a real, noticeable gap). runGuarded's own
+            // finally cancels this the moment this function returns; startActivity() below is
+            // asynchronous, so that finally fires — and this tone stops — before the new Activity's
+            // own composition (and its own tone) ever starts, avoiding two tones overlapping.
+            val capture = captureMaxResPair { controller.startProcessingChime() }
             if (capture == null) {
+                controller.stopProcessingChime()
                 AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                 return@runGuarded
             }
@@ -446,7 +474,7 @@ private fun CameraScreen(
         selectedOfflineModel = selectedOfflineModel,
         customPromptTexts = controller.customPromptTexts,
         customPromptTitles = controller.customPromptTitles,
-        onRunPrompt = { config, label -> gate { coroutineScope.launch { controller.runAnalysis(config, label, captureFrames) } } },
+        onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
         onExplore = {
             gate {
                 controller.onExplore(
@@ -457,8 +485,8 @@ private fun CameraScreen(
             }
         },
         onRepeat = {
-            if (selectedModelId == "mlkit") mlkitProvider.repeatLastSpoken()
-            else gate { coroutineScope.launch { controller.onRepeat(selectedModelId, captureFrames) } }
+            if (selectedModelId == "mlkit") mlkitProvider.repeatLastAction()
+            else gate { controller.onRepeat(selectedModelId, captureFrames) }
         },
         onDescribeTv = { gate { coroutineScope.launch { runDescribeTv() } } },
         onExploreAndDescribe = { gate { coroutineScope.launch { launchExploreAndDescribeFlow() } } },

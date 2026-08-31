@@ -27,16 +27,11 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
 import com.appricodes.lens_whisper.utils.ImageScaling
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.util.concurrent.Executors
@@ -56,9 +51,10 @@ data class CapturedFrame(val bitmap: Bitmap, val uri: Uri)
  * the camera-in-use indicator lit, holds the camera against other apps, and is hard to justify to a
  * user who cannot see that nothing is being shown. Now:
  *
- * - **Capture** binds `ImageCapture`, takes the photo, and unbinds again — see [withCaptureSession],
- *   which brackets a whole burst (Story mode's several frames) in one bind rather than one per
- *   frame.
+ * - **Capture** binds `ImageCapture`, takes the photo, and unbinds again immediately once the
+ *   whole session ends — see [withCaptureSession], which brackets a whole burst (Story mode's
+ *   several frames) in one bind rather than one per frame, but still releases the instant that
+ *   burst is done rather than lingering.
  * - **The flash** is not a torch any more. [PreferencesManager.flashEnabled] is an intent, applied
  *   as `ImageCapture.FLASH_MODE_ON` for the moment of capture, so the light exists only while the
  *   shutter does. There is consequently no auto-off timer to get wrong and no way to leave a torch
@@ -93,29 +89,18 @@ class CameraController(private val context: Context) {
     // re-create the live ImageCapture every few seconds for no reason.
     private var boundSignature: String? = null
 
-    // Now that a binding can outlive the exact call that made it (see the keep-warm window on
-    // withCaptureSession), boundSignature alone isn't enough to know whether it's still actually
-    // valid: CameraX itself silently tears down/suspends whatever's bound the moment its
-    // LifecycleOwner drops below STARTED (e.g. a keep-warm window spans a navigation away from
-    // this screen and back), with no signal to this class's own bookkeeping. This observer catches
-    // that the moment it happens rather than at the next rebind() call, which by then would find
-    // the LifecycleOwner already RESUMED again and wrongly conclude nothing changed. Attached to
+    // boundSignature alone isn't enough to know a binding is still actually valid: CameraX itself
+    // silently tears down/suspends whatever's bound the moment its LifecycleOwner drops below
+    // STARTED (e.g. a continuous mode's long-lived binding spans a navigation away from this
+    // screen and back), with no signal to this class's own bookkeeping. This observer catches that
+    // the moment it happens rather than at the next rebind() call, which by then would find the
+    // LifecycleOwner already RESUMED again and wrongly conclude nothing changed. Attached to
     // whichever LifecycleOwner is currently bound (see the top of rebind()), moved whenever that
     // changes, removed entirely in release().
     private var observedLifecycleOwner: LifecycleOwner? = null
     private val onStopObserver = LifecycleEventObserver { _, event ->
         if (event == Lifecycle.Event.ON_STOP) boundSignature = null
     }
-
-    // Backs the brief "keep-warm" window after a capture session ends — see withCaptureSession.
-    // Cancelled in shutdown()/release() so nothing outlives the controller itself. Main, not
-    // Default: rebind() ends up calling ProcessCameraProvider.bindToLifecycle/unbindAll, which
-    // CameraX hard-asserts must run on the main thread (crashed with exactly that
-    // IllegalStateException — "Not in application's main thread" — in scheduleDelayedUnbind before
-    // this was caught: every other rebind() caller reaches it via a coroutine launched from
-    // Compose, which already runs on Main, so this was the one path that didn't).
-    private val controllerScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-    private var pendingUnbindJob: Job? = null
 
     // Serializes both binding changes and takePicture() calls. Rapidly switching between buttons
     // could otherwise fire two concurrent captures on the same use case, which raced against
@@ -144,21 +129,19 @@ class CameraController(private val context: Context) {
     }
 
     /**
-     * Binds the camera for the duration of [block] and releases it afterwards, whatever happens.
-     * Nest-safe and burst-friendly: Story mode's several `capturePhotoToFile` calls run inside one
-     * session, so the camera is opened once rather than once per frame.
+     * Binds the camera for the duration of [block] and releases it again immediately afterwards,
+     * whatever happens — no keep-warm window. Nest-safe and burst-friendly: Story mode's several
+     * `capturePhotoToFile` calls run inside one session, so the camera is opened once rather than
+     * once per frame, and only unbinds once the whole burst is done.
      *
-     * Doesn't unbind the instant [block] finishes, though — it schedules that for
-     * [KEEP_WARM_MS] later instead (see [scheduleDelayedUnbind]), cancelled if another session
-     * starts before then. Binding a cold camera from nothing measurably takes a second or two on
-     * some devices (sensor open, AE/AF convergence) — noticeable as a delay between a capture
-     * button and [ProcessingSoundPlayer.playShutter] actually firing (partly masked by
+     * Binding a cold camera from nothing measurably takes a second or two on some devices (sensor
+     * open, AE/AF convergence) — noticeable as a delay between a capture button and
+     * [ProcessingSoundPlayer.playShutter] actually firing (partly masked by
      * [ProcessingSoundPlayer.playCaptureAcknowledge] firing immediately instead of waiting for
-     * it). [KEEP_WARM_MS] (30s, raised from an initial 4s once the trade-off below was accepted)
-     * of the camera staying bound right after real use isn't "continuously active" in the sense
-     * that requirement was about — it's still closed the rest of the time — but it does mean the
-     * system's camera-in-use indicator can stay lit up to that long past the actual photo, which
-     * is the real trade-off here.
+     * it). An earlier version of this method kept the binding alive for 30s past the end of
+     * [block] specifically to absorb that cost on a quick follow-up capture; that traded the
+     * system's camera-in-use indicator staying lit for up to 30s past the actual photo, which
+     * wasn't worth it — every use now releases the camera the moment it's done with it instead.
      */
     suspend fun <T> withCaptureSession(
         lifecycleOwner: LifecycleOwner,
@@ -172,8 +155,6 @@ class CameraController(private val context: Context) {
         block: suspend () -> T
     ): T {
         cameraMutex.withLock {
-            pendingUnbindJob?.cancel()
-            pendingUnbindJob = null
             captureSessionDepth++
             boundLifecycleOwner = lifecycleOwner
             captureFlashEnabled = flashEnabled
@@ -186,30 +167,28 @@ class CameraController(private val context: Context) {
         try {
             return block()
         } finally {
-            cameraMutex.withLock {
-                captureSessionDepth--
-                if (captureSessionDepth == 0) {
-                    captureFlashEnabled = false
-                    captureTargetResolution = RESOLUTION_720P
-                    scheduleDelayedUnbind()
+            // NonCancellable: [block] can be cancelled mid-capture now that
+            // AnalysisSessionController.launchAnalysis cancels a previous analysis job (which may
+            // be sitting inside capturePhotoInternal, itself holding cameraMutex for the whole
+            // takePicture() call) to start a new one. Mutex.lock() on an already-cancelled
+            // coroutine throws immediately instead of acquiring — without this wrapper,
+            // captureSessionDepth-- below would never run, permanently leaking the count above 0
+            // and leaving the camera bound forever (silently defeating the "release right after
+            // every use" contract this method exists for).
+            withContext(NonCancellable) {
+                cameraMutex.withLock {
+                    captureSessionDepth--
+                    if (captureSessionDepth == 0) {
+                        captureFlashEnabled = false
+                        captureTargetResolution = RESOLUTION_720P
+                        // Releases right away — rebind() recomputes from captureSessionDepth/
+                        // analysisFrameSink, so this naturally leaves a continuous mode's live feed
+                        // (Light Level, MLKit's continuous polling) bound if one is holding the
+                        // camera open on purpose, and only tears down the just-finished capture use
+                        // case.
+                        rebind()
+                    }
                 }
-            }
-        }
-    }
-
-    /** Actually tears the binding down [KEEP_WARM_MS] after the last capture session ended,
-     *  unless a new one started (and cancelled this) first. Runs on [controllerScope], not the
-     *  caller's coroutine — [withCaptureSession]'s `finally` has already returned to its caller by
-     *  the time this fires. */
-    private fun scheduleDelayedUnbind() {
-        pendingUnbindJob = controllerScope.launch {
-            delay(KEEP_WARM_MS)
-            cameraMutex.withLock {
-                // analysisFrameSink != null means a continuous mode (Light Level, MLKit's
-                // continuous polling) is holding the camera open on purpose — this timer exists
-                // only to expire an idle *capture* session, and must never tear down a live feed
-                // out from under one of those, keep-warm window elapsed or not.
-                if (captureSessionDepth == 0 && analysisFrameSink == null) rebind()
             }
         }
     }
@@ -314,12 +293,8 @@ class CameraController(private val context: Context) {
         activeCamera = cameraProvider.bindToLifecycle(lifecycleOwner, selector, *useCases.toTypedArray())
     }
 
-    /** Unbinds everything and forces the torch off. Safe to call when nothing is bound. Also
-     *  cancels any pending [scheduleDelayedUnbind] keep-warm job — this is an immediate, unconditional
-     *  teardown, not something a fresh capture session should be able to interrupt. */
+    /** Unbinds everything and forces the torch off. Safe to call when nothing is bound. */
     fun release() {
-        pendingUnbindJob?.cancel()
-        pendingUnbindJob = null
         observedLifecycleOwner?.lifecycle?.removeObserver(onStopObserver)
         observedLifecycleOwner = null
         analysisFrameSink = null
@@ -334,10 +309,9 @@ class CameraController(private val context: Context) {
     }
 
     /** Call when the owning screen is destroyed — [release] alone leaves the analyzer executor
-     *  thread and [controllerScope] alive. */
+     *  thread alive. */
     fun shutdown() {
         release()
-        controllerScope.cancel()
         cameraExecutor.shutdown()
     }
 
@@ -419,10 +393,6 @@ class CameraController(private val context: Context) {
     }
 
     companion object {
-        /** How long the camera stays bound after a capture session ends before actually
-         *  unbinding — see [withCaptureSession]/[scheduleDelayedUnbind]. */
-        private const val KEEP_WARM_MS = 30000L
-
         // Capture targets for withCaptureSession's highResolution flag — Read Text/Read Document
         // need enough resolution for small glyphs to stay legible to OCR; every other capture
         // (custom VLM prompts, Story, Detect Objects/Object and Color Detection, Explore) only

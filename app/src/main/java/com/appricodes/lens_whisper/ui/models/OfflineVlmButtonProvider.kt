@@ -66,7 +66,6 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
             listOf(
                 promptCell("Objects", "objects"),
                 promptCell("Read Texts", "read_texts"),
-                GridCell(label = "Repeat", contentDescription = "Repeat the last action.", onClick = ctx.onRepeat),
                 GridCell(
                     label = "Explore and Describe",
                     contentDescription = if (ctx.onExploreAndDescribe != null) {
@@ -77,7 +76,12 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                     },
                     enabled = ctx.onExploreAndDescribe != null,
                     onClick = { ctx.onExploreAndDescribe?.invoke() }
-                )
+                ),
+                // No on-screen Repeat here — the volume-key long-press (ctx.onRepeat, wired in
+                // CameraActivity/MediaDescriberScreen) already covers it; a dedicated button was
+                // redundant with that gesture. Left as an empty spacer, not a 3-cell row, so this
+                // row's columns still line up with the 4-wide rows above/below it.
+                null
             ),
             // The 4 custom slots get a row of their own, deliberately last — CameraActivity places
             // the AI-inaccuracy disclaimer and the utility row right after whatever this returns,

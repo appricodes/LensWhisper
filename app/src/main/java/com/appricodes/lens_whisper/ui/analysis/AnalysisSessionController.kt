@@ -41,6 +41,7 @@ import com.appricodes.lens_whisper.utils.ThermalGuard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
@@ -60,6 +61,13 @@ data class CapturedBundle(
     val localServerCall: suspend () -> String = { "ERROR: Local Server isn't available for this action." },
     val localServerCallStreaming: (() -> Flow<String>)? = null
 )
+
+/** Strips whitespace and punctuation, keeping only letters/digits (Unicode-aware, so this works the
+ *  same for Persian/CJK text as for Latin) — used to compare a streamed sentence against ones
+ *  already spoken in [AnalysisSessionController.runStreamingAnalysis]. A small on-device model
+ *  degenerating into a near-repeat that only differs in spacing or a trailing comma should still
+ *  count as the same sentence, not a "new" one that resets the loop detector. */
+private fun normalizeForRepeatCheck(s: String): String = s.filter { it.isLetterOrDigit() }
 
 /** Index of the first sentence-terminating character in [sb] that's actually a sentence boundary —
  *  followed by whitespace, another terminator, or being a newline itself — not, say, the decimal
@@ -142,10 +150,6 @@ class AnalysisSessionController(
     private val repository by lazy { OfflineModelsRepository(context.applicationContext) }
     private val speechRecognizer by lazy { SpeechRecognizer.createSpeechRecognizer(context) }
 
-    private fun announceBusy() {
-        AccessibilityUtils.announceToTalkBack(context, "Please wait for the current analysis to finish.")
-    }
-
     /** True for the on-device VLM catalog (Gemma4/SmolVLM2/Qwen-VL/...) — those models are asked
      *  to answer in the target language via their system instruction, but small on-device models
      *  frequently ignore that, so [OfflineTranslator.translate] is applied as a fallback. Not
@@ -219,25 +223,76 @@ class AnalysisSessionController(
         activeAudioFeedbackJob?.cancel()
     }
 
-    /** Runs [action] under the same busy-gate/[isAnalyzing] bookkeeping [runAnalysis] itself uses,
-     *  for a caller whose actual capture/detect/isolate work happens outside this controller
-     *  (see "Describe TV Image" in [CameraActivity], which segments and isolates one object before
-     *  ever reaching [runAnalysisOnBitmap]) — so the busy-check covers that whole pipeline, not
-     *  just the final model call. Not used by "Explore and Describe"'s per-tap analysis, which
-     *  deliberately does *not* want busy-blocking — see [runAnalysisOnBitmap]'s doc. */
-    suspend fun runGuarded(action: suspend () -> Unit) {
-        if (isAnalyzing) {
-            announceBusy()
-            return
+    /** This controller's one active analysis/capture job, if any — see [launchAnalysis]. */
+    private var activeAnalysisJob: Job? = null
+
+    /**
+     * Launches [body] as this controller's one active job, replacing whatever's currently running
+     * rather than refusing to start — every entry point below that reaches the on-device model or
+     * a camera capture ([runAnalysis], [onRepeat], [runGuarded], [onExplore]) funnels through here
+     * instead of each keeping its own busy gate, so a second button press always cancels-and
+     * -replaces an in-flight analysis, the same way [SegmentationExploreActivity.analyzeTappedObject]
+     * replaces one tap's analysis with the next.
+     *
+     * `previous?.cancelAndJoin()` — never a bare `cancel()` — is deliberately the *first* thing the
+     * new coroutine does, before [body] touches anything:
+     * - It's what makes cancelling an in-flight on-device model call safe. [Job.cancel] only
+     *   *requests* cancellation; the actual unwind happens later, asynchronously, at the cancelled
+     *   coroutine's next suspension point. [cancelAndJoin] waits for that unwind to actually finish
+     *   before returning — which for a call into
+     *   [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.analyzeStreaming] means
+     *   waiting for its own `catch (e: CancellationException) { conversation.cancelProcess(); ... }`
+     *   to run. Skipping that wait (or using bare `cancel()`) risks the new job's own `Conversation`
+     *   opening while the old one is still mid-teardown — confirmed on-device as a native SIGSEGV
+     *   inside the GPU delegate when a `Conversation` is closed while still generating; see that
+     *   function's own doc for the full history.
+     * - It's also what avoids a race on [activeAudioFeedbackJob] and [isAnalyzing] themselves:
+     *   both the old and new job's own `finally` below touch the same shared fields. If the new
+     *   job set `isAnalyzing = true` (or started a chime) *before* the old job's cancellation had
+     *   fully unwound, the old job's `finally` would run after and clobber the new job's state —
+     *   turning `isAnalyzing` back off, or cancelling the *new* chime instead of the old one.
+     *   Joining first guarantees the old job's `finally` is completely done before this one starts.
+     *
+     * Also catches (and reports, rather than crashing) any non-cancellation exception [body]
+     * itself doesn't already handle — e.g. a detector failure inside "Describe TV Image"'s
+     * `SegmentationSpeedGate.detect` call, which [runGuarded] adds no catch of its own around.
+     * Every job launched here runs on this same [coroutineScope]; that scope is not a
+     * `SupervisorJob`, so an uncaught throw wouldn't just fail *this* job — it would kill the
+     * whole scope, silently turning every later button press into a no-op for the rest of this
+     * screen's lifetime. `catch (e: CancellationException) { throw e }` has to come first and
+     * must rethrow: `CancellationException` is itself an `Exception` subtype, and this is exactly
+     * the exception a cancel-and-replace produces on every single press — swallowing it here would
+     * both misreport a normal replace as "Error occurred" and leave `activeAnalysisJob`'s own
+     * cancellation half-handled.
+     */
+    private fun launchAnalysis(body: suspend () -> Unit) {
+        val previous = activeAnalysisJob
+        activeAnalysisJob = coroutineScope.launch {
+            previous?.cancelAndJoin()
+            isAnalyzing = true
+            try {
+                body()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                AccessibilityUtils.announceToTalkBack(context, "Error occurred.")
+                dialogState = "Error" to (e.localizedMessage ?: "Analysis failed.")
+            } finally {
+                isAnalyzing = false
+                activeAudioFeedbackJob?.cancel()
+            }
         }
+    }
+
+    /** Runs [action] under the same cancel-and-replace bookkeeping [runAnalysis] itself uses (see
+     *  [launchAnalysis]), for a caller whose actual capture/detect/isolate work happens outside
+     *  this controller (see "Describe TV Image" in [CameraActivity], which segments and isolates
+     *  one object before ever reaching [runAnalysisOnBitmap]) — so that whole pipeline is covered,
+     *  not just the final model call. Not used by "Explore and Describe"'s per-tap analysis, which
+     *  manages its own, separate cancel-and-replace job — see [runAnalysisOnBitmap]'s doc. */
+    fun runGuarded(action: suspend () -> Unit) {
         if (blockedByHeat()) return
-        isAnalyzing = true
-        try {
-            action()
-        } finally {
-            isAnalyzing = false
-            activeAudioFeedbackJob?.cancel()
-        }
+        launchAnalysis(action)
     }
 
     /**
@@ -275,20 +330,19 @@ class AnalysisSessionController(
      * (capture a camera photo, extract video frames, load a static image) and returns a
      * [CapturedBundle], or null if capture failed outright. Replaces both
      * `AdvancedCameraScreen.runAnalysis`/`performAnalysis` and `MediaDescriberScreen.runAnalysis`.
+     *
+     * Not suspend — launches (and owns) its own job via [launchAnalysis], cancelling whatever
+     * analysis was already in flight rather than refusing to start a new one. A caller no longer
+     * needs to wrap this in its own `coroutineScope.launch { }`.
      */
-    suspend fun runAnalysis(config: PromptConfig, label: String, captureFrames: suspend (PromptConfig) -> CapturedBundle?) {
-        if (isAnalyzing) {
-            announceBusy()
-            return
-        }
+    fun runAnalysis(config: PromptConfig, label: String, captureFrames: suspend (PromptConfig) -> CapturedBundle?) {
         if (blockedByHeat()) return
-        isAnalyzing = true
         lastPrompt = config
-        try {
+        launchAnalysis {
             val bundle = captureFrames(config)
             if (bundle == null) {
                 handleResponse("ERROR: Could not capture the image.")
-                return
+                return@launchAnalysis
             }
             // On-device models always stream; the Local Server streams only when the user opted in
             // (Settings, default off — see PreferencesManager.streamingEnabled) since it changes the
@@ -301,10 +355,10 @@ class AnalysisSessionController(
             // problems by returning an "ERROR: ..." string), runSelectedOfflineModelAnalysisStreaming
             // throws for the exact same class of problem (model missing, not downloaded, no images,
             // now also "device too hot" — see ThermalGuard) — and it throws *eagerly*, before
-            // returning a Flow, not from inside one. Left uncaught, that exception would escape this
-            // function's try/finally (which has no catch of its own) and crash the coroutine this
-            // runs in. It's a real, easily-reached path — a phone legitimately gets hot from
-            // sustained on-device inference, so "too hot" is not a rare edge case here.
+            // returning a Flow, not from inside one. Left uncaught, that exception would escape
+            // this whole launchAnalysis body (which has no catch of its own) and crash the
+            // coroutine this runs in. It's a real, easily-reached path — a phone legitimately gets
+            // hot from sustained on-device inference, so "too hot" is not a rare edge case here.
             val streamingFlow: Flow<String>? = try {
                 when {
                     isOfflineVlmSelected() && config.id != "explore" ->
@@ -317,7 +371,7 @@ class AnalysisSessionController(
                 throw e
             } catch (e: Exception) {
                 handleResponse("ERROR: ${e.localizedMessage ?: "Setup failed."}")
-                return
+                return@launchAnalysis
             }
             if (streamingFlow != null) {
                 runStreamingAnalysis(streamingFlow, translate = isOfflineVlmSelected())
@@ -331,9 +385,6 @@ class AnalysisSessionController(
                 )
                 handleResponse(response)
             }
-        } finally {
-            isAnalyzing = false
-            activeAudioFeedbackJob?.cancel()
         }
     }
 
@@ -355,10 +406,11 @@ class AnalysisSessionController(
         val pending = StringBuilder()
         // Small on-device models occasionally degenerate into repeating themselves verbatim once
         // they run out of anything new to say. Every complete sentence spoken so far is tracked
-        // here; hitting an exact repeat throws RepeatedSentenceDetected, which unwinds out of
-        // flow.collect below and — because that's the same coroutine actually driving
-        // OfflineInferenceEngine's token generation — genuinely stops the model from generating
-        // further tokens, not just stops this function from speaking them.
+        // here (normalized — see normalizeForRepeatCheck — so a repeat that only differs in
+        // spacing/punctuation still counts); hitting one throws RepeatedSentenceDetected, which
+        // unwinds out of flow.collect below and — because that's the same coroutine actually
+        // driving OfflineInferenceEngine's token generation — genuinely stops the model from
+        // generating further tokens, not just stops this function from speaking them.
         val seenSentences = mutableSetOf<String>()
 
         suspend fun speak(sentence: String) {
@@ -379,8 +431,8 @@ class AnalysisSessionController(
                 while (end != -1) {
                     val sentence = pending.substring(0, end + 1)
                     pending.delete(0, end + 1)
-                    val trimmed = sentence.trim()
-                    if (trimmed.isNotEmpty() && !seenSentences.add(trimmed)) throw RepeatedSentenceDetected()
+                    val normalized = normalizeForRepeatCheck(sentence)
+                    if (normalized.isNotEmpty() && !seenSentences.add(normalized)) throw RepeatedSentenceDetected()
                     speak(sentence)
                     end = findSentenceEnd(pending)
                 }
@@ -402,11 +454,28 @@ class AnalysisSessionController(
         }
     }
 
-    /** Thrown from inside [runStreamingAnalysis]'s `flow.collect` to unwind out of it the moment a
-     *  sentence repeats one already spoken — see that function's doc. Deliberately not a
-     *  [CancellationException] subtype, so it can't be mistaken for real coroutine cancellation by
-     *  this or any other catch block. */
-    private class RepeatedSentenceDetected : Exception()
+    /**
+     * Thrown from inside [runStreamingAnalysis]'s `flow.collect` to unwind out of it the moment a
+     * sentence repeats one already spoken — see that function's doc.
+     *
+     * A [CancellationException] subtype *on purpose* — the same early-unwind technique
+     * `kotlinx.coroutines.flow`'s own `take()` operator uses internally (its private
+     * `AbortFlowException`): throwing it here is what makes it actually reach
+     * [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.analyzeStreaming]'s own
+     * `catch (e: CancellationException)` handler, which calls `Conversation.cancelProcess()`
+     * before its `use{}` block's implicit `close()` runs — exactly the same "stop the in-flight
+     * model call safely" method [SegmentationExploreActivity.analyzeTappedObject] relies on via
+     * `Job.cancelAndJoin()`. A plain (non-cancellation) exception would skip that handler entirely
+     * and reach `close()` on a `Conversation` that's still generating, which is what crashes the
+     * process with a native SIGSEGV — see that fix's own doc for the confirmed repro. Caught
+     * specifically, by exact subtype, right below in [runStreamingAnalysis] — before the generic
+     * `catch (e: CancellationException)` there — so it's swallowed as a normal "nothing more to
+     * add" outcome rather than propagating as a real cancellation of this coroutine itself; since
+     * it's manually thrown rather than the result of an actual `Job.cancel()`, catching it without
+     * rethrowing leaves this coroutine's own Job untouched (still Active), same as `take()`
+     * catching its own `AbortFlowException`.
+     */
+    private class RepeatedSentenceDetected : CancellationException()
 
     /**
      * Repeats the last prompt run (voice query, tap, or custom), if any. [selectedModelId] guards
@@ -416,8 +485,10 @@ class AnalysisSessionController(
      * regardless of which model ran it, so without this check it would resurface here. Currently
      * blocks it for every offline model, not just `fastvlm_0_5b` — the request that added this was
      * scoped to FastVLM specifically, but the leak itself isn't model-specific, so neither is the fix.
+     *
+     * Not suspend, same as [runAnalysis] (which this just delegates to) — see that function's doc.
      */
-    suspend fun onRepeat(selectedModelId: String, captureFrames: suspend (PromptConfig) -> CapturedBundle?) {
+    fun onRepeat(selectedModelId: String, captureFrames: suspend (PromptConfig) -> CapturedBundle?) {
         val prompt = lastPrompt
         when {
             prompt == null -> AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
@@ -477,11 +548,11 @@ class AnalysisSessionController(
                         _customPromptTexts[targetCustomSlot] = recognizedQuery
                         _customPromptTitles[targetCustomSlot] = truncatedTitle(recognizedQuery)
                         val config = PromptConfig("custom", _customPromptTitles[targetCustomSlot], recognizedQuery, 1, 0.5)
-                        coroutineScope.launch { runAnalysis(config, config.title, captureFrames) }
+                        runAnalysis(config, config.title, captureFrames)
                     }
                 } else if (!recognizedQuery.isNullOrBlank()) {
                     val config = PromptConfig("custom", "Voice Query", recognizedQuery, 1, 0.5)
-                    coroutineScope.launch { runAnalysis(config, "Voice Query", captureFrames) }
+                    runAnalysis(config, "Voice Query", captureFrames)
                 }
             }
             override fun onPartialResults(partialResults: Bundle?) {}
@@ -512,29 +583,21 @@ class AnalysisSessionController(
         speechRecognizer.destroy()
     }
 
-    /** Busy-check + Explore-support gating, shared verbatim between camera and media-describer Explore buttons. */
+    /** Explore-support gating + the same cancel-and-replace bookkeeping [runAnalysis] uses (see
+     *  [launchAnalysis]), shared verbatim between camera and media-describer Explore buttons. */
     fun onExplore(selectedModelId: String, captureFrame: suspend () -> Uri?, launchExplore: (Uri) -> Unit) {
-        if (isAnalyzing) {
-            announceBusy()
-            return
-        }
         if (!repository.isExploreSupported(selectedModelId)) {
             showExploreUnsupportedDialog = true
             return
         }
-        isAnalyzing = true
-        coroutineScope.launch {
-            try {
-                AccessibilityUtils.announceToTalkBack(context, "Entering exploration mode. Analyzing elements.")
-                val uri = captureFrame()
-                if (uri == null) {
-                    AccessibilityUtils.announceToTalkBack(context, "Could not capture the current frame.")
-                    return@launch
-                }
-                launchExplore(uri)
-            } finally {
-                isAnalyzing = false
+        launchAnalysis {
+            AccessibilityUtils.announceToTalkBack(context, "Entering exploration mode. Analyzing elements.")
+            val uri = captureFrame()
+            if (uri == null) {
+                AccessibilityUtils.announceToTalkBack(context, "Could not capture the current frame.")
+                return@launchAnalysis
             }
+            launchExplore(uri)
         }
     }
 

@@ -625,6 +625,18 @@ private fun HoverExploreLayer(
 ) {
     val context = LocalContext.current
     var currentHitInstance by remember { mutableStateOf<DetectedInstance?>(null) }
+    // The last object the finger was actually ON, for as long as this photo stays on screen —
+    // updated only when a real object is found (hit != null), and deliberately never cleared by
+    // anything else: not by moving off it to empty background, and not by lifting the finger
+    // (TalkBack's "explore by touch" sends a hover Exit the instant that happens, right before the
+    // double-tap gesture that's supposed to activate whatever was under it). If the tap handler
+    // read currentHitInstance directly, either of those would already have reset it to null, so a
+    // double-tap after finding an object and then moving away from it (on purpose or not) would
+    // always land on "no object" instead of describing the one the user found. This field is what
+    // onTap actually reads; it only stays null for a session where nothing has been touched yet.
+    // Reset for free on each new photo: HoverExploreLayer leaves composition while isLoading is
+    // true (see SegmentationExploreScreen), so this `remember` starts fresh every time.
+    var lastTouchedInstance by remember { mutableStateOf<DetectedInstance?>(null) }
     var lastColorKey by remember { mutableStateOf<String?>(null) }
     var containerSize by remember { mutableStateOf(IntSize.Zero) }
     val bitmapWidth = sourceBitmap.width
@@ -660,6 +672,9 @@ private fun HoverExploreLayer(
      *  in that case, so Color Report simply doesn't fire for that one event, unlike every other
      *  event where a position is always available. */
     fun updateHit(hit: DetectedInstance?, position: Offset?) {
+        // Only a genuine object commits — moving off it to empty background, or lifting the finger
+        // entirely, must not forget it. See lastTouchedInstance's own doc.
+        if (hit != null) lastTouchedInstance = hit
         if (hit !== currentHitInstance) {
             if (currentHitInstance != null) {
                 HoverFeedback.onBoundaryCrossed(context)
@@ -701,7 +716,7 @@ private fun HoverExploreLayer(
                 } else {
                     "Photo. Move your finger over it to hear what's there, or double tap for more options."
                 }
-                onClick { onTap(currentHitInstance); true }
+                onClick { onTap(lastTouchedInstance); true }
             }
     ) {
         Canvas(modifier = Modifier.fillMaxSize()) {
@@ -744,7 +759,7 @@ private fun HoverExploreLayer(
                                         val releasePos = event.changes.first().position
                                         val moved = (releasePos - downPos).getDistance()
                                         val elapsed = System.currentTimeMillis() - pressTimeMs
-                                        if (moved < 24f && elapsed < 400) onTap(currentHitInstance)
+                                        if (moved < 24f && elapsed < 400) onTap(lastTouchedInstance)
                                     }
                                     pressPosition = null
                                 }

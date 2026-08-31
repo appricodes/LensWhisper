@@ -90,7 +90,13 @@ class MlkitButtonProvider(
     private var lastTextText: String? = null
     private var lastSegmentText: String? = null
     private var lastSegmentColorText: String? = null
-    private var lastSpokenText: String? = null
+    // The volume-key/on-screen "Repeat" action, for whichever single-shot mode last ran — set by
+    // selectSingleShot/launchSimpleColorDetection right when the user triggers them, and re-invoked
+    // (not just re-spoken) by repeatLastAction so a "repeat" genuinely captures a fresh photo, the
+    // same as every other mode's own capture, rather than re-describing a stale one. Left untouched
+    // by selectContinuous/toggleLight/launchSegmentationExplore/launchReadDocument — a continuous
+    // poll, a toggle, and the two screens that navigate away aren't "repeat" candidates.
+    private var lastRepeatableAction: (() -> Unit)? = null
 
     /** True while Light Level is on — the host screen must bind the camera's analysis use case
      *  (via [onAnalysisFrame]) and force the flashlight off/disabled while this is true. */
@@ -133,16 +139,17 @@ class MlkitButtonProvider(
         if (activeMode == Mode.LIGHT) OfflineLightDetector.stop()
     }
 
-    /** Wires the volume-key/on-screen "Repeat" action for MLKit: repeats the last spoken result. */
-    fun repeatLastSpoken() {
-        val text = lastSpokenText
-        if (text != null) AccessibilityUtils.announceToTalkBack(context, text)
-        else AccessibilityUtils.announceToTalkBack(context, "No previous result to repeat.")
+    /** Wires the volume-key/on-screen "Repeat" action for MLKit: re-runs the last single-shot mode
+     *  on a freshly captured photo — not just re-speaking the previous result against the old one,
+     *  which is stale by the time the user asks to repeat it. */
+    fun repeatLastAction() {
+        val action = lastRepeatableAction
+        if (action != null) action()
+        else AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
     }
 
     private fun speak(text: String) {
         AccessibilityUtils.announceToTalkBack(context, text)
-        lastSpokenText = text
     }
 
     private fun speakIfChanged(previous: String?, text: String, updatePrevious: (String) -> Unit) {
@@ -345,6 +352,7 @@ class MlkitButtonProvider(
      * on this grid — this one is deliberately just "what color is the middle of the frame".
      */
     private fun launchSimpleColorDetection() {
+        lastRepeatableAction = { launchSimpleColorDetection() }
         if (isBusy) {
             announceBusy()
             return
@@ -383,6 +391,7 @@ class MlkitButtonProvider(
     private fun selectSingleShot(mode: Mode, prefs: PreferencesManager) {
         activeMode = mode
         continuousEnabled = false
+        lastRepeatableAction = { selectSingleShot(mode, prefs) }
         coroutineScope.launch { captureAndRun(mode, prefs) }
     }
 
