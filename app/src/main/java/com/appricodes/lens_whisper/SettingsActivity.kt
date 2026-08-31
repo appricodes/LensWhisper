@@ -8,13 +8,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
@@ -29,8 +27,6 @@ import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.OfflineTranslator
-import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
-import com.appricodes.lens_whisper.ui.components.ModelTopBar
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import kotlinx.coroutines.launch
 
@@ -133,23 +129,6 @@ fun SettingsScreen(
 				modifier = Modifier.clearAndSetSemantics { contentDescription = "Close settings and return to layout panel." }
 			) { Text("Close", fontSize = 18.sp) }
 		}
-
-		// Model selector and More button are both hidden here: switching models has no clear use
-		// from inside Settings, and the More menu leads back to Settings among other places. What's
-		// left is just the Support button — see ModelTopBar's doc. With no way to switch models from
-		// this screen, there's also nothing left for a download-progress/model-loading observer to
-		// ever have to show, so neither is wired up here any more.
-		val topBarController = rememberAnalysisSessionController(context, prefs)
-		ModelTopBar(
-			prefs = prefs,
-			controller = topBarController,
-			selectedModelId = prefs.selectedModelId,
-			onModelSelected = {},
-			showModelSelector = false,
-			showMoreButton = false,
-			modifier = Modifier.clip(RoundedCornerShape(12.dp)),
-			backgroundColor = MaterialTheme.colorScheme.surfaceVariant
-		)
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text(text = "Object Detection Model Size", fontSize = 18.sp, color = Color.Gray)

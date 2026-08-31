@@ -37,23 +37,6 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
-        <!-- Google Mobile Ads. The real AdMob App ID from the developer's own console. Declaring
-             it here does not start the SDK — ads/AdConsentManager.kt is the only thing that calls
-             MobileAds.initialize, and only after consent. -->
-        <meta-data
-            android:name="com.google.android.gms.ads.APPLICATION_ID"
-            android:value="ca-app-pub-9386480260190622~9575982937" />
-
-        <!-- Stops Google's app-measurement from starting itself at process launch. The Ads SDK
-             ships a MobileAdsInitProvider that runs before any of our code does, so "we simply
-             don't call MobileAds.initialize until consent" is not on its own enough to guarantee
-             nothing touches an identifier first. This is Google's documented flag for deferring
-             that part until initialize() is actually called - which, here, only ever happens after
-             the user has consented (see ads/AdConsentManager.kt). -->
-        <meta-data
-            android:name="com.google.android.gms.ads.DELAY_APP_MEASUREMENT_INIT"
-            android:value="true" />
-
         <activity
             android:name=".CameraActivity"
             android:exported="true"

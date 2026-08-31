@@ -162,20 +162,9 @@ When you use the microphone button to ask a question, Android's own speech recog
 WHAT DOES USE THE NETWORK
 
 • Downloading AI models. Model files are fetched from Hugging Face (Hugging Face, Inc., USA) when you choose to download one. Your IP address is necessarily visible to them as part of that request, under their own privacy policy. No other information about you is sent.
-• Advertising, only when you ask for it. The app is free and has no paid features. If you choose to open "Support Development" and watch an advertisement, Google AdMob (Google Ireland Limited, with transfers to Google LLC, USA) is used to deliver it. This is the only advertising in the app, it is entirely voluntary, and the app is fully usable without ever opening it.
-
-ADVERTISING AND YOUR CONSENT
-
-The advertising SDK is not started, and requests no advertisement, unless you open Support Development and give consent. Before any advertisement is requested you will be shown a consent dialog and can decline; declining leaves the app fully functional. Only non-personalised advertising is requested — we do not enable interest-based or personalised advertising in this app, and no profile about you is built for advertising purposes by us.
-
-Non-personalised advertising still uses a device identifier for frequency capping, reporting and fraud prevention, which is why your consent is asked for it. You can withdraw consent at any time from Legal Information, and you can reset or delete the advertising identifier in your Android settings under Privacy > Ads.
-
-Where advertising data reaches Google LLC in the United States, that transfer is covered by Google's own transfer mechanisms.
 
 LEGAL BASES (GDPR)
 
-• Storing and reading information on your device for advertising: your consent, §25(1) TDDDG and Art. 6(1)(a) GDPR.
-• Processing connected to delivering an advertisement you asked to see: Art. 6(1)(a) GDPR.
 • Analysing your photos: not covered here at all, because it happens only on your device and involves no processing by us.
 
 YOUR RIGHTS
@@ -184,7 +173,7 @@ You have the rights of access, rectification, erasure, restriction, data portabi
 
 CHILDREN
 
-The app is not directed at children and no advertising is targeted at children.
+The app is not directed at children.
 
 CHANGES
 
@@ -220,7 +209,7 @@ Licensed under AGPL-3.0. Unlike the other models on this page, this one is bundl
 
 APPLICATION LIBRARIES
 
-This app is built with AndroidX, Jetpack Compose, CameraX, Media3, ML Kit, LiteRT-LM, OkHttp and the Google Mobile Ads SDK. AndroidX, Jetpack Compose, CameraX, Media3 and OkHttp are licensed under the Apache License, Version 2.0. ML Kit, LiteRT-LM and the Google Mobile Ads SDK are subject to Google's own terms.
+This app is built with AndroidX, Jetpack Compose, CameraX, Media3, ML Kit, LiteRT-LM and OkHttp. AndroidX, Jetpack Compose, CameraX, Media3 and OkHttp are licensed under the Apache License, Version 2.0. ML Kit and LiteRT-LM are subject to Google's own terms.
 
 A copy of the Apache License, Version 2.0 is available at apache.org/licenses/LICENSE-2.0
 """

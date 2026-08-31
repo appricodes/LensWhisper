@@ -36,17 +36,12 @@ import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 
 /**
  * Top bar shared by [com.appricodes.lens_whisper.CameraActivity] and the Video/Image describer:
- * a model-name button (opens [ModelPickerPopup] for a quick switch), a Support button (opens
- * [SupportDialog]) and a More button (opens [MoreMenu]).
+ * a model-name button (opens [ModelPickerPopup] for a quick switch) and a More button (opens
+ * [MoreMenu]).
  *
- * The Support button sits where the remaining-credits badge used to. Credits are gone - every
- * model runs on-device and nothing is metered - so what occupied that slot is now the one purely
- * voluntary thing left: watching an advertisement to support the developer, which unlocks nothing.
- *
- * [showModelSelector]/[showMoreButton] let [com.appricodes.lens_whisper.SettingsActivity] use this
- * bar for the Support button alone — switching models or reaching the More menu (which itself
- * leads to Settings) from inside Settings has no obvious use, and Settings is one of the More
- * menu's own destinations.
+ * [showModelSelector]/[showMoreButton] let [com.appricodes.lens_whisper.SettingsActivity] reuse
+ * this bar — switching models or reaching the More menu (which itself leads to Settings) from
+ * inside Settings has no obvious use, and Settings is one of the More menu's own destinations.
  */
 @Composable
 fun ModelTopBar(
@@ -67,7 +62,6 @@ fun ModelTopBar(
     val offlineModelsRepository = remember { OfflineModelsRepository(context) }
 
     var selectedModelName by remember { mutableStateOf("") }
-    var showSupportDialog by remember { mutableStateOf(false) }
     var showModelPicker by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
 
@@ -119,13 +113,6 @@ fun ModelTopBar(
             )
         }
 
-        Button(
-            onClick = { showSupportDialog = true },
-            modifier = Modifier.clearAndSetSemantics {
-                contentDescription = "Support development. Optionally watch a video advertisement. Nothing in the app is locked."
-            }
-        ) { Text("Support") }
-
         if (showMoreButton) {
             Button(onClick = { showMoreMenu = true }) {
                 Text("More")
@@ -140,10 +127,6 @@ fun ModelTopBar(
                 showVolumeKeyToggle = showMoreMenuVolumeKeyToggle
             )
         }
-    }
-
-    if (showSupportDialog) {
-        SupportDialog(onDismiss = { showSupportDialog = false })
     }
 }
 

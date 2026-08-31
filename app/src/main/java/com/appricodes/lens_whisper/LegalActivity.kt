@@ -25,22 +25,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.appricodes.lens_whisper.ads.AdConsentManager
 import com.appricodes.lens_whisper.legal.LegalTexts
 import com.appricodes.lens_whisper.ui.components.LegalBody
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
-import com.appricodes.lens_whisper.utils.AccessibilityUtils
 
 /**
  * Every legally-required document in one place, reached from the More menu: the AI transparency
  * notice (Art. 50 AI Act), the full first-run disclaimer, the privacy policy, the imprint (§5 DDG)
- * and the third-party model licences — plus the entry point for changing the advertising consent
- * given in [AdConsentManager], which has to stay withdrawable at any time.
+ * and the third-party model licences.
  *
  * Two levels (index → one document) rather than one long scroll: with TalkBack, a single screen
  * holding all of these is thousands of words deep with no way to skip, whereas a short list of
@@ -63,7 +59,6 @@ private data class LegalSection(val title: String, val body: String)
 
 @Composable
 private fun LegalScreen(onClose: () -> Unit) {
-    val context = LocalContext.current
     val sections = remember {
         listOf(
             LegalSection(LegalTexts.AI_NOTICE_TITLE, LegalTexts.AI_NOTICE),
@@ -111,24 +106,6 @@ private fun LegalScreen(onClose: () -> Unit) {
                         .padding(vertical = 16.dp)
                 )
             }
-
-            HorizontalDivider()
-            Text(
-                text = "Advertising consent",
-                fontSize = 19.sp,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clickable {
-                        AdConsentManager.showPrivacyOptions(context) { message ->
-                            AccessibilityUtils.announceToTalkBack(context, message)
-                        }
-                    }
-                    .padding(vertical = 16.dp)
-            )
-            Text(
-                text = "Change or withdraw the consent you gave for advertising. The app works fully without it.",
-                fontSize = 15.sp
-            )
         }
     } else {
         Column(

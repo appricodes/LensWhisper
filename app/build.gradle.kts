@@ -140,15 +140,10 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.11.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.11.0")
 
-    // Google Mobile Ads: one optional rewarded ad behind "Support Development". It grants
-    // nothing — see ads/RewardedAdManager.kt. (RevenueCat/Play Billing used to sit alongside this
-    // for credit-pack purchases; both the credits and the purchases are gone.)
-    implementation("com.google.android.gms:play-services-ads:23.6.0")
-
-    // Google's certified Consent Management Platform. Required before an ad may be requested from
-    // an EEA/UK user, both by §25 TDDDG and by Google's own EU User Consent Policy — see
-    // ads/AdConsentManager.kt, which is the only thing that starts the Ads SDK at all.
-    implementation("com.google.android.ump:user-messaging-platform:3.1.0")
+    // (Google Mobile Ads + the UMP Consent Management Platform used to live here, behind an
+    // optional rewarded ad on "Support Development" — see ads/RewardedAdManager.kt and
+    // ads/AdConsentManager.kt. AdMob was removed from the app entirely; there is no advertising
+    // anywhere in the app any more.)
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)
