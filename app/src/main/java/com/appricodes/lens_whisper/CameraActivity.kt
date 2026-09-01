@@ -66,6 +66,7 @@ import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
 import com.appricodes.lens_whisper.ui.components.ResyncSelectedModelOnResume
+import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
@@ -511,6 +512,7 @@ private fun CameraScreen(
             GridCell(
                 label = if (volumeShortcutsEnabled) "Vol Keys: On" else "Vol Keys: Off",
                 contentDescription = "Volume key shortcuts are ${if (volumeShortcutsEnabled) "on" else "off"}. Double tap to toggle.",
+                icon = GridIcon.VOLUME_KEYS,
                 onClick = {
                     val newState = !volumeShortcutsEnabled
                     prefs.volumeShortcutsEnabled = newState
@@ -521,6 +523,7 @@ private fun CameraScreen(
             GridCell(
                 label = "Switch Camera",
                 contentDescription = "Switch camera. Currently using the ${cameraFacingName(cameraController.lensFacing)} camera.",
+                icon = GridIcon.SWITCH_CAMERA,
                 onClick = {
                     coroutineScope.launch {
                         cameraController.toggleLensFacing()
@@ -536,6 +539,7 @@ private fun CameraScreen(
                 } else {
                     "$flashLabel. Double tap to toggle. The flash fires only while a photo is taken."
                 },
+                icon = if (flashEnabled) GridIcon.FLASH_ON else GridIcon.FLASH_OFF,
                 enabled = hasFlash && !mlkitProvider.isLightActive,
                 onClick = {
                     val newState = !flashEnabled
@@ -547,6 +551,7 @@ private fun CameraScreen(
             GridCell(
                 label = "Microphone",
                 contentDescription = if (micSupported) "Microphone. Ask a question about what the camera sees." else "Microphone. Not available — Basic Models doesn't support custom questions.",
+                icon = GridIcon.MICROPHONE,
                 enabled = micSupported,
                 onClick = { gate { controller.startVoiceRecognition(captureFrames = captureFrames) } }
             )

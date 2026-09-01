@@ -52,6 +52,7 @@ import com.appricodes.lens_whisper.ui.components.MediaPreviewArea
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
 import com.appricodes.lens_whisper.ui.components.ResyncSelectedModelOnResume
+import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
@@ -498,6 +499,7 @@ private fun buildBottomRow(
     val micCell = GridCell(
         label = "Microphone",
         contentDescription = "Microphone. Ask a question about what you're watching.",
+        icon = GridIcon.MICROPHONE,
         onClick = onMicrophone
     )
     if (isImageMode) return listOf(micCell, null, null, null)
@@ -507,12 +509,19 @@ private fun buildBottomRow(
         GridCell(
             "Rewind",
             contentDescription = "Rewind. Tap to go back 10 seconds, hold to keep rewinding.",
+            icon = GridIcon.REWIND,
             customModifier = seekGestureModifier(direction = -1, label = "Rewind", exoPlayer = exoPlayer, context = context)
         ),
-        GridCell(playPauseLabel, contentDescription = playPauseLabel, onClick = onPlayPause),
+        GridCell(
+            playPauseLabel,
+            contentDescription = playPauseLabel,
+            icon = if (isVideoPlaying) GridIcon.PAUSE else GridIcon.PLAY,
+            onClick = onPlayPause
+        ),
         GridCell(
             "Fast Forward",
             contentDescription = "Fast forward. Tap to jump ahead 10 seconds, hold to keep advancing.",
+            icon = GridIcon.FAST_FORWARD,
             customModifier = seekGestureModifier(direction = 1, label = "Fast Forward", exoPlayer = exoPlayer, context = context)
         ),
         micCell
