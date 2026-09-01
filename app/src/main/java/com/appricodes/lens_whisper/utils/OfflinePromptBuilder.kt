@@ -10,42 +10,39 @@ package com.appricodes.lens_whisper.utils
  * politeness, no restating of the obvious, no "you are an expert ..." framing that buys nothing
  * from a 500M-parameter model. Do not pad these back out.
  *
- * **2. Two of these prompts used to ask the model to do things the EU AI Act treats as a different
+ * **2. One of these prompts used to ask the model to do things the EU AI Act treats as a different
  * category of system, and must not start doing so again:**
  *
  * - There used to be an `emotions` prompt asking the model to "analyze and describe the ... emotions
- *   of each main visible person". Inferring emotions from biometric data is an *emotion recognition
- *   system* (Art. 3(39)), which Annex III(1)(c) classes as **high-risk** — conformity assessment, CE
- *   marking, EU database registration, the lot. Describing a *visibly apparent expression* is not
- *   that (Recital 18 draws exactly this line), so [FACIAL_EXPRESSIONS_ID] asks only for what is
- *   physically visible — a smile, a frown, closed eyes — and explicitly forbids inferring a state
- *   of mind.
+ *   of each main visible person" (later reworded into a `facial_expressions` prompt, removed
+ *   2026-09-01 as unused — see the on-device grid's own doc for which prompts it actually offers).
+ *   Inferring emotions from biometric data is an *emotion recognition system* (Art. 3(39)), which
+ *   Annex III(1)(c) classes as **high-risk** — conformity assessment, CE marking, EU database
+ *   registration, the lot. Describing a *visibly apparent expression* is not that (Recital 18 draws
+ *   exactly this line) — if a facial-expression prompt is ever reintroduced, it must ask only for
+ *   what is physically visible (a smile, a frown, closed eyes) and explicitly forbid inferring a
+ *   state of mind, the same as it used to.
  * - `people_and_outfit` used to ask for "approximate age". Inferring protected attributes from
  *   biometric data is biometric categorisation under Annex III(1)(b), and Art. 5(1)(g) prohibits it
  *   outright for some attributes. It now asks for clothing and visible appearance only, and
  *   explicitly rules out identity, age, origin and beliefs.
  *
- * The same guardrail sentence is attached only to the people-facing prompts rather than to the
- * shared system instruction, so the common cases (objects, text, brief narration) stay short and
- * fast.
+ * The same guardrail sentence is attached only to the people-facing prompt rather than to the
+ * shared system instruction, so the common cases (objects, brief narration, detailed scene) stay
+ * short and fast.
  */
 object OfflinePromptBuilder {
 
-    /** Replaces the former "emotions" id. A stored custom/last-prompt referring to the old id will
-     *  simply fall through to [userPromptFor]'s default, which is harmless. */
-    const val FACIAL_EXPRESSIONS_ID = "facial_expressions"
-
-    /** Attached to the two prompts that involve people. Kept to one sentence for the reasons in
+    /** Attached to the one prompt that involves people. Kept to one sentence for the reasons in
      *  this object's doc. */
     private const val PEOPLE_GUARDRAIL =
         "Do not name or identify anyone, and do not guess anyone's age, origin, beliefs, health, or feelings."
 
     /** "brief_narration" is meant to be a single short sentence; every other prompt (detailed
-     *  scene, people/outfit, facial expressions, objects, read texts, story, and custom questions)
-     *  gets the wider budget. Enforced twice: as a word count here, in the system instruction the
-     *  model is asked to follow, and as a hard token cap in
-     *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] regardless of whether the
-     *  model actually complies with the word count. */
+     *  scene, people/outfit, objects, and custom questions) gets the wider budget. Enforced twice:
+     *  as a word count here, in the system instruction the model is asked to follow, and as a hard
+     *  token cap in [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] regardless of
+     *  whether the model actually complies with the word count. */
     const val BRIEF_MAX_WORDS = 20
     const val DEFAULT_MAX_WORDS = 150
 
@@ -54,6 +51,12 @@ object OfflinePromptBuilder {
      *  (see [buildCustomQuestionInstruction]). */
     fun maxWordsFor(promptId: String): Int = if (promptId == "brief_narration") BRIEF_MAX_WORDS else DEFAULT_MAX_WORDS
 
+    // The on-device VLM grid (OfflineVlmButtonProvider) is the only reachable caller of
+    // userPromptFor below, and offers exactly these four buttons + custom voice-recorded slots —
+    // "facial_expressions"/"read_texts"/"story_5"/"story_10" used to exist here too but were never
+    // wired to a button on it (only to the Local Server grid, itself unreachable while
+    // LocalServerFeature.ENABLED is false); removed 2026-09-01 as dead data rather than left to
+    // silently bit-rot.
     private val predefinedPrompts = mapOf(
         "brief_narration" to
             "Describe this scene in one short sentence. If it is empty, say so.",
@@ -62,19 +65,8 @@ object OfflinePromptBuilder {
         "people_and_outfit" to
             "Describe the clothing and visible appearance of the people in view. $PEOPLE_GUARDRAIL " +
                 "If no people are visible, say exactly: No people are visible.",
-        FACIAL_EXPRESSIONS_ID to
-            "Describe only the facial expressions that are physically visible, such as a smile, a frown, " +
-                "raised eyebrows, or closed eyes. Do not say what anyone feels or thinks. $PEOPLE_GUARDRAIL " +
-                "If no faces are visible, say exactly: No faces are visible.",
         "objects" to
-            "List the main objects visible and how they are arranged.",
-        "read_texts" to
-            "Read the visible text exactly as written. Say which parts are unclear or unreadable instead of " +
-                "guessing them. If there is no text, say exactly: No text found.",
-        "story_5" to
-            "Describe what happens across these frames as one short narrative. If nothing moves, say exactly: No action detected.",
-        "story_10" to
-            "Describe what happens across these frames as one short narrative. If nothing moves, say exactly: No action detected."
+            "List the main objects visible, their colors, and how they are arranged."
     )
 
     /** The user-facing instruction text for a predefined prompt id (not "custom"). */

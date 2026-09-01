@@ -31,20 +31,19 @@ internal fun promptGridRows(ctx: ModelButtonContext): List<List<GridCell?>> {
             promptCell("Brief Narration", "brief_narration"),
             promptCell("Detailed Scene", "detailed_scene"),
             promptCell("People and Outfit", "people_and_outfit"),
-            promptCell("Facial Expressions", "facial_expressions")
-        ),
-        listOf(
-            promptCell("Objects", "objects"),
-            promptCell("Read Texts", "read_texts"),
-            promptCell("Story (5 seconds)", "story_5"),
-            promptCell("Story (10 seconds)", "story_10")
+            // "Facial Expressions" used to sit here — removed 2026-09-01 as unused: never wired to
+            // a button on the on-device catalog either (see OfflinePromptBuilder's own doc), so it
+            // was dead data with nothing behind it.
+            promptCell("Objects", "objects")
         ),
         listOf(
             customPromptCell(0),
             customPromptCell(1),
             GridCell(label = "Repeat", contentDescription = "Repeat the last action.", onClick = ctx.onRepeat),
-            // Explore used to sit here — a structured spatial-grid JSON response, Local-Server-only
-            // (the on-device catalog never offered it — see OfflineVlmButtonProvider's doc). Removed
+            // "Read Texts"/"Story (5s)"/"Story (10s)" used to fill out this row and a third one —
+            // removed 2026-09-01 alongside their prompt data for the same reason as "Facial
+            // Expressions" above. Explore used to sit here too — a structured spatial-grid JSON
+            // response, Local-Server-only (the on-device catalog never offered it). Removed
             // 2026-09-01 along with ExploreActivity/SpatialGridParser/ExploreGridOverlay; trailing
             // null spacer per this file's row-of-4 contract (see ModelButtonProvider.rows's doc)
             // rather than a mid-row gap.

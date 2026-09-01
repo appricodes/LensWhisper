@@ -61,12 +61,75 @@ data class CapturedBundle(
     val localServerCallStreaming: (() -> Flow<String>)? = null
 )
 
-/** Strips whitespace and punctuation, keeping only letters/digits (Unicode-aware, so this works the
- *  same for Persian/CJK text as for Latin) — used to compare a streamed sentence against ones
- *  already spoken in [AnalysisSessionController.runStreamingAnalysis]. A small on-device model
- *  degenerating into a near-repeat that only differs in spacing or a trailing comma should still
- *  count as the same sentence, not a "new" one that resets the loop detector. */
-private fun normalizeForRepeatCheck(s: String): String = s.filter { it.isLetterOrDigit() }
+/**
+ * Loop detection for [AnalysisSessionController.runStreamingAnalysis]: small on-device models
+ * occasionally degenerate into repeating themselves once they run out of anything new to say. The
+ * original version of this check only caught a *whole sentence* repeating a previous one
+ * verbatim — too narrow, since a model can just as easily loop on a sub-sentence phrase (never
+ * completing two matching whole sentences) or drift into slightly different wrapper phrasing
+ * around the same repeated core each time.
+ *
+ * The signal used instead: normalize the text so far (every non-letter/digit character collapses
+ * to a single space — [normalizeForLoopDetection] — so punctuation/spacing differences never
+ * matter), then check whether it *ends* with two adjacent, identical runs of at least
+ * [LOOP_MIN_REPEAT_LEN] characters — i.e. the model just said the same chunk twice in a row,
+ * whatever that chunk actually was. Checked on every streamed delta (not just at a sentence
+ * terminator), so a loop is caught mid-sentence rather than only once/if it happens to complete
+ * another whole matching sentence.
+ */
+private const val LOOP_MIN_REPEAT_LEN = 10
+
+// Only the last this-many characters of the response are ever normalized/checked — a live loop
+// always shows up at the tail, and bounding the input keeps hasTrailingRepeat's cost small and
+// constant, no matter how long the response has grown by the time it fires. Kept short
+// deliberately: this check runs on every streamed delta, on the same coroutine that's driving the
+// model's own token generation, so its cost is directly added latency, not background work.
+private const val LOOP_LOOKBACK_CHARS = 200
+
+/** Collapses every run of one-or-more characters that aren't a Unicode letter or digit down to a
+ *  single space (so "cat," "cat.", "cat\n\n" and "cat  " all normalize the same way), trimmed —
+ *  Unicode-aware, so this works the same for Persian/CJK text as for Latin. Keeps single spaces
+ *  between words (unlike a plain "strip everything non-alphanumeric") specifically so
+ *  [trailingRepeatRegex] is comparing whole words, not letters run together across what used to be
+ *  a word boundary. */
+private fun normalizeForLoopDetection(s: String): String {
+    val sb = StringBuilder(s.length)
+    var lastWasSpace = false
+    for (c in s) {
+        if (c.isLetterOrDigit()) {
+            sb.append(c)
+            lastWasSpace = false
+        } else if (!lastWasSpace) {
+            sb.append(' ')
+            lastWasSpace = true
+        }
+    }
+    return sb.toString().trim()
+}
+
+/** True once [fullText] (the whole response streamed so far) ends in a duplicated run — see this
+ *  section's doc. Only the tail ([LOOP_LOOKBACK_CHARS]) is ever normalized/checked.
+ *
+ *  Deliberately a plain length-by-length scan rather than a backreference regex
+ *  (`(.{10,}?)\1$`, tried first): a backtracking engine re-tries every start position for every
+ *  candidate length, which is worse than quadratic in the tail length — and this runs on every
+ *  streamed delta, on the same coroutine driving the model's own generation, so its cost is
+ *  latency the user waits through. This scan is a bounded O(n²) of cheap, short-circuiting
+ *  [String.regionMatches] calls instead: for each candidate repeat length starting at
+ *  [LOOP_MIN_REPEAT_LEN], compare the last `length` characters against the `length` characters
+ *  immediately before them. Stops at the first (shortest) match, same as the regex's non-greedy
+ *  behavior did — a loop is typically a short phrase, not a long passage. */
+private fun hasTrailingRepeat(fullText: StringBuilder): Boolean {
+    val start = (fullText.length - LOOP_LOOKBACK_CHARS).coerceAtLeast(0)
+    val tail = normalizeForLoopDetection(fullText.substring(start))
+    val n = tail.length
+    var length = LOOP_MIN_REPEAT_LEN
+    while (length * 2 <= n) {
+        if (tail.regionMatches(n - 2 * length, tail, n - length, length)) return true
+        length++
+    }
+    return false
+}
 
 /** Index of the first sentence-terminating character in [sb] that's actually a sentence boundary —
  *  followed by whitespace, another terminator, or being a newline itself — not, say, the decimal
@@ -271,6 +334,20 @@ class AnalysisSessionController(
      * both misreport a normal replace as "Error occurred" and leave `activeAnalysisJob`'s own
      * cancellation half-handled.
      */
+    /** The "Stop" button in [com.appricodes.lens_whisper.ui.components.ModelTopBar], shown only
+     *  while [isAnalyzing]. Unlike [launchAnalysis]'s own `cancelAndJoin` (needed there because a
+     *  *new* job's `Conversation` is about to open and must wait for the old one to finish
+     *  tearing down first — see that function's doc), nothing new starts here, so there's no
+     *  unwind race to protect against: a plain `cancel()` is enough, and [stopProcessingChime]
+     *  stops the waiting tone immediately rather than waiting for the cancelled job's own `finally`
+     *  (same one [launchAnalysis] runs) to get there. */
+    fun stopAnalysis() {
+        if (!isAnalyzing) return
+        activeAnalysisJob?.cancel()
+        stopProcessingChime()
+        AccessibilityUtils.announceToTalkBack(context, "Stopped.")
+    }
+
     private fun launchAnalysis(body: suspend () -> Unit) {
         val previous = activeAnalysisJob
         activeAnalysisJob = coroutineScope.launch {
@@ -313,7 +390,7 @@ class AnalysisSessionController(
      * cancel one in-flight call and immediately start another as the user keeps exploring (its own
      * caller tracks and cancels the [kotlinx.coroutines.Job] this runs in — cancelling it here mid
      * -stream, via [runStreamingAnalysis]'s shared `flow.collect`, also genuinely stops the model
-     * from generating further tokens, same as [RepeatedSentenceDetected] already relies on), which
+     * from generating further tokens, same as [LoopDetected] already relies on), which
      * an internal busy-block would prevent; and there is no `captureFrames` closure here for
      * [onRepeat] to later re-invoke, so leaving [lastPrompt] alone means Repeat simply falls back to
      * whatever normal prompt ran last, rather than trying to "repeat" a one-off isolated crop.
@@ -412,14 +489,6 @@ class AnalysisSessionController(
     private suspend fun runStreamingAnalysis(flow: Flow<String>, translate: Boolean) {
         val fullText = StringBuilder()
         val pending = StringBuilder()
-        // Small on-device models occasionally degenerate into repeating themselves verbatim once
-        // they run out of anything new to say. Every complete sentence spoken so far is tracked
-        // here (normalized — see normalizeForRepeatCheck — so a repeat that only differs in
-        // spacing/punctuation still counts); hitting one throws RepeatedSentenceDetected, which
-        // unwinds out of flow.collect below and — because that's the same coroutine actually
-        // driving OfflineInferenceEngine's token generation — genuinely stops the model from
-        // generating further tokens, not just stops this function from speaking them.
-        val seenSentences = mutableSetOf<String>()
 
         suspend fun speak(sentence: String) {
             val trimmed = sentence.trim()
@@ -435,12 +504,16 @@ class AnalysisSessionController(
                 // stays true until the last token, not just until the first one.
                 fullText.append(delta)
                 pending.append(delta)
+                // Checked on every delta, not just at a sentence boundary — see hasTrailingRepeat's
+                // doc for why. Throwing LoopDetected here unwinds out of flow.collect and — because
+                // that's the same coroutine actually driving OfflineInferenceEngine's token
+                // generation — genuinely stops the model from generating further tokens, not just
+                // stops this function from speaking them.
+                if (hasTrailingRepeat(fullText)) throw LoopDetected()
                 var end = findSentenceEnd(pending)
                 while (end != -1) {
                     val sentence = pending.substring(0, end + 1)
                     pending.delete(0, end + 1)
-                    val normalized = normalizeForRepeatCheck(sentence)
-                    if (normalized.isNotEmpty() && !seenSentences.add(normalized)) throw RepeatedSentenceDetected()
                     speak(sentence)
                     end = findSentenceEnd(pending)
                 }
@@ -448,9 +521,10 @@ class AnalysisSessionController(
             activeAudioFeedbackJob?.cancel()
             speak(pending.toString()) // whatever's left over (no trailing punctuation) still gets spoken
             if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
-        } catch (e: RepeatedSentenceDetected) {
+        } catch (e: LoopDetected) {
             // Not an error — the model simply had nothing more to add. Whatever was already spoken
-            // stands as the final answer.
+            // stands as the final answer; pending (the start of the detected repeat) is deliberately
+            // never spoken.
             activeAudioFeedbackJob?.cancel()
             if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
         } catch (e: CancellationException) {
@@ -463,8 +537,8 @@ class AnalysisSessionController(
     }
 
     /**
-     * Thrown from inside [runStreamingAnalysis]'s `flow.collect` to unwind out of it the moment a
-     * sentence repeats one already spoken — see that function's doc.
+     * Thrown from inside [runStreamingAnalysis]'s `flow.collect` to unwind out of it the moment
+     * [hasTrailingRepeat] fires — see that function's doc and the loop-detection section above it.
      *
      * A [CancellationException] subtype *on purpose* — the same early-unwind technique
      * `kotlinx.coroutines.flow`'s own `take()` operator uses internally (its private
@@ -483,7 +557,7 @@ class AnalysisSessionController(
      * rethrowing leaves this coroutine's own Job untouched (still Active), same as `take()`
      * catching its own `AbortFlowException`.
      */
-    private class RepeatedSentenceDetected : CancellationException()
+    private class LoopDetected : CancellationException()
 
     /**
      * Repeats the last prompt run (voice query, tap, or custom), if any. [selectedModelId] guards
@@ -504,6 +578,16 @@ class AnalysisSessionController(
                 AccessibilityUtils.announceToTalkBack(context, "Story mode isn't available for on-device models.")
             else -> runAnalysis(prompt, prompt.title, captureFrames)
         }
+    }
+
+    /** Sets [lastPrompt] directly, without running anything - seeds a sensible Repeat target (the
+     *  grid's first prompt, e.g. "Brief Narration") on a fresh app open or a model switch, instead
+     *  of leaving Repeat pointing at null ("No previous action to repeat") or a stale prompt left
+     *  over from whichever model was selected before. Call from a `LaunchedEffect(selectedModelId)`
+     *  keyed the same way CameraActivity/MediaDescriberScreen already register [onRepeat]'s host
+     *  callback, so it reruns on every switch, not just the first composition. */
+    fun seedDefaultPrompt(config: PromptConfig) {
+        lastPrompt = config
     }
 
     /**

@@ -19,6 +19,7 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
@@ -126,6 +127,21 @@ fun ModelTopBar(
         }
 
         if (showMoreButton) {
+            // Always present (never conditionally added/removed) so the Row's layout never
+            // shifts when a response starts/finishes streaming — invisible and non-interactive
+            // (alpha 0, disabled, no accessibility node) rather than absent, which reserves
+            // exactly the space the real button would take, per explicit request.
+            Button(
+                onClick = { controller.stopAnalysis() },
+                enabled = controller.isAnalyzing,
+                modifier = if (controller.isAnalyzing) {
+                    Modifier.clearAndSetSemantics { contentDescription = "Stop the model's response." }
+                } else {
+                    Modifier.alpha(0f).clearAndSetSemantics { }
+                }
+            ) {
+                Text("Stop")
+            }
             Button(onClick = { showMoreMenu = true }) {
                 Text("More")
             }

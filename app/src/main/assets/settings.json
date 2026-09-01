@@ -59,11 +59,7 @@
 	{ "id": "brief_narration", "title": "Brief Narration", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
 	{ "id": "detailed_scene", "title": "Detailed Scene", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
 	{ "id": "people_and_outfit", "title": "People and Outfit", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
-	{ "id": "facial_expressions", "title": "Facial Expressions", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
 	{ "id": "objects", "title": "Objects", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
-	{ "id": "read_texts", "title": "Read Texts", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
-	{ "id": "story_5", "title": "Story (5 seconds)", "prompt": "", "frames_count": 5, "frames_interval": 1.0 },
-	{ "id": "story_10", "title": "Story (10 seconds)", "prompt": "", "frames_count": 5, "frames_interval": 2.0 },
 	{ "id": "custom", "title": "Custom Prompt 1", "prompt": "", "frames_count": 1, "frames_interval": 0.5 },
 	{ "id": "custom", "title": "Custom Prompt 2", "prompt": "", "frames_count": 1, "frames_interval": 0.5 }
   ]

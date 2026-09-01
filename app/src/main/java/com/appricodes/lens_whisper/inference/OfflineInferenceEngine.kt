@@ -55,20 +55,31 @@ import java.io.ByteArrayOutputStream
 object OfflineInferenceEngine {
     private const val TAG = "OfflineInferenceEngine"
     private const val LOAD_TIMEOUT_MS = 60_000L
-    private const val INFERENCE_TIMEOUT_MS = 90_000L
+    // Widened from 90s alongside MAX_OUTPUT_TOKENS below (200 -> 800) - the fixed image-prefill
+    // cost dominates the *first* couple hundred tokens' worth of the old 90s budget (see
+    // reasoningPlanFor's doc for why the reasoning tiers deliberately don't scale their own
+    // timeout by a formula either), but generation time past that is still roughly linear in
+    // token count, so a 4x larger output cap needs meaningfully more than the old flat 90s to
+    // avoid this timeout aborting a genuinely-still-working generation before it naturally
+    // finishes or hits the loop detector. The +60s bump is a deliberately conservative guess, not
+    // a measured number (an earlier pass here tried extrapolating the full 4x token ratio into a
+    // +150s bump — undoing that, since nobody actually asked for a ~4-minute worst-case wait and
+    // it was never profiled on-device). Revisit with real timing if 800-token responses are
+    // routinely hitting this wall in practice.
+    private const val INFERENCE_TIMEOUT_MS = 150_000L
 
-    /** Caps every on-device response at 200 tokens (roughly 150-180 words for these models). This
+    /** Caps every on-device response at 800 tokens (roughly 600-650 words for these models). This
      *  is a hard backstop on top of the word limits in [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]
      *  ("under 20/150 words"), which the model is free to ignore — small models routinely run past a
      *  word count asked for in the prompt. This caps generation time and battery cost on-device
-     *  regardless of whether the model cooperates; the streaming path also has its own
-     *  repeated-sentence cutoff (see `AnalysisSessionController.runStreamingAnalysis`) for the more
-     *  common failure mode of a small model looping well before this token cap is reached.
+     *  regardless of whether the model cooperates; the streaming path also has its own loop
+     *  detector (see `AnalysisSessionController.runStreamingAnalysis`'s trailing-repeat check) for
+     *  the more common failure mode of a small model looping well before this token cap is reached.
      *
      *  This is the baseline for every call. A Gemma call with reasoning enabled uses a higher,
      *  effort-scaled cap instead — see [reasoningPlanFor] — since the model's chain-of-thought has
      *  to fit inside the same budget as its actual answer. */
-    private const val MAX_OUTPUT_TOKENS = 200
+    private const val MAX_OUTPUT_TOKENS = 800
 
     /** Published so the UI can show a blocking "Loading <model>…" alert while a model is
      *  actually loading into memory, and auto-dismiss once it's ready — whether loading was
@@ -239,8 +250,8 @@ object OfflineInferenceEngine {
     // Gemma-4-family feature, not a generic LiteRT-LM one: enabled by putting the literal control
     // token "<|think|>" at the start of the system turn, after which the model emits its reasoning
     // wrapped as "<|channel>thought ... <channel|>" before its real answer, in the same turn.
-    // Qwen2-VL-2B (this predates Qwen3's own hybrid thinking mode), SmolVLM2 and LFM2.5-VL have no
-    // such mode — nothing in their model cards, litert-community's docs, or LiteRT-LM's own
+    // Qwen2-VL-2B (this predates Qwen3's own hybrid thinking mode) and SmolVLM2 have no such
+    // mode — nothing in their model cards, litert-community's docs, or LiteRT-LM's own
     // announcement (which scopes Thinking Mode explicitly to "the Gemma 4 model family") mentions
     // one — so [reasoningPlanFor] returns a no-op plan for every model but Gemma, regardless of
     // [PreferencesManager.reasoningEffort]: sending Gemma-only control tokens to a model that was
@@ -309,17 +320,25 @@ object OfflineInferenceEngine {
     private fun reasoningPlanFor(model: OfflineModelInfo, effort: String): ReasoningPlan {
         if (model.family != GEMMA_FAMILY || effort == REASONING_NONE) return NO_REASONING
         // Token budget and timeout are both set per tier directly, not derived from one another by
-        // a formula: [INFERENCE_TIMEOUT_MS]'s own 90s for 200 tokens is dominated by a mostly-fixed
-        // image-prefill cost, not a flat per-token rate, so naively scaling it by token count would
-        // wildly overestimate what a longer response actually needs — and REASONING_HIGH's budget is
-        // deliberately a large finite number to begin with (2000, not -1/unbounded), for the same
-        // "don't let an actually-unbounded pass trip the low-memory-thrash timeout" reason the
-        // timeout itself has to stay bounded (see this object's class doc for what that timeout is
-        // guarding against).
+        // a formula: [INFERENCE_TIMEOUT_MS]'s own budget for MAX_OUTPUT_TOKENS is dominated by a
+        // mostly-fixed image-prefill cost, not a flat per-token rate, so naively scaling it by
+        // token count would wildly overestimate what a longer response actually needs — and
+        // REASONING_HIGH's budget is deliberately a large finite number to begin with (2000, not
+        // -1/unbounded), for the same "don't let an actually-unbounded pass trip the
+        // low-memory-thrash timeout" reason the timeout itself has to stay bounded (see this
+        // object's class doc for what that timeout is guarding against).
+        //
+        // Each tier's timeout carries the same +60s [INFERENCE_TIMEOUT_MS] itself just got bumped
+        // by (90s -> 150s) when MAX_OUTPUT_TOKENS moved 200 -> 800 - a real 4x-larger token budget
+        // genuinely does cost meaningfully more generation time even though the fixed prefill cost
+        // doesn't scale, and every tier's maxOutputToken below is MAX_OUTPUT_TOKENS + its own
+        // thinkingTokenBudget, so all three now need the same extra headroom the baseline does.
+        // Deliberately conservative and unmeasured, same caveat as INFERENCE_TIMEOUT_MS's own doc -
+        // revisit with real numbers if a reasoning-enabled call is timing out in practice.
         val (thinkingTokenBudget, timeoutMs) = when (effort) {
-            REASONING_LOW -> 256 to 150_000L
-            REASONING_MEDIUM -> 1024 to 240_000L
-            else -> 2000 to 360_000L // REASONING_HIGH
+            REASONING_LOW -> 256 to 210_000L
+            REASONING_MEDIUM -> 1024 to 300_000L
+            else -> 2000 to 420_000L // REASONING_HIGH
         }
         return ReasoningPlan(
             systemInstructionPrefix = THINK_ENABLE_TOKEN,
