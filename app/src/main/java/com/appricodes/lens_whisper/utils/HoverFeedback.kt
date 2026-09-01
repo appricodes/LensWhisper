@@ -1,8 +1,8 @@
 package com.appricodes.lens_whisper.utils
 
 import android.content.Context
+import android.media.AudioAttributes
 import android.media.AudioFormat
-import android.media.AudioManager
 import android.media.AudioTrack
 import android.os.Build
 import android.os.Handler
@@ -26,6 +26,15 @@ import kotlin.math.sin
  */
 object HoverFeedback {
     private const val SAMPLE_RATE = 44100
+
+    // Same reasoning and same attributes as ProcessingSoundPlayer.ACCESSIBILITY_AUDIO_ATTRIBUTES:
+    // these enter/exit tones are accessibility information, not incidental media, and belong on
+    // the channel Android reserves for exactly that (routes and ducks correctly alongside TalkBack
+    // speech, unlike STREAM_MUSIC).
+    private val ACCESSIBILITY_AUDIO_ATTRIBUTES = AudioAttributes.Builder()
+        .setUsage(AudioAttributes.USAGE_ASSISTANCE_ACCESSIBILITY)
+        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+        .build()
 
     // --- vibration -----------------------------------------------------------------------------
 
@@ -83,14 +92,18 @@ object HoverFeedback {
             pcm[idx++] = ((value.toInt() and 0xFF00) ushr 8).toByte()
         }
         try {
-            val audioTrack = AudioTrack(
-                AudioManager.STREAM_MUSIC,
-                SAMPLE_RATE,
-                AudioFormat.CHANNEL_OUT_MONO,
-                AudioFormat.ENCODING_PCM_16BIT,
-                pcm.size,
-                AudioTrack.MODE_STATIC
-            )
+            val audioTrack = AudioTrack.Builder()
+                .setAudioAttributes(ACCESSIBILITY_AUDIO_ATTRIBUTES)
+                .setAudioFormat(
+                    AudioFormat.Builder()
+                        .setEncoding(AudioFormat.ENCODING_PCM_16BIT)
+                        .setSampleRate(SAMPLE_RATE)
+                        .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
+                        .build()
+                )
+                .setBufferSizeInBytes(pcm.size)
+                .setTransferMode(AudioTrack.MODE_STATIC)
+                .build()
             audioTrack.write(pcm, 0, pcm.size)
             audioTrack.play()
             Handler(Looper.getMainLooper()).postDelayed({ audioTrack.release() }, releaseDelayMs)
