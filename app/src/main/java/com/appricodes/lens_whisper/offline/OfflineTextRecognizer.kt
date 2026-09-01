@@ -3,6 +3,10 @@ package com.appricodes.lens_whisper.offline
 import android.content.Context
 import android.graphics.Bitmap
 import android.net.Uri
+import android.util.Log
+import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.google.android.gms.common.moduleinstall.ModuleInstall
+import com.google.android.gms.common.moduleinstall.ModuleInstallRequest
 import com.google.mlkit.vision.common.InputImage
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.chinese.ChineseTextRecognizerOptions
@@ -10,6 +14,7 @@ import com.google.mlkit.vision.text.devanagari.DevanagariTextRecognizerOptions
 import com.google.mlkit.vision.text.japanese.JapaneseTextRecognizerOptions
 import com.google.mlkit.vision.text.korean.KoreanTextRecognizerOptions
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlin.coroutines.resume
 import kotlin.coroutines.suspendCoroutine
 import java.util.concurrent.atomic.AtomicBoolean
@@ -43,6 +48,59 @@ object OfflineTextRecognizer {
         "Korean" -> KoreanTextRecognizerOptions.Builder().build()
         "Devanagari" -> DevanagariTextRecognizerOptions.Builder().build()
         else -> TextRecognizerOptions.DEFAULT_OPTIONS // Default Latin/English
+    }
+
+    /** Languages [isReady] has already announced "not ready" for once this process — a
+     *  continuous-mode Read Text poll retries every few seconds and must not repeat the warning
+     *  on every single one of them. */
+    private val warnedNotReadyLanguages = mutableSetOf<String>()
+
+    /**
+     * True if [targetLanguage]'s OCR module is downloaded and ready to recognize text right now.
+     * Each script is a separate on-demand Play Services module (see app/build.gradle.kts's
+     * play-services-mlkit-text-recognition* dependencies) — a device that's ready for Latin text
+     * may well not have Chinese installed yet, so this always checks the *specific* script a
+     * caller is about to use, never a fixed/default one. Never blocks waiting for a download: if
+     * the module isn't there, this announces "not ready, please wait" via TalkBack (once per
+     * language per process — see [warnedNotReadyLanguages]) and fires off [startModuleDownload] in
+     * the background (so a later retry succeeds), then returns false — the caller's only job is to
+     * not proceed with a capture/recognition attempt that's going to fail anyway.
+     */
+    suspend fun isReady(context: Context, targetLanguage: String): Boolean {
+        val recognizer = TextRecognition.getClient(recognizerOptionsFor(targetLanguage))
+        val available = try {
+            suspendCancellableCoroutine<Boolean> { cont ->
+                ModuleInstall.getClient(context).areModulesAvailable(recognizer)
+                    .addOnSuccessListener { response -> if (cont.isActive) cont.resume(response.areModulesAvailable()) }
+                    .addOnFailureListener { if (cont.isActive) cont.resume(false) }
+            }
+        } catch (e: Exception) {
+            false
+        }
+        if (!available) {
+            startModuleDownload(context, targetLanguage)
+            if (warnedNotReadyLanguages.add(targetLanguage)) {
+                AccessibilityUtils.announceToTalkBack(context, "The text reader isn't ready yet. Please wait for it to finish downloading, then try again.")
+            }
+        }
+        return available
+    }
+
+    /** Fire-and-forget: asks Play Services to install [targetLanguage]'s OCR module now, instead
+     *  of waiting for it to download lazily the first time [recognize]/[recognizeBlocks] actually
+     *  needs it. Called both proactively (when the OCR language is changed in Settings — see
+     *  [com.appricodes.lens_whisper.SettingsActivity]) and reactively (from [isReady], the moment a
+     *  button discovers the current language isn't ready yet). Safe to call repeatedly —
+     *  installModules() is a fast no-op once the module is already present. */
+    fun startModuleDownload(context: Context, targetLanguage: String) {
+        try {
+            val recognizer = TextRecognition.getClient(recognizerOptionsFor(targetLanguage))
+            val request = ModuleInstallRequest.newBuilder().addApi(recognizer).build()
+            ModuleInstall.getClient(context).installModules(request)
+                .addOnFailureListener { e -> Log.e("OfflineTextRecognizer", "OCR module install failed for $targetLanguage", e) }
+        } catch (e: Exception) {
+            Log.e("OfflineTextRecognizer", "Could not request OCR module install for $targetLanguage", e)
+        }
     }
 
     /** Suspend, paragraph-level counterpart to [recognize] — used by

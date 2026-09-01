@@ -183,6 +183,12 @@ class MlkitButtonProvider(
         isBusy = true
         var toneJob: Job? = null
         try {
+            // OCR's model is downloaded on demand now (see OfflineTextRecognizer's own doc) —
+            // check before capturing at all, not after, so a not-ready module doesn't cost the
+            // user a capture (and its acknowledge sound) for an attempt that's going to fail
+            // anyway. isReady() itself owns the "please wait" announcement and kicks off the
+            // download in the background.
+            if (mode == Mode.TEXT && !OfflineTextRecognizer.isReady(context, prefs.ocrLanguage)) return
             // Immediate feedback that the tap registered — binding a cold camera can itself take a
             // second or two before the shutter click fires. Skipped in continuous mode: the camera
             // stays bound for the whole mode there (see isContinuousActive), so there's no such gap
@@ -325,17 +331,23 @@ class MlkitButtonProvider(
     }
 
     /** "Read Document": same "capture here, read there" shape as [launchSegmentationExplore] —
-     *  see [ReadDocumentActivity]'s doc for what happens once it's open. */
-    private fun launchReadDocument() {
+     *  see [ReadDocumentActivity]'s doc for what happens once it's open. [prefs] is only needed
+     *  for the OCR-module readiness check below (see [OfflineTextRecognizer.isReady]) —
+     *  [ReadDocumentActivity] re-reads [PreferencesManager.ocrLanguage] itself once it's open, so
+     *  nothing else here needs it. */
+    private fun launchReadDocument(prefs: PreferencesManager) {
         if (isBusy) {
             announceBusy()
             return
         }
         val capture = capturePhoto ?: return
         isBusy = true
-        ProcessingSoundPlayer.playCaptureAcknowledge(context)
         coroutineScope.launch {
             try {
+                // Same "check before capturing" reasoning as Mode.TEXT in captureAndRun — a
+                // not-ready OCR module shouldn't cost the user a capture for nothing.
+                if (!OfflineTextRecognizer.isReady(context, prefs.ocrLanguage)) return@launch
+                ProcessingSoundPlayer.playCaptureAcknowledge(context)
                 val bitmap = try {
                     // No tone starts here — ReadDocumentActivity owns its own "waiting for the
                     // model" cue, started once the captured image is actually received there.
@@ -445,7 +457,7 @@ class MlkitButtonProvider(
                 GridCell(
                     label = "Read Document",
                     contentDescription = "Read a document by touch. Opens a full-screen view — move your finger over a paragraph to hear it read aloud, or tap once for more options.",
-                    onClick = { launchReadDocument() }
+                    onClick = { launchReadDocument(ctx.prefs) }
                 ),
                 GridCell(
                     label = "Light Level Meter",

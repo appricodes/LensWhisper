@@ -26,6 +26,7 @@ import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
+import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import kotlinx.coroutines.launch
@@ -63,7 +64,9 @@ class SettingsActivity : ComponentActivity() {
 		val prefs = PreferencesManager(this)
 		val langCode = prefs.selectedLanguageCode
 
-		// If the user picked a non-English language, trigger background model sync for offline translation
+		// Backstop for the same call already made right at selection time (see the language
+		// dropdown's onClick below) - cheap and idempotent (downloadModelIfNeeded no-ops once a
+		// model's already present), so there's no harm keeping both.
 		if (!langCode.startsWith("en", ignoreCase = true)) {
 			OfflineTranslator.manageModelsInBackground(langCode)
 		}
@@ -148,6 +151,11 @@ fun SettingsScreen(
 							selectedLanguageName = name
 							sharedPrefs.edit().putString("selected_language_code", code).putString("selected_language", name).apply()
 							langDropdownExpanded = false
+							// Start fetching this language's translation model(s) right away rather
+							// than waiting for the screen to close (see onStop below, kept as a
+							// backstop) - selecting a language is as clear a signal as any that the
+							// user wants translation ready for it.
+							if (!code.startsWith("en", ignoreCase = true)) OfflineTranslator.manageModelsInBackground(code)
 						})
 					}
 				}
@@ -219,6 +227,10 @@ fun SettingsScreen(
 							selectedOcrLanguage = lang
 							sharedPrefs.edit().putString("ocr_language", lang).apply()
 							ocrDropdownExpanded = false
+							// Start fetching this script's OCR module right away, same reasoning as
+							// the narration-language dropdown above - see OfflineTextRecognizer's
+							// own doc for why this is fire-and-forget and safe to call repeatedly.
+							OfflineTextRecognizer.startModuleDownload(context, lang)
 						})
 					}
 				}
