@@ -112,7 +112,11 @@ object OfflineTranslator {
                 // The model is already confirmed downloaded by the caller, so this resolves near-
                 // instantly — kept as a defensive belt (matches ML Kit's own recommended usage)
                 // rather than calling translator.translate() directly, not as the thing standing
-                // between us and a slow first-time download the way it used to be.
+                // between us and a slow first-time download the way it used to be. Measured
+                // on-device (Galaxy S21, English->Persian): ~330ms the first call in a process
+                // (ML Kit/native model warm-up), ~60ms every call after — cheap enough for
+                // detectAndDescribe's per-instance loop (a handful of calls, once per photo) even
+                // though it isn't parallelized.
                 val conditions = DownloadConditions.Builder().build()
                 translator.downloadModelIfNeeded(conditions)
                     .addOnSuccessListener {

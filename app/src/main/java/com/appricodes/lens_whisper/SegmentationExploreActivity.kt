@@ -66,6 +66,7 @@ import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineColorDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
+import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.offline.SegmentationIsolation
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
@@ -152,10 +153,16 @@ class SegmentationExploreActivity : ComponentActivity() {
 
 /** Runs detection + per-instance color naming + confidence phrasing on [loadedBitmap], with the
  *  "waiting for the model" tone looping for the duration — shared by the initial load and by
- *  "Capture new photo" so the two paths can't drift apart. */
+ *  "Capture new photo" so the two paths can't drift apart. Each instance's phrase is translated
+ *  (via [OfflineTranslator.translate], self-gated on the "Translate Offline Results" setting)
+ *  once, right here, rather than later at each hover/tap — [descriptions] (the map this returns)
+ *  is read many times over a photo's lifetime ([HoverExploreLayer]'s `baseTextFor`, and
+ *  `handleColorReport`'s object-naming half) but only ever needs to be computed, and translated,
+ *  once per detection. */
 private suspend fun detectAndDescribe(
     context: Context,
     loadedBitmap: Bitmap,
+    prefs: PreferencesManager,
     // Non-null when the caller (captureNewPhoto) already started the waiting tone itself, from
     // CameraController's onShutter callback, the instant the shutter fired — this function then
     // just adopts and eventually cancels that job instead of starting a second, later one. Null
@@ -166,11 +173,18 @@ private suspend fun detectAndDescribe(
     val detected = withContext(Dispatchers.Default) {
         OfflineSegmentationDetector.detect(context, loadedBitmap)
     }
-    val described = withContext(Dispatchers.Default) {
+    val describedRaw = withContext(Dispatchers.Default) {
         detected.associateWith { instance ->
             val colors = instance.namedDominantColors(loadedBitmap)
             DetectionPhrasing.describeDetection(instance.confidence, instance.label, colors.joinToString(" and "))
         }
+    }
+    // A plain loop, not mapValues { ... } — its transform lambda isn't a suspend lambda, so a
+    // call to a suspend function inside it doesn't compile (same reasoning as
+    // MlkitButtonProvider.summarizeInstances' own for-loop).
+    val described = mutableMapOf<DetectedInstance, String>()
+    for ((instance, text) in describedRaw) {
+        described[instance] = OfflineTranslator.translate(context, text, prefs)
     }
     detected to described
 }
@@ -313,12 +327,14 @@ private fun SegmentationExploreScreen(
         isLoading = true
         bitmap = loadedBitmap
         AccessibilityUtils.announceToTalkBack(context, "Analyzing objects.")
-        val (detected, described) = detectAndDescribe(context, loadedBitmap, externalToneJob)
+        val (detected, described) = detectAndDescribe(context, loadedBitmap, prefs, externalToneJob)
         isLoading = false
         if (detected.isEmpty()) {
             instances = emptyList()
             descriptions = emptyMap()
-            AccessibilityUtils.announceToTalkBack(context, "No objects detected.")
+            // A detection result (nothing found), same as every per-instance phrase above -
+            // translated the same way, not left as the one detection outcome that stays English.
+            AccessibilityUtils.announceToTalkBack(context, OfflineTranslator.translate(context, "No objects detected.", prefs))
         } else {
             instances = detected
             descriptions = described
@@ -641,6 +657,13 @@ private fun HoverExploreLayer(
         AccessibilityUtils.announceToTalkBack(context, text)
     }
 
+    // The `?: hit.label` fallback is untranslated raw English — unreachable today only because
+    // `instances` and `descriptions` are always assigned together, from the same detectAndDescribe
+    // result, so a DetectedInstance found via `instances` (DetectedInstance has no custom equals/
+    // hashCode, so this is reference identity) always has a matching key in `descriptions`. If a
+    // future change ever lets the two drift (e.g. filtering one without the other), this fallback
+    // starts silently leaking English into an otherwise-translated screen — keep them assigned
+    // together, or give this a translated fallback too.
     fun baseTextFor(hit: DetectedInstance): String = descriptions[hit] ?: hit.label
 
     /** Color Report's own axis, independent of object detection: the 2 dominant colors of a small
@@ -657,7 +680,19 @@ private fun HoverExploreLayer(
         if (colorKey.isEmpty() || colorKey == lastColorKey) return
         lastColorKey = colorKey
         val hit = currentHitInstance
-        val text = if (hit != null) "${DetectionPhrasing.describeDetection(hit.confidence, hit.label)}, $colorKey" else colorKey
+        // The object-naming half reuses baseTextFor/descriptions[hit] — already translated once,
+        // up front, in detectAndDescribe — rather than a fresh DetectionPhrasing.describeDetection
+        // call, so this stays consistent with what hovering the same object without Color Report
+        // just said. colorKey itself is a genuinely live, per-pixel value from
+        // OfflineColorDetector, recomputed on every color-boundary crossing while the finger
+        // moves — translating it would mean a suspend call inside this same pointer-event loop,
+        // for every one of those crossings, not once per photo the way detectAndDescribe's own
+        // translation is. Left untranslated for now rather than add that without measuring its
+        // effect on touch tracking specifically (OfflineTranslator.translate itself measured
+        // ~60ms once warm on-device, which is fine for a once-per-photo cost but unverified here
+        // for a fires-on-every-crossing one). A real gap when translation is on, smaller than
+        // restating the whole sentence untranslated the way this used to.
+        val text = if (hit != null) "${baseTextFor(hit)}, $colorKey" else colorKey
         speak(text)
     }
 

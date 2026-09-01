@@ -18,6 +18,7 @@ import com.appricodes.lens_whisper.offline.OfflineColorDetector
 import com.appricodes.lens_whisper.offline.OfflineLightDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
+import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -172,6 +173,24 @@ class MlkitButtonProvider(
         updatePrevious(text)
     }
 
+    /** [speakIfChanged], but for a mode whose text should go through [OfflineTranslator.translate]
+     *  first — every mode here except [Mode.TEXT] (OCR output stays exactly what was read, in
+     *  whatever script it's written in; see captureAndRun's Mode.TEXT branch, which stays on the
+     *  plain [speakIfChanged] above). Text is translated *before* the interrupt, not after — not
+     *  because order matters to the model, but because interrupting first and only then awaiting
+     *  the translation would leave dead air between "cut off whatever was still being said" and
+     *  "the new sentence is finally ready", instead of the two landing back to back. */
+    private suspend fun speakIfChangedTranslated(
+        previous: String?, text: String, prefs: PreferencesManager, updatePrevious: (String) -> Unit
+    ) {
+        if (text != previous) {
+            val spoken = OfflineTranslator.translate(context, text, prefs)
+            VolumeShortcuts.interruptTalkBackSpeech(context)
+            speak(spoken)
+        }
+        updatePrevious(text)
+    }
+
     private suspend fun captureAndRun(mode: Mode, prefs: PreferencesManager) {
         val capture = capturePhoto
         // Refuse to start a second request while one is still in flight, rather than letting two
@@ -226,25 +245,34 @@ class MlkitButtonProvider(
                 // Single-shot only — SEGMENT/SEGMENT_COLOR's long-press no longer starts continuous
                 // mode (see isContinuousActive's doc), so continuousEnabled is always false by the
                 // time either of these runs; nothing here needs the speakIfChanged dedup path.
+                //
+                // Both translated (OfflineTranslator.translate, gated on the same "Translate
+                // Offline Results" setting as everything else it covers) — unlike OCR, this text
+                // is built entirely from a small, fixed vocabulary (DetectionPhrasing's hedge
+                // words, COCO class names, Palette color names), the same kind of short, simple
+                // sentence this app's on-device translator already handles for VLM responses.
                 Mode.SEGMENT -> {
                     val text = summarizeInstances(context, bitmap, withColors = false)
                     // Stop the tone the instant there's something to say, not after — otherwise a
                     // tone dispatched a moment earlier can land right on top of the announcement.
                     toneJob?.cancel()
-                    speak(text)
+                    speak(OfflineTranslator.translate(context, text, prefs))
                 }
                 Mode.SEGMENT_COLOR -> {
                     val text = summarizeInstances(context, bitmap, withColors = true)
                     toneJob?.cancel()
-                    speak(text)
+                    speak(OfflineTranslator.translate(context, text, prefs))
                 }
                 Mode.SIMPLE_COLOR -> {
                     val colors = withContext(Dispatchers.Default) {
                         OfflineColorDetector.namedDominantColors(centerCrop(bitmap, SIMPLE_COLOR_CROP_SIZE), k = 2)
                     }
                     val text = if (colors.isEmpty()) "Could not detect a color." else colors.joinToString(" and ")
-                    if (continuousEnabled) speakIfChanged(lastSimpleColorText, text) { lastSimpleColorText = it }
-                    else { speak(text); lastSimpleColorText = text }
+                    // Same translation reasoning as SEGMENT/SEGMENT_COLOR above. Deduping on the
+                    // raw (untranslated) text, same as before — cheap, and avoids re-translating
+                    // identical English on every poll tick when nothing's actually changed.
+                    if (continuousEnabled) speakIfChangedTranslated(lastSimpleColorText, text, prefs) { lastSimpleColorText = it }
+                    else { speak(OfflineTranslator.translate(context, text, prefs)); lastSimpleColorText = text }
                 }
                 else -> {}
             }
