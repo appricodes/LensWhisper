@@ -51,21 +51,6 @@
       ]
     },
     {
-      "id": "lfm2_5_vl_450m",
-      "displayName": "LFM2.5-VL 450M",
-      "family": "LFM2.5-VL",
-      "description": "Fastest and smallest, and the least accurate. Fine for a quick sense of what is in front of you and for large, clear text. Unreliable at counting things, at objects near the top of the frame, and at small or low-contrast text. Choose this for speed on an older phone, not when the answer matters.",
-      "variants": [
-        {
-          "hardwareMatch": [],
-          "sizeBytes": 406820224,
-          "downloadUrl": "https://huggingface.co/litert-community/LFM2.5-VL-450M/resolve/main/LFM2.5-VL-450M_int4.litertlm",
-          "fileName": "lfm2_5_vl_450m_int4.litertlm",
-          "backend": "GPU"
-        }
-      ]
-    },
-    {
       "id": "smolvlm2_500m",
       "displayName": "SmolVLM2 500M",
       "family": "SmolVLM2",

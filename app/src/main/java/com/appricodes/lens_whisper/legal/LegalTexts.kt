@@ -199,9 +199,6 @@ Licensed under the Apache License, Version 2.0.
 SMOLVLM2 (Hugging Face)
 Licensed under the Apache License, Version 2.0.
 
-LFM2.5-VL (Liquid AI)
-Made available under Liquid AI's own model licence. Use of the model in this app is subject to that licence.
-
 Model files listed above are hosted on Hugging Face and are downloaded directly by your device.
 
 YOLOv8n-seg (Ultralytics) — object and colour detection, and the Explore screens
