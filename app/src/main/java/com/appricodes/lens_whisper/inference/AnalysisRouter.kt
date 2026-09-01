@@ -48,10 +48,7 @@ suspend fun runSelectedModelAnalysis(
     val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, config, offlineImages.size)
     return OfflineInferenceEngine.analyze(
         context, model, offlineImages, userPrompt, systemInstruction,
-        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize),
-        // Explore's system instruction demands one parseable JSON object back — see
-        // OfflineInferenceEngine.analyze's own doc for why that's incompatible with reasoning on.
-        structuredOutput = config.id == "explore"
+        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)
     )
 }
 
@@ -59,20 +56,15 @@ suspend fun runSelectedModelAnalysis(
  *  can never drift apart on how a prompt gets built for the on-device engine. */
 private fun buildOfflinePrompt(prefs: PreferencesManager, config: PromptConfig, frameCount: Int): Pair<String, String> {
     val isCustomQuestion = config.id == "custom"
-    val isExplore = config.id == "explore"
-    val systemInstruction = when {
-        isCustomQuestion -> OfflinePromptBuilder.buildCustomQuestionInstruction(prefs.selectedLanguage, config.prompt)
-        isExplore -> OfflinePromptBuilder.buildExploreSystemInstruction(prefs.selectedLanguage, prefs.selectedMode)
-        else -> OfflinePromptBuilder.buildSystemInstruction(
+    val systemInstruction = if (isCustomQuestion) {
+        OfflinePromptBuilder.buildCustomQuestionInstruction(prefs.selectedLanguage, config.prompt)
+    } else {
+        OfflinePromptBuilder.buildSystemInstruction(
             prefs.selectedLanguage, prefs.selectedMode, frameCount > 1,
             maxWords = OfflinePromptBuilder.maxWordsFor(config.id)
         )
     }
-    val userPrompt = when {
-        isCustomQuestion -> config.prompt
-        isExplore -> OfflinePromptBuilder.EXPLORE_USER_PROMPT
-        else -> OfflinePromptBuilder.userPromptFor(config.id)
-    }
+    val userPrompt = if (isCustomQuestion) config.prompt else OfflinePromptBuilder.userPromptFor(config.id)
     return userPrompt to systemInstruction
 }
 
@@ -109,8 +101,6 @@ fun runSelectedOfflineModelAnalysisStreaming(
     val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, config, offlineImages.size)
     return OfflineInferenceEngine.analyzeStreaming(
         context, model, offlineImages, userPrompt, systemInstruction,
-        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize),
-        // See the matching call in runSelectedModelAnalysis above for why this matters.
-        structuredOutput = config.id == "explore"
+        maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)
     )
 }

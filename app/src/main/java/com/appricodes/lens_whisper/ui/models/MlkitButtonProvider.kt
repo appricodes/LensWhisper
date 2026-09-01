@@ -259,11 +259,11 @@ class MlkitButtonProvider(
      * [com.appricodes.lens_whisper.ui.components.CameraController.capturePhotoToFile]'s own
      * pattern — nothing here needs anything beyond a Uri to hand to the next activity, but a raw
      * [Bitmap] can't safely cross an Intent extra), and opens [SegmentationExploreActivity], which
-     * runs the actual detection itself once it's on screen — same "capture here, analyze there"
-     * shape the existing VLM-based Explore ([com.appricodes.lens_whisper.ExploreActivity]) already
-     * uses, so a user familiar with one Explore screen isn't met with a different loading pattern
-     * on the other. [SegmentationExploreActivity] can also capture further photos of its own once
-     * it's open (its "Capture new photo" list item), so this only ever needs to run once per visit.
+     * runs the actual detection itself once it's on screen. [SegmentationExploreActivity] can also
+     * capture further photos of its own once it's open (its "Capture new photo" list item), so this
+     * only ever needs to run once per visit — and it's the only Explore left in the app, reached
+     * both from here and from the on-device VLM catalog's "Explore and Describe" (the older,
+     * VLM-driven grid-JSON Explore was removed 2026-09-01).
      */
     private fun launchSegmentationExplore() {
         if (isBusy) {

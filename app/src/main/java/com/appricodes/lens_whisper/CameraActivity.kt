@@ -337,19 +337,6 @@ private fun CameraScreen(
         if (config.framesCount > 1) captureStory(config) else captureSingleShot(config)
     }
 
-    suspend fun captureExploreUri(): Uri? {
-        if (!cameraPermissionGranted) return null
-        return try {
-            cameraController.withCaptureSession(lifecycleOwner, flashEnabled) {
-                cameraController.capturePhotoToFile(MAX_CAPTURE_DIMENSION).uri
-            }
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            null
-        }
-    }
-
     /**
      * Captures once at the camera's maximum resolution and derives a 720p copy from it — shared by
      * "Describe TV Image" and "Explore and Describe" (see [DualResCapture]'s doc for why the
@@ -474,15 +461,6 @@ private fun CameraScreen(
         customPromptTexts = controller.customPromptTexts,
         customPromptTitles = controller.customPromptTitles,
         onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
-        onExplore = {
-            gate {
-                controller.onExplore(
-                    selectedModelId = selectedModelId,
-                    captureFrame = { captureExploreUri() },
-                    launchExplore = { uri -> context.startActivity(Intent(context, ExploreActivity::class.java).putExtra("IMAGE_URI", uri.toString())) }
-                )
-            }
-        },
         onRepeat = {
             if (selectedModelId == "mlkit") mlkitProvider.repeatLastAction()
             else gate { controller.onRepeat(selectedModelId, captureFrames) }
@@ -595,7 +573,7 @@ private fun CameraScreen(
         ActionButtonGrid(rows = lastRow, modifier = Modifier.weight(lastRow.size.toFloat()))
     }
 
-    controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })
+    controller.ResultDialogs()
     controller.ObserveDownloads()
     ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels)
 

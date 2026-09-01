@@ -301,23 +301,13 @@ object OfflineInferenceEngine {
     )
 
     /** Everything [analyze]/[analyzeStreaming] need to run one query at [effort] against [model] —
-     *  [NO_REASONING] (a no-op, byte-identical-to-before plan) for every model but Gemma, when
-     *  [effort] is [REASONING_NONE], or when [structuredOutput] is true. That last one matters for
-     *  its own reason, not just as another way to end up at [NO_REASONING]: `buildExploreSystemInstruction`
-     *  demands a strict, machine-parsed JSON reply, and this system has two independent ways to
-     *  suppress the reasoning-channel text a Gemma response can carry (the SDK's own [Channel]
-     *  separation, and [visiblePrefix]'s defensive backstop) — either one either removes it cleanly
-     *  or, in the backstop's case, suppresses the *rest of the response* if a thought span never
-     *  closes. Both outcomes are fine for prose; neither is compatible with "the whole reply must be
-     *  one parseable JSON object", so Explore-shaped calls skip reasoning entirely rather than risk
-     *  a parse failure on a screen whose whole purpose is the resulting spatial grid.
-     *
-     *  Budgets are real token counts, not just an on/off switch, in case thinkingTokenBudget turns
-     *  out to be enforced (see this section's doc); [maxOutputToken] and [inferenceTimeoutMs] are
-     *  both widened well past the reasoning budget so a thinking pass doesn't eat into, or time out,
-     *  the answer that's meant to follow it. */
-    private fun reasoningPlanFor(model: OfflineModelInfo, effort: String, structuredOutput: Boolean): ReasoningPlan {
-        if (model.family != GEMMA_FAMILY || effort == REASONING_NONE || structuredOutput) return NO_REASONING
+     *  [NO_REASONING] (a no-op, byte-identical-to-before plan) for every model but Gemma, or when
+     *  [effort] is [REASONING_NONE]. Budgets are real token counts, not just an on/off switch, in
+     *  case thinkingTokenBudget turns out to be enforced (see this section's doc); [maxOutputToken]
+     *  and [inferenceTimeoutMs] are both widened well past the reasoning budget so a thinking pass
+     *  doesn't eat into, or time out, the answer that's meant to follow it. */
+    private fun reasoningPlanFor(model: OfflineModelInfo, effort: String): ReasoningPlan {
+        if (model.family != GEMMA_FAMILY || effort == REASONING_NONE) return NO_REASONING
         // Token budget and timeout are both set per tier directly, not derived from one another by
         // a formula: [INFERENCE_TIMEOUT_MS]'s own 90s for 200 tokens is dominated by a mostly-fixed
         // image-prefill cost, not a flat per-token rate, so naively scaling it by token count would
@@ -377,10 +367,7 @@ object OfflineInferenceEngine {
     /**
      * Runs one query against [model] with the given image(s) and prompt. Returns the model's
      * text response, or an "ERROR: ..." string on failure — matching [com.appricodes.lens_whisper.network.LocalServerEngine]'s
-     * convention so callers can handle both the same way. [structuredOutput] should be true for a
-     * reply that must parse as something specific (currently: Explore's flat JSON grid) — see
-     * [reasoningPlanFor]'s doc for why that forces reasoning off regardless of
-     * [PreferencesManager.reasoningEffort].
+     * convention so callers can handle both the same way.
      */
     suspend fun analyze(
         context: Context,
@@ -388,11 +375,10 @@ object OfflineInferenceEngine {
         images: List<Bitmap>,
         userPrompt: String,
         systemInstruction: String,
-        maxImageDimension: Int,
-        structuredOutput: Boolean = false
+        maxImageDimension: Int
     ): String = withContext(Dispatchers.IO) {
         val prefs = PreferencesManager(context.applicationContext)
-        val plan = reasoningPlanFor(model, prefs.reasoningEffort, structuredOutput)
+        val plan = reasoningPlanFor(model, prefs.reasoningEffort)
 
         suspend fun runOnce(): String {
             val engine = ensureEngine(context, model)
@@ -490,7 +476,7 @@ object OfflineInferenceEngine {
      * A caller can't tell mid-stream whether a retry happened; it only ever sees a clean sequence
      * of deltas or a thrown exception (unlike [analyze], errors are NOT converted to an "ERROR: ..."
      * string here — the caller decides how to surface a failure that happened after some deltas
-     * already went out). [structuredOutput]: see [analyze]'s own doc.
+     * already went out).
      */
     fun analyzeStreaming(
         context: Context,
@@ -498,11 +484,10 @@ object OfflineInferenceEngine {
         images: List<Bitmap>,
         userPrompt: String,
         systemInstruction: String,
-        maxImageDimension: Int,
-        structuredOutput: Boolean = false
+        maxImageDimension: Int
     ): Flow<String> = flow {
         val prefs = PreferencesManager(context.applicationContext)
-        val plan = reasoningPlanFor(model, prefs.reasoningEffort, structuredOutput)
+        val plan = reasoningPlanFor(model, prefs.reasoningEffort)
 
         suspend fun collectOnce(emit: suspend (String) -> Unit) {
             val engine = ensureEngine(context, model)

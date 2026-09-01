@@ -11,7 +11,7 @@ import com.appricodes.lens_whisper.ui.components.GridCell
  * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController] via the hosting screen
  * ([com.appricodes.lens_whisper.CameraActivity] / MediaDescriberScreen) so providers stay thin —
  * they only decide *which* cells exist and *what* they're labeled/wired to, never how analysis,
- * Explore, or Repeat actually work.
+ * Explore and Describe, or Repeat actually work.
  */
 data class ModelButtonContext(
     val prefs: PreferencesManager,
@@ -23,7 +23,6 @@ data class ModelButtonContext(
     val customPromptTitles: List<String>,
     /** Runs [config] and speaks/shows the result — already routed through download/eligibility gating. */
     val onRunPrompt: (config: PromptConfig, label: String) -> Unit,
-    val onExplore: () -> Unit,
     val onRepeat: () -> Unit,
     /** "Describe TV Image"/"Explore and Describe" ([OfflineVlmButtonProvider] only) — both need a
      *  fresh, live camera capture (max resolution + a 720p segmentation copy from the very same

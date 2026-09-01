@@ -6,8 +6,6 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.net.Uri
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.forEachGesture
 import androidx.compose.foundation.layout.Box
@@ -32,8 +30,6 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
-import com.appricodes.lens_whisper.ExploreActivity
-import com.appricodes.lens_whisper.ModelManagementActivity
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.AppSettings
@@ -54,14 +50,11 @@ import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
-import com.appricodes.lens_whisper.utils.ImageScaling
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import java.io.File
-import java.io.FileOutputStream
 
 /**
  * Describes a video/image file with the same model-driven top bar + 3-row grid as
@@ -228,31 +221,6 @@ fun MediaDescriberScreen(
         }
     }
 
-    suspend fun extractCurrentFrameUri(): Uri? = withContext(Dispatchers.IO) {
-        val uri = currentFileUri ?: return@withContext null
-        if (isImageMode) return@withContext uri
-        try {
-            val retriever = MediaMetadataRetriever()
-            retriever.setDataSource(context, uri)
-            val frame = retriever.getFrameAtTime(exoPlayer.currentPosition * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
-            retriever.release()
-            if (frame == null) return@withContext null
-            val scaled = ImageScaling.scaleToMax(frame, 1600)
-            val file = File(context.cacheDir, "explore_frame.jpg")
-            FileOutputStream(file).use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-            Uri.fromFile(file)
-        } catch (e: Exception) {
-            null
-        }
-    }
-
-    // Resume playback unconditionally when Explore finishes, matching the original in-place
-    // Explore overlay's behavior (it always resumed, regardless of whether it was playing
-    // before Explore paused it).
-    val exploreLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
-        if (!isImageMode) exoPlayer.play()
-    }
-
     val ctx = ModelButtonContext(
         prefs = prefs,
         settings = settings,
@@ -260,16 +228,6 @@ fun MediaDescriberScreen(
         customPromptTexts = controller.customPromptTexts,
         customPromptTitles = controller.customPromptTitles,
         onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
-        onExplore = {
-            gate {
-                if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
-                controller.onExplore(
-                    selectedModelId = selectedModelId,
-                    captureFrame = { extractCurrentFrameUri() },
-                    launchExplore = { uri -> exploreLauncher.launch(Intent(context, ExploreActivity::class.java).putExtra("IMAGE_URI", uri.toString())) }
-                )
-            }
-        },
         onRepeat = { gate { controller.onRepeat(selectedModelId, captureFrames) } },
         // Both need a live camera capture (max resolution + a 720p segmentation copy from the same
         // shot) — this screen works from an already-picked video/image file, not a camera, so
@@ -339,7 +297,7 @@ fun MediaDescriberScreen(
         }
     }
 
-    controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })
+    controller.ResultDialogs()
     controller.ObserveDownloads()
 
     // This screen is a second, independent entry point into the app: Android routes a shared or

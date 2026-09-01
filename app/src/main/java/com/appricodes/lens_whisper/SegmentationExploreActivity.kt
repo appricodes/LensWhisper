@@ -93,12 +93,13 @@ import java.io.FileOutputStream
 private const val MAX_CAPTURE_DIMENSION = 2500
 
 /**
- * The mask-based "Explore" screen — see [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider],
- * the sole external caller. Shares its overall shape ("open on a captured photo, run inference,
- * then let the user explore the result") with the existing VLM-driven [ExploreActivity], but the
- * interaction itself is different: this one is grounded in [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s
- * exact per-pixel masks rather than a coarse VLM-described grid, so a finger genuinely has to be
- * *on* an object (not just inside its rough bounding area) to name it.
+ * The mask-based "Explore" screen — launched by [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider]
+ * (Basic Tasks' "Explore Photo by Touch") and by [com.appricodes.lens_whisper.CameraActivity] itself
+ * (the on-device VLM catalog's "Explore and Describe", in describe-mode below). Grounded in
+ * [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s exact per-pixel masks, so a
+ * finger genuinely has to be *on* an object (not just inside its rough bounding area) to name it —
+ * the only Explore left in the app; the older VLM-driven one (a coarse spatial-grid JSON response,
+ * Local-Server-only) was removed 2026-09-01.
  *
  * Two ways to learn what's in the photo, both on [HoverExploreLayer] — hover works identically in
  * either of this Activity's two modes; only what a *tap* does differs:
@@ -444,7 +445,7 @@ private fun SegmentationExploreScreen(
         // rendering it, since this screen never otherwise touches AnalysisSessionController's own
         // dialogs (unlike CameraActivity/MediaDescriberScreen, which already call both).
         controller.ObserveDownloads()
-        controller.ResultDialogs(onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) })
+        controller.ResultDialogs()
 
         ImmersiveBackButton(onClick = onClose)
     }

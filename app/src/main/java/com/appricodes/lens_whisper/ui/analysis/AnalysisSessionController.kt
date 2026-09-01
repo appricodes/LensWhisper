@@ -2,7 +2,6 @@ package com.appricodes.lens_whisper.ui.analysis
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.net.Uri
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -110,9 +109,6 @@ class AnalysisSessionController(
     var dialogState by mutableStateOf<Pair<String, String>?>(null)
         private set
 
-    var showExploreUnsupportedDialog by mutableStateOf(false)
-        private set
-
     /** See [blockedByHeat]/[continueDespiteHeat]. */
     var showThermalWarning by mutableStateOf(false)
         private set
@@ -171,7 +167,6 @@ class AnalysisSessionController(
     }
 
     fun dismissDialog() { dialogState = null }
-    fun dismissExploreUnsupportedDialog() { showExploreUnsupportedDialog = false }
 
     /** Checked at the top of every entry point that would otherwise reach
      *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] — before any capture/detect/
@@ -229,8 +224,8 @@ class AnalysisSessionController(
     /**
      * Launches [body] as this controller's one active job, replacing whatever's currently running
      * rather than refusing to start — every entry point below that reaches the on-device model or
-     * a camera capture ([runAnalysis], [onRepeat], [runGuarded], [onExplore]) funnels through here
-     * instead of each keeping its own busy gate, so a second button press always cancels-and
+     * a camera capture ([runAnalysis], [onRepeat], [runGuarded]) funnels through here instead of
+     * each keeping its own busy gate, so a second button press always cancels-and
      * -replaces an in-flight analysis, the same way [SegmentationExploreActivity.analyzeTappedObject]
      * replaces one tap's analysis with the next.
      *
@@ -347,9 +342,7 @@ class AnalysisSessionController(
             // On-device models always stream; the Local Server streams only when the user opted in
             // (Settings, default off — see PreferencesManager.streamingEnabled) since it changes the
             // wire protocol /process.php speaks (NDJSON vs. one JSON object). MLKit never reaches
-            // either branch (see isOfflineVlmSelected). Explore is excluded from both — its
-            // structured grid-JSON response isn't sentence-shaped (OfflineVlmButtonProvider doesn't
-            // even offer Explore on-device, and localServerCallStreaming is null for it).
+            // either branch (see isOfflineVlmSelected).
             //
             // Wrapped in its own try/catch: unlike runSelectedModelAnalysis (which reports setup
             // problems by returning an "ERROR: ..." string), runSelectedOfflineModelAnalysisStreaming
@@ -361,9 +354,9 @@ class AnalysisSessionController(
             // hot from sustained on-device inference, so "too hot" is not a rare edge case here.
             val streamingFlow: Flow<String>? = try {
                 when {
-                    isOfflineVlmSelected() && config.id != "explore" ->
+                    isOfflineVlmSelected() ->
                         runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages)
-                    prefs.selectedModelId == LocalServerFeature.MODEL_ID && prefs.streamingEnabled && config.id != "explore" ->
+                    prefs.selectedModelId == LocalServerFeature.MODEL_ID && prefs.streamingEnabled ->
                         bundle.localServerCallStreaming?.invoke()
                     else -> null
                 }
@@ -583,24 +576,6 @@ class AnalysisSessionController(
         speechRecognizer.destroy()
     }
 
-    /** Explore-support gating + the same cancel-and-replace bookkeeping [runAnalysis] uses (see
-     *  [launchAnalysis]), shared verbatim between camera and media-describer Explore buttons. */
-    fun onExplore(selectedModelId: String, captureFrame: suspend () -> Uri?, launchExplore: (Uri) -> Unit) {
-        if (!repository.isExploreSupported(selectedModelId)) {
-            showExploreUnsupportedDialog = true
-            return
-        }
-        launchAnalysis {
-            AccessibilityUtils.announceToTalkBack(context, "Entering exploration mode. Analyzing elements.")
-            val uri = captureFrame()
-            if (uri == null) {
-                AccessibilityUtils.announceToTalkBack(context, "Could not capture the current frame.")
-                return@launchAnalysis
-            }
-            launchExplore(uri)
-        }
-    }
-
     /**
      * If [model] isn't downloaded yet, opens the download-size prompt instead of running
      * [action], and auto-resumes [action] once that model finishes downloading (observed via
@@ -685,24 +660,13 @@ class AnalysisSessionController(
     /** Renders the result/error dialog, the Explore-unsupported dialog, and the heat warning. Call
      *  once in composition. */
     @Composable
-    fun ResultDialogs(onOpenModelManager: () -> Unit) {
+    fun ResultDialogs() {
         dialogState?.let { (title, msg) ->
             AlertDialog(
                 onDismissRequest = { dismissDialog() },
                 title = { Text(title) },
                 text = { Text(msg, fontSize = 18.sp) },
                 confirmButton = { Button(onClick = { dismissDialog() }) { Text("OK") } }
-            )
-        }
-        if (showExploreUnsupportedDialog) {
-            AlertDialog(
-                onDismissRequest = { dismissExploreUnsupportedDialog() },
-                title = { Text("Explore Not Supported") },
-                text = { Text("The selected model can't be used for the Explore feature. Choose a different model to use Explore.", fontSize = 18.sp) },
-                confirmButton = {
-                    Button(onClick = { dismissExploreUnsupportedDialog(); onOpenModelManager() }) { Text("Open Model Manager") }
-                },
-                dismissButton = { Button(onClick = { dismissExploreUnsupportedDialog() }) { Text("Cancel") } }
             )
         }
         // "Continue Anyway" calls ThermalGuard.dismissForThisSession() and just closes the dialog —

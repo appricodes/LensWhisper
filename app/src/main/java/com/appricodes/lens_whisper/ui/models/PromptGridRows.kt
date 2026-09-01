@@ -42,12 +42,13 @@ internal fun promptGridRows(ctx: ModelButtonContext): List<List<GridCell?>> {
         listOf(
             customPromptCell(0),
             customPromptCell(1),
-            GridCell(
-                label = "Explore",
-                contentDescription = "Explore. Analyze the layout of the current view in a grid.",
-                onClick = ctx.onExplore
-            ),
-            GridCell(label = "Repeat", contentDescription = "Repeat the last action.", onClick = ctx.onRepeat)
+            GridCell(label = "Repeat", contentDescription = "Repeat the last action.", onClick = ctx.onRepeat),
+            // Explore used to sit here — a structured spatial-grid JSON response, Local-Server-only
+            // (the on-device catalog never offered it — see OfflineVlmButtonProvider's doc). Removed
+            // 2026-09-01 along with ExploreActivity/SpatialGridParser/ExploreGridOverlay; trailing
+            // null spacer per this file's row-of-4 contract (see ModelButtonProvider.rows's doc)
+            // rather than a mid-row gap.
+            null
         )
     )
 }

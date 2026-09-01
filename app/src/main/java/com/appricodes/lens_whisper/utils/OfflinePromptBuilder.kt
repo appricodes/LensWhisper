@@ -50,8 +50,8 @@ object OfflinePromptBuilder {
     const val DEFAULT_MAX_WORDS = 150
 
     /** [BRIEF_MAX_WORDS] for the brief-narration prompt, [DEFAULT_MAX_WORDS] for every other
-     *  predefined prompt. Not meaningful for "custom" or "explore", which build their own
-     *  instructions directly (see [buildCustomQuestionInstruction]/[buildExploreSystemInstruction]). */
+     *  predefined prompt. Not meaningful for "custom", which builds its own instruction directly
+     *  (see [buildCustomQuestionInstruction]). */
     fun maxWordsFor(promptId: String): Int = if (promptId == "brief_narration") BRIEF_MAX_WORDS else DEFAULT_MAX_WORDS
 
     private val predefinedPrompts = mapOf(
@@ -77,7 +77,7 @@ object OfflinePromptBuilder {
             "Describe what happens across these frames as one short narrative. If nothing moves, say exactly: No action detected."
     )
 
-    /** The user-facing instruction text for a predefined prompt id (not "custom" or "explore"). */
+    /** The user-facing instruction text for a predefined prompt id (not "custom"). */
     fun userPromptFor(promptId: String): String = predefinedPrompts[promptId] ?: "Describe the image."
 
     /**
@@ -107,11 +107,4 @@ object OfflinePromptBuilder {
             "Answer only that question. If the answer is not visible, say so instead of guessing. " +
             PEOPLE_GUARDRAIL
 
-    /** System instruction for the Explore spatial-grid analysis; expects a flat JSON response. */
-    fun buildExploreSystemInstruction(language: String, persona: String, gridSize: Int = 6): String =
-        "You map an image onto a strict ${gridSize}x${gridSize} grid for a blind user's screen reader. " +
-            "Reply ONLY with a flat JSON object whose keys are exactly row1_col1 through row${gridSize}_col${gridSize}. " +
-            "Each value: a few words, in $language, $persona style, describing only what is visible in that cell."
-
-    const val EXPLORE_USER_PROMPT = "Generate the JSON map spanning the entire image."
 }

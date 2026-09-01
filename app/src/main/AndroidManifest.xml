@@ -77,12 +77,6 @@
         </activity>
 
         <activity
-            android:name=".ExploreActivity"
-            android:exported="false"
-            android:label="Explore"
-            android:theme="@style/Theme.LensWhisper" />
-
-        <activity
             android:name=".SegmentationExploreActivity"
             android:exported="false"
             android:label="Explore"

@@ -180,9 +180,7 @@ class LocalServerEngine(private val baseUrl: String) {
 	/** Streaming counterparts to [analyzeStaticImageFile]/[analyzeVideoFrame]/[analyzeMultipleStaticImages]
 	 *  — emit the response sentence-fragment by sentence-fragment as the server relays it (see
 	 *  backend/readme.md's "Streaming" section for the NDJSON wire format process.php speaks when
-	 *  `streaming: true` is sent). Only used when [PreferencesManager.streamingEnabled] is on; there's
-	 *  deliberately no streaming variant of [analyzeFrameSpatialGrid] — Explore's structured grid JSON
-	 *  isn't sentence-shaped, same reasoning as the on-device catalog never offering Explore at all. */
+	 *  `streaming: true` is sent). Only used when [PreferencesManager.streamingEnabled] is on. */
 	fun analyzeStaticImageFileStreaming(
 		context: Context, uri: Uri, config: PromptConfig, prefs: PreferencesManager
 	): Flow<String> = flow {
@@ -303,35 +301,6 @@ class LocalServerEngine(private val baseUrl: String) {
 			throw IllegalStateException("Network connection failed. Please check internet access or your signal strength. (${e.localizedMessage})", e)
 		}
 	}.flowOn(Dispatchers.IO)
-
-	suspend fun analyzeFrameSpatialGrid(
-		context: Context, uri: Uri, positionMs: Long, gridSize: Int, isStaticImage: Boolean, prefs: PreferencesManager
-	): String = withContext(Dispatchers.IO) {
-		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Spatial Grid] ---")
-		try {
-			val bitmap = if (isStaticImage) {
-				val inputStream = context.contentResolver.openInputStream(uri)
-				val bmp = BitmapFactory.decodeStream(inputStream)
-				inputStream?.close()
-				bmp
-			} else {
-				val retriever = MediaMetadataRetriever()
-				retriever.setDataSource(context, uri)
-				val bmp = retriever.getFrameAtTime(positionMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
-				retriever.release()
-				bmp
-			} ?: return@withContext "ERROR: Could not extract frame for grid mapping."
-
-			val scaledBitmap = scaleToMax448(bitmap)
-			val base64Image = encodeBitmapToBase64(scaledBitmap)
-
-			val dummyConfig = PromptConfig("explore", "Explore", "", 1, 0.5)
-			callBackendApi(listOf(base64Image), dummyConfig, prefs)
-		} catch (e: Exception) {
-			Log.e("LensWhisperExplore", "Spatial Extraction Error", e)
-			"ERROR: Spatial map extraction failed. ${e.localizedMessage}"
-		}
-	}
 
 	private fun encodeBitmapToBase64(bitmap: Bitmap): String {
 		val outputStream = ByteArrayOutputStream()
