@@ -467,11 +467,6 @@ private fun OfflineModelCard(
                     color = MaterialTheme.colorScheme.error
                 )
             }
-            Text(
-                text = if (model.supportsExplore) "Supports Explore mode." else "Does not support Explore mode.",
-                fontSize = 13.sp,
-                color = Color.Gray
-            )
             if (failureMessage != null) {
                 Text(text = "Download failed: $failureMessage", fontSize = 14.sp, color = MaterialTheme.colorScheme.error)
             }

@@ -23,6 +23,5 @@ data class OfflineModelInfo(
 	val sizeBytes: Long,
 	val downloadUrl: String,
 	val fileName: String,
-	val backend: String,
-	val supportsExplore: Boolean
+	val backend: String
 )

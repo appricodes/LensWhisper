@@ -17,8 +17,6 @@ import java.io.File
  *   displayName  shown in the model picker
  *   family       grouping label (e.g. "PaliGemma 2", "FastVLM")
  *   description  short device/size hint shown under the name
- *   supportsExplore  whether this model can produce the structured spatial-grid response the
- *                    Explore feature needs; Explore is blocked with a dialog when false
  *   variants     list of downloadable builds of this model, each with:
  *     hardwareMatch  chipset tokens (e.g. "sm8750", "tensor g5") matched against this device's
  *                    Build.SOC_MODEL/HARDWARE/BOARD/DEVICE; empty list = generic fallback build
@@ -75,8 +73,7 @@ class OfflineModelsRepository(private val context: Context) {
                     sizeBytes = chosen.sizeBytes,
                     downloadUrl = chosen.downloadUrl,
                     fileName = chosen.fileName,
-                    backend = chosen.backend,
-                    supportsExplore = obj.optBoolean("supportsExplore", true)
+                    backend = chosen.backend
                 )
             }.sortedBy { it.sizeBytes }
         }.getOrElse { e ->

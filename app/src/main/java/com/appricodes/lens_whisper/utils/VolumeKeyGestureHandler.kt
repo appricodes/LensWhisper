@@ -9,7 +9,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private const val LONG_PRESS_THRESHOLD_MS = 2000L
+private const val LONG_PRESS_THRESHOLD_MS = 1000L
 
 /**
  * Volume-key handling used from each Activity's `onKeyDown`/`onKeyUp` overrides (only active
@@ -20,9 +20,9 @@ private const val LONG_PRESS_THRESHOLD_MS = 2000L
  * volume key — one volume step — so enabling shortcuts doesn't lock the user out of normal volume
  * control. Critically, that step only happens on key-**up**, never on key-down: since we can't
  * know in advance whether a press will turn out to be short or long, adjusting on key-down would
- * cause an unwanted volume blip on every long-press too, right before the 2s threshold fires.
+ * cause an unwanted volume blip on every long-press too, right before the 1s threshold fires.
  *
- * A press held **past** 2s instead fires the app's shortcut — Volume Up = repeat the last prompt,
+ * A press held **past** 1s instead fires the app's shortcut — Volume Up = repeat the last prompt,
  * Volume Down = start a voice query — and suppresses the volume step for that press entirely.
  * Volume Down's mic session is also tied to the physical key: it keeps listening only while the
  * key stays down, and [onMicStop] force-stops it the instant the key is released (unlike an
