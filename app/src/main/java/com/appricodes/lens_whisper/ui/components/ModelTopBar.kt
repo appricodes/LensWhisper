@@ -15,6 +15,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -64,12 +65,23 @@ fun ModelTopBar(
     var selectedModelName by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    // The DisposableEffect(lifecycleOwner) below registers ONE LifecycleEventObserver that then
+    // lives for this composable's whole lifetime (its key never changes, so Compose never tears
+    // it down and re-runs it) - but selectedModelId is a plain String parameter, not a state
+    // holder, so a local `refresh` function reading it directly would forever read whatever value
+    // was current at that one registration, not whatever it is by the time ON_RESUME actually
+    // fires. rememberUpdatedState is exactly the fix for a long-lived callback needing the latest
+    // value of a parameter that changes on every recomposition: confirmed root cause of a real bug
+    // report - selecting Basic Tasks, immediately opening and closing Settings, and finding the
+    // top bar reverted to the previously-selected model's name while the button grid (driven by
+    // selectedModelId directly, not through this stale closure) stayed correct.
+    val currentSelectedModelId by rememberUpdatedState(selectedModelId)
 
     fun refresh() {
-        selectedModelName = when (selectedModelId) {
+        selectedModelName = when (currentSelectedModelId) {
             "mlkit" -> "Basic tasks"
             LocalServerFeature.MODEL_ID -> "Local Server"
-            else -> offlineModelsRepository.loadModels().find { it.id == selectedModelId }?.displayName ?: "No Model Selected"
+            else -> offlineModelsRepository.loadModels().find { it.id == currentSelectedModelId }?.displayName ?: "No Model Selected"
         }
     }
 
