@@ -15,12 +15,14 @@ import androidx.compose.ui.graphics.drawscope.Stroke
 /**
  * One name per distinct glyph a [com.appricodes.lens_whisper.ui.components.GridCell] can show.
  * Several buttons across Basic Tasks/VLM models are close enough in meaning to deliberately share
- * a glyph rather than each getting a bespoke one - e.g. [READ_TEXT] (Basic Tasks' OCR-driven "Read
- * Text") and the VLM catalog's prompt-driven "Read Texts" both read as "text lines"; [EXPLORE]
- * covers both "Explore Photo by Touch" and "Explore and Describe", which share the same
- * touch-to-explore interaction even though one names objects and the other asks a VLM to describe
- * them. TalkBack's contentDescription already disambiguates precisely for anyone who needs it -
- * see [GridIconGlyph]'s own doc for why sighted-only precision beyond that isn't the goal here.
+ * a glyph rather than each getting a bespoke one - e.g. [EXPLORE] covers both "Explore Photo by
+ * Touch" and "Explore and Describe", which share the same touch-to-explore interaction even
+ * though one names objects and the other asks a VLM to describe them. TalkBack's
+ * contentDescription already disambiguates precisely for anyone who needs it - see
+ * [GridIconGlyph]'s own doc for why sighted-only precision beyond that isn't the goal here.
+ * [READ_TEXT] used to be one of these too (shared with the VLM catalog's "Read Texts" prompt) -
+ * that button was removed 2026-09-01, so this glyph is Basic Tasks' Read Text alone now; kept
+ * distinct from [READ_DOCUMENT] regardless, since the two still mean different things there.
  */
 enum class GridIcon {
     DETECT_OBJECTS, IDENTIFY_OBJECTS_COLORS, EXPLORE, READ_TEXT, READ_DOCUMENT,

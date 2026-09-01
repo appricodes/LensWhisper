@@ -70,7 +70,6 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
             ),
             listOf(
                 promptCell("Objects", "objects", GridIcon.OBJECTS),
-                promptCell("Read Texts", "read_texts", GridIcon.READ_TEXT),
                 GridCell(
                     label = "Explore and Describe",
                     contentDescription = if (ctx.onExploreAndDescribe != null) {
@@ -85,8 +84,12 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                 ),
                 // No on-screen Repeat here — the volume-key long-press (ctx.onRepeat, wired in
                 // CameraActivity/MediaDescriberScreen) already covers it; a dedicated button was
-                // redundant with that gesture. Left as an empty spacer, not a 3-cell row, so this
-                // row's columns still line up with the 4-wide rows above/below it.
+                // redundant with that gesture. Two empty spacers, not a 2-cell row — "Read Texts"
+                // used to fill one of these (removed 2026-09-01: reading visible text is squarely
+                // Basic Tasks/OCR's job via Read Text/Read Document, not something this VLM-prompt
+                // grid needs to duplicate) — so this row's columns still line up with the 4-wide
+                // rows above/below it.
+                null,
                 null
             ),
             // The 4 custom slots get a row of their own, deliberately last — CameraActivity places
