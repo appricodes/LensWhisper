@@ -80,6 +80,13 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
+    // Text recognition (OCR) - the play-services-mlkit-text-recognition* variant (see
+    // gradle/libs.versions.toml), NOT com.google.mlkit:text-recognition*: no model weights are
+    // bundled into the APK, each script's model instead downloads on demand through Play Services
+    // (see the com.google.mlkit.vision.DEPENDENCIES manifest meta-data and OfflineTextRecognizer's
+    // own doc for the "not ready yet" handling this requires). Same TextRecognition.getClient/
+    // *TextRecognizerOptions API either way - only the Gradle coordinate changes.
+
     // Latin Script (English, Spanish, French, German, Italian, etc.)
     implementation(libs.text.recognition)
 
