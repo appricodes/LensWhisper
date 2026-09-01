@@ -89,9 +89,16 @@ object OfflinePromptBuilder {
      * [maxWords] should come from [maxWordsFor] — passed in rather than looked up here because the
      * caller ([com.appricodes.lens_whisper.inference.AnalysisRouter]) already has the prompt id and
      * this function otherwise has no way to know it.
+     *
+     * Always asks for English, not [com.appricodes.lens_whisper.data.PreferencesManager.selectedLanguage]
+     * — a fixed instruction instead of a per-user variable, deliberately. The model's reply is what
+     * [com.appricodes.lens_whisper.offline.OfflineTranslator.translate] translates into the
+     * target language afterward, and that step assumes English input; a model asked to answer in
+     * the target language directly used to make that assumption unreliable; asking for English
+     * here is what keeps it true.
      */
-    fun buildSystemInstruction(language: String, persona: String, isMultiFrame: Boolean, maxWords: Int): String {
-        var instruction = "You describe images for a blind user. Reply in $language, under $maxWords words, in a $persona style. " +
+    fun buildSystemInstruction(persona: String, isMultiFrame: Boolean, maxWords: Int): String {
+        var instruction = "You describe images for a blind user. Reply in English, under $maxWords words, in a $persona style. " +
             "Describe only what is actually visible. If something is unclear, say so instead of guessing."
         if (isMultiFrame) {
             instruction += " These are consecutive video frames; describe how the scene changes over time."
@@ -100,9 +107,14 @@ object OfflinePromptBuilder {
     }
 
     /** System instruction for a "custom question" (a custom prompt slot or a voice query). Uses
-     *  [DEFAULT_MAX_WORDS] — a custom question is never the brief-narration prompt. */
-    fun buildCustomQuestionInstruction(language: String, question: String): String =
-        "You answer questions about an image for a blind user. Reply in $language, in at most $DEFAULT_MAX_WORDS words.\n" +
+     *  [DEFAULT_MAX_WORDS] — a custom question is never the brief-narration prompt. Always asks
+     *  for English — see [buildSystemInstruction]'s doc on why that's fixed rather than
+     *  parametrized. [question] itself is expected to already be in English by the time it gets
+     *  here: a question recognized in the user's own language is translated before this is called
+     *  (see [com.appricodes.lens_whisper.offline.OfflineTranslator.translateToEnglish] and its
+     *  caller in `AnalysisSessionController.startVoiceRecognition`). */
+    fun buildCustomQuestionInstruction(question: String): String =
+        "You answer questions about an image for a blind user. Reply in English, in at most $DEFAULT_MAX_WORDS words.\n" +
             "Question: \"$question\"\n" +
             "Answer only that question. If the answer is not visible, say so instead of guessing. " +
             PEOPLE_GUARDRAIL

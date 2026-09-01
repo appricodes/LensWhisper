@@ -26,9 +26,8 @@ object OfflineTranslator {
 
     /**
      * Downloads the model(s) [targetLocaleCode] needs to translate in *both* directions
-     * (English<->target - [translate] only ever runs English->target, but a target->English
-     * translator is what a future "ask a question in my own language" path would need, and per
-     * request this should be ready proactively rather than only discovered missing later) and
+     * (English<->target - [translate] runs English->target for model responses, [translateToEnglish]
+     * runs target->English for the user's own voice questions before they reach the model) and
      * deletes any other non-English models to save space. Fire-and-forget, safe to call
      * repeatedly (called both right when the language is selected in Settings and again from
      * [SettingsActivity]'s onStop as a backstop, and again from [translate] itself if it ever
@@ -98,43 +97,22 @@ object OfflineTranslator {
             .addOnFailureListener { if (cont.isActive) cont.resume(false) }
     }
 
-    /**
-     * Translates [text] (assumed English — every offline caller's source text is) to the user's
-     * selected language if the "Translate Offline Results" setting is on and a translator is
-     * available or downloadable for it; otherwise returns [text] unchanged. Used both by
-     * [translateAndSpeak] (MLKit detector results) and by
-     * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController] for on-device VLM
-     * responses (Gemma4/FastVLM/Qwen-VL etc.) — those models are asked to answer directly in the
-     * target language via their system instruction, but small on-device models frequently ignore
-     * that and answer in English regardless, so this is applied as a fallback safety net on top,
-     * not a replacement for the instruction. Never throws — falls back to [text] on any failure.
-     * If the target language's model isn't downloaded yet, this never blocks waiting for it (a
-     * first-time download is ~30MB) — it notifies once via TalkBack, kicks off the download for
-     * next time, and returns [text] unchanged right away, same as every other failure path here.
-     */
-    suspend fun translate(context: Context, text: String, prefs: PreferencesManager): String {
-        val targetLocaleCode = prefs.selectedLanguageCode
-        if (!prefs.offlineTranslationEnabled || targetLocaleCode.startsWith("en", ignoreCase = true)) return text
-
-        val targetLang = getMlKitLanguageTag(targetLocaleCode)
-        if (targetLang == TranslateLanguage.ENGLISH) return text
-
-        if (!isModelDownloaded(targetLang)) {
-            notifyNotReady(context, targetLocaleCode, targetLang)
-            return text
-        }
-
+    /** Shared by [translate] and [translateToEnglish] once each has resolved its own
+     *  source/target pair and confirmed the model is downloaded — just runs one ML Kit translate
+     *  call and unwraps its callback API into a suspend result, falling back to [text] on any
+     *  failure. Never throws. */
+    private suspend fun runTranslation(text: String, sourceLang: String, targetLang: String): String {
         val options = TranslatorOptions.Builder()
-            .setSourceLanguage(TranslateLanguage.ENGLISH)
+            .setSourceLanguage(sourceLang)
             .setTargetLanguage(targetLang)
             .build()
         val translator = Translation.getClient(options)
         return try {
             suspendCancellableCoroutine { cont ->
-                // The model is already confirmed downloaded above, so this resolves near-instantly
-                // — kept as a defensive belt (matches ML Kit's own recommended usage) rather than
-                // calling translator.translate() directly, not as the thing standing between us
-                // and a slow first-time download the way it used to be.
+                // The model is already confirmed downloaded by the caller, so this resolves near-
+                // instantly — kept as a defensive belt (matches ML Kit's own recommended usage)
+                // rather than calling translator.translate() directly, not as the thing standing
+                // between us and a slow first-time download the way it used to be.
                 val conditions = DownloadConditions.Builder().build()
                 translator.downloadModelIfNeeded(conditions)
                     .addOnSuccessListener {
@@ -150,6 +128,61 @@ object OfflineTranslator {
         } finally {
             translator.close()
         }
+    }
+
+    /**
+     * Translates [text] (assumed English — every offline caller's source text is) to the user's
+     * selected language if the "Translate Offline Results" setting is on and a translator is
+     * available or downloadable for it; otherwise returns [text] unchanged. Used both by
+     * [translateAndSpeak] (MLKit detector results) and by
+     * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController] for on-device VLM
+     * responses (Gemma4/FastVLM/Qwen-VL etc.) — those models are now asked to answer in English
+     * only (see [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]), so this is the one and
+     * only place the target language is produced, not a fallback safety net over an instruction
+     * the model might already be honoring. Never throws — falls back to [text] on any failure. If
+     * the target language's model isn't downloaded yet, this never blocks waiting for it (a
+     * first-time download is ~30MB) — it notifies once via TalkBack, kicks off the download for
+     * next time, and returns [text] unchanged right away, same as every other failure path here.
+     */
+    suspend fun translate(context: Context, text: String, prefs: PreferencesManager): String {
+        val targetLocaleCode = prefs.selectedLanguageCode
+        if (!prefs.offlineTranslationEnabled || targetLocaleCode.startsWith("en", ignoreCase = true)) return text
+
+        val targetLang = getMlKitLanguageTag(targetLocaleCode)
+        if (targetLang == TranslateLanguage.ENGLISH) return text
+
+        if (!isModelDownloaded(targetLang)) {
+            notifyNotReady(context, targetLocaleCode, targetLang)
+            return text
+        }
+        return runTranslation(text, TranslateLanguage.ENGLISH, targetLang)
+    }
+
+    /**
+     * The reverse of [translate]: translates [text] — a voice question just recognized in the
+     * user's selected language — to English, so it reaches the on-device model in the one
+     * language its system instruction now asks it to work in throughout (see
+     * [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]). Same gating and never-blocks/
+     * never-throws contract as [translate], mirrored rather than shared because the two check
+     * opposite ends of [prefs]' language: unchanged if translation is off or the selected
+     * language already is English; notifies once and returns [text] unchanged if the needed
+     * model isn't downloaded yet, rather than blocking on a first-time download. [isModelDownloaded]
+     * is checked by language, not direction — ML Kit stores one model per language (see
+     * [manageModelsInBackground]'s doc) — so this reuses whatever [translate] already downloaded
+     * for the same language.
+     */
+    suspend fun translateToEnglish(context: Context, text: String, prefs: PreferencesManager): String {
+        val sourceLocaleCode = prefs.selectedLanguageCode
+        if (!prefs.offlineTranslationEnabled || sourceLocaleCode.startsWith("en", ignoreCase = true)) return text
+
+        val sourceLang = getMlKitLanguageTag(sourceLocaleCode)
+        if (sourceLang == TranslateLanguage.ENGLISH) return text
+
+        if (!isModelDownloaded(sourceLang)) {
+            notifyNotReady(context, sourceLocaleCode, sourceLang)
+            return text
+        }
+        return runTranslation(text, sourceLang, TranslateLanguage.ENGLISH)
     }
 
     /** Translates [text] if enabled/ready via [translate], then speaks it via TalkBack. */

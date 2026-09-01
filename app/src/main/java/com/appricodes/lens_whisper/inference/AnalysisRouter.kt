@@ -57,10 +57,10 @@ suspend fun runSelectedModelAnalysis(
 private fun buildOfflinePrompt(prefs: PreferencesManager, config: PromptConfig, frameCount: Int): Pair<String, String> {
     val isCustomQuestion = config.id == "custom"
     val systemInstruction = if (isCustomQuestion) {
-        OfflinePromptBuilder.buildCustomQuestionInstruction(prefs.selectedLanguage, config.prompt)
+        OfflinePromptBuilder.buildCustomQuestionInstruction(config.prompt)
     } else {
         OfflinePromptBuilder.buildSystemInstruction(
-            prefs.selectedLanguage, prefs.selectedMode, frameCount > 1,
+            prefs.selectedMode, frameCount > 1,
             maxWords = OfflinePromptBuilder.maxWordsFor(config.id)
         )
     }

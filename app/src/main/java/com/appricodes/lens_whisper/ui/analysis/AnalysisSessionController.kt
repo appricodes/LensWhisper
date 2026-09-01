@@ -154,6 +154,16 @@ class AnalysisSessionController(
     private fun isOfflineVlmSelected(): Boolean =
         prefs.selectedModelId != "mlkit" && prefs.selectedModelId != LocalServerFeature.MODEL_ID
 
+    /** Mirrors [isOfflineVlmSelected]'s gating on the way in, the same way [handleResponse]/
+     *  [runStreamingAnalysis] already gate [OfflineTranslator.translate] on the way out: only the
+     *  on-device VLM catalog now answers in English only (see
+     *  [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]), so only its
+     *  questions need translating to English first. The Local Server still gets its own
+     *  system-instruction-driven target-language answer (untouched by this), and MLKit never
+     *  reaches a "custom question" at all. */
+    private suspend fun translateVoiceQueryToEnglish(text: String): String =
+        if (isOfflineVlmSelected()) OfflineTranslator.translateToEnglish(context, text, prefs) else text
+
     private suspend fun handleResponse(response: String) {
         activeAudioFeedbackJob?.cancel()
         if (response.startsWith("ERROR:")) {
@@ -538,14 +548,23 @@ class AnalysisSessionController(
                         clearCustomSlot(targetCustomSlot)
                         AccessibilityUtils.announceToTalkBack(context, "No question heard. Custom ${targetCustomSlot + 1} cleared.")
                     } else {
-                        _customPromptTexts[targetCustomSlot] = recognizedQuery
+                        // The slot's title stays in the language the user actually spoke — it's
+                        // what gets read back as this button's own identity. Only the prompt text
+                        // sent to (and replayed against) the model is translated, below.
                         _customPromptTitles[targetCustomSlot] = truncatedTitle(recognizedQuery)
-                        val config = PromptConfig("custom", _customPromptTitles[targetCustomSlot], recognizedQuery, 1, 0.5)
-                        runAnalysis(config, config.title, captureFrames)
+                        coroutineScope.launch {
+                            val englishQuery = translateVoiceQueryToEnglish(recognizedQuery)
+                            _customPromptTexts[targetCustomSlot] = englishQuery
+                            val config = PromptConfig("custom", _customPromptTitles[targetCustomSlot], englishQuery, 1, 0.5)
+                            runAnalysis(config, config.title, captureFrames)
+                        }
                     }
                 } else if (!recognizedQuery.isNullOrBlank()) {
-                    val config = PromptConfig("custom", "Voice Query", recognizedQuery, 1, 0.5)
-                    runAnalysis(config, "Voice Query", captureFrames)
+                    coroutineScope.launch {
+                        val englishQuery = translateVoiceQueryToEnglish(recognizedQuery)
+                        val config = PromptConfig("custom", "Voice Query", englishQuery, 1, 0.5)
+                        runAnalysis(config, "Voice Query", captureFrames)
+                    }
                 }
             }
             override fun onPartialResults(partialResults: Bundle?) {}
