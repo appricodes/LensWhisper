@@ -2,6 +2,7 @@ package com.appricodes.lens_whisper.ui.models
 
 import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.ui.components.GridCell
+import com.appricodes.lens_whisper.ui.icons.GridIcon
 
 /**
  * Drives every on-device LiteRT-LM catalog model (`gemma4_multimodal_2b`, `fastvlm_0_5b`,
@@ -26,9 +27,9 @@ import com.appricodes.lens_whisper.ui.components.GridCell
  */
 object OfflineVlmButtonProvider : ModelButtonProvider {
     override fun rows(ctx: ModelButtonContext): List<List<GridCell?>> {
-        fun promptCell(label: String, promptId: String): GridCell {
+        fun promptCell(label: String, promptId: String, icon: GridIcon): GridCell {
             val config = ctx.settings.prompts.find { it.id == promptId }
-            return GridCell(label = label, onClick = { if (config != null) ctx.onRunPrompt(config, label) })
+            return GridCell(label = label, icon = icon, onClick = { if (config != null) ctx.onRunPrompt(config, label) })
         }
 
         fun customCell(slotIndex: Int): GridCell {
@@ -42,6 +43,9 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                 } else {
                     "$title. Empty. Long press to record a question by voice."
                 },
+                // One shared glyph for all 4 slots - the label (still spoken via contentDescription
+                // above) is what carries each slot's own identity, not the icon; see GridIcon's doc.
+                icon = GridIcon.CUSTOM_PROMPT,
                 onClick = { if (hasPrompt) ctx.onRunPrompt(PromptConfig("custom", title, text, 1, 0.5), title) },
                 onLongClick = { ctx.onRecordCustomPrompt(slotIndex) }
             )
@@ -49,9 +53,9 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
 
         return listOf(
             listOf(
-                promptCell("Brief Narration", "brief_narration"),
-                promptCell("Detailed Scene", "detailed_scene"),
-                promptCell("People and Outfit", "people_and_outfit"),
+                promptCell("Brief Narration", "brief_narration", GridIcon.BRIEF_NARRATION),
+                promptCell("Detailed Scene", "detailed_scene", GridIcon.DETAILED_SCENE),
+                promptCell("People and Outfit", "people_and_outfit", GridIcon.PEOPLE_OUTFIT),
                 GridCell(
                     label = "Describe TV Image",
                     contentDescription = if (ctx.onDescribeTv != null) {
@@ -59,13 +63,14 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                     } else {
                         "Describe TV Image. Not available here — needs a live camera."
                     },
+                    icon = GridIcon.DESCRIBE_TV,
                     enabled = ctx.onDescribeTv != null,
                     onClick = { ctx.onDescribeTv?.invoke() }
                 )
             ),
             listOf(
-                promptCell("Objects", "objects"),
-                promptCell("Read Texts", "read_texts"),
+                promptCell("Objects", "objects", GridIcon.OBJECTS),
+                promptCell("Read Texts", "read_texts", GridIcon.READ_TEXT),
                 GridCell(
                     label = "Explore and Describe",
                     contentDescription = if (ctx.onExploreAndDescribe != null) {
@@ -74,6 +79,7 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                     } else {
                         "Explore and Describe. Not available here — needs a live camera."
                     },
+                    icon = GridIcon.EXPLORE,
                     enabled = ctx.onExploreAndDescribe != null,
                     onClick = { ctx.onExploreAndDescribe?.invoke() }
                 ),
