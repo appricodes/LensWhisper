@@ -92,7 +92,6 @@ fun SettingsScreen(
 
 	var showResultsInDialog by remember { mutableStateOf(sharedPrefs.getBoolean("show_results_in_dialog", false)) }
 	var offlineTranslationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("offline_translation_enabled", false)) }
-	var streamingEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("streaming_enabled", false)) }
 	var soundEffectsEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("sound_effects_enabled", true)) }
 	var vibrationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("vibration_enabled", true)) }
 
@@ -172,7 +171,7 @@ fun SettingsScreen(
 					}
 					.clearAndSetSemantics {
 						val status = if (offlineTranslationEnabled) "enabled" else "disabled"
-						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Applies to Basic tasks and to on-device AI model responses, when a translation is available. Double tap to toggle."
+						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. When on, both Basic tasks results (other than Read Text and Read Document, which read text exactly as written) and on-device AI model responses are translated to $selectedLanguageName, when a translation is available. When off, Basic tasks results stay in English — they're built from a small fixed set of words, not a model, so there is no language to ask for; on-device AI model responses instead depend entirely on whether the selected model can answer directly in $selectedLanguageName on its own. Double tap to toggle."
 					},
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.SpaceBetween
@@ -288,28 +287,6 @@ fun SettingsScreen(
 			Checkbox(checked = showResultsInDialog, onCheckedChange = { targetState ->
 				showResultsInDialog = targetState
 				sharedPrefs.edit().putBoolean("show_results_in_dialog", targetState).apply()
-			})
-		}
-
-		Row(
-			modifier = Modifier
-				.fillMaxWidth()
-				.clickable {
-					val targetState = !streamingEnabled
-					streamingEnabled = targetState
-					sharedPrefs.edit().putBoolean("streaming_enabled", targetState).apply()
-				}
-				.clearAndSetSemantics {
-					val statusText = if (streamingEnabled) "enabled" else "disabled"
-					contentDescription = "Stream responses sentence by sentence option is currently $statusText. When enabled, each sentence is spoken as soon as it's ready instead of waiting for the full response. Double tap to toggle."
-				},
-			verticalAlignment = Alignment.CenterVertically,
-			horizontalArrangement = Arrangement.SpaceBetween
-		) {
-			Text(text = "Stream Responses (Speak Sentence by Sentence)", fontSize = 18.sp)
-			Checkbox(checked = streamingEnabled, onCheckedChange = { targetState ->
-				streamingEnabled = targetState
-				sharedPrefs.edit().putBoolean("streaming_enabled", targetState).apply()
 			})
 		}
 

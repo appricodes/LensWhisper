@@ -180,7 +180,9 @@ class LocalServerEngine(private val baseUrl: String) {
 	/** Streaming counterparts to [analyzeStaticImageFile]/[analyzeVideoFrame]/[analyzeMultipleStaticImages]
 	 *  — emit the response sentence-fragment by sentence-fragment as the server relays it (see
 	 *  backend/readme.md's "Streaming" section for the NDJSON wire format process.php speaks when
-	 *  `streaming: true` is sent). Only used when [PreferencesManager.streamingEnabled] is on. */
+	 *  `streaming: true` is sent). Used whenever a streaming call is offered at all now — the
+	 *  Settings toggle this used to be gated behind (`PreferencesManager.streamingEnabled`) is
+	 *  gone; streaming is unconditional wherever it's available. */
 	fun analyzeStaticImageFileStreaming(
 		context: Context, uri: Uri, config: PromptConfig, prefs: PreferencesManager
 	): Flow<String> = flow {

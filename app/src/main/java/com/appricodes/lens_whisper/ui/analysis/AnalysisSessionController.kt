@@ -350,9 +350,13 @@ class AnalysisSessionController(
                 handleResponse("ERROR: Could not capture the image.")
                 return@launchAnalysis
             }
-            // On-device models always stream; the Local Server streams only when the user opted in
-            // (Settings, default off — see PreferencesManager.streamingEnabled) since it changes the
-            // wire protocol /process.php speaks (NDJSON vs. one JSON object). MLKit never reaches
+            // Every model that reaches this point always streams now — on-device unconditionally,
+            // and the Local Server too: this branch used to check a Settings toggle
+            // (PreferencesManager.streamingEnabled, since removed) before calling
+            // bundle.localServerCallStreaming; now it always does, whenever that streaming call is
+            // offered at all (see CapturedBundle's own doc for when it isn't). The *Streaming
+            // functions on LocalServerEngine already always sent `streaming: true` on their own —
+            // this only changes which of the two Android ever chooses to call. MLKit never reaches
             // either branch (see isOfflineVlmSelected).
             //
             // Wrapped in its own try/catch: unlike runSelectedModelAnalysis (which reports setup
@@ -367,7 +371,7 @@ class AnalysisSessionController(
                 when {
                     isOfflineVlmSelected() ->
                         runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages)
-                    prefs.selectedModelId == LocalServerFeature.MODEL_ID && prefs.streamingEnabled ->
+                    prefs.selectedModelId == LocalServerFeature.MODEL_ID ->
                         bundle.localServerCallStreaming?.invoke()
                     else -> null
                 }
@@ -394,7 +398,7 @@ class AnalysisSessionController(
 
     /**
      * Streaming counterpart to [handleResponse] — used for on-device models always, and for the
-     * Local Server when [PreferencesManager.streamingEnabled] is on (see the two branches in
+     * Local Server whenever it offers a streaming call at all (see the two branches in
      * [runAnalysis] that decide which [Flow] gets passed in here, if any). Speaks each complete
      * sentence (ending in `.`/`!`/`?`/newline, or their CJK/Persian equivalents — see
      * [findSentenceEnd]) via TalkBack as soon as it's been generated — and translated, if

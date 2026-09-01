@@ -134,15 +134,6 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("offline_translation_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("offline_translation_enabled", value).apply()
 
-	/** Speak each sentence as it's generated instead of waiting for the whole response — see
-	 *  `AnalysisSessionController`'s streaming path (both on-device models and, when this is on,
-	 *  the Online Describer). Off by default: most of this app's actual usage is a single short
-	 *  sentence anyway, where streaming buys nothing but adds a network-protocol edge (NDJSON, see
-	 *  backend/readme.md) that's simplest to keep opt-in until it's had more field use. */
-	var streamingEnabled: Boolean
-		get() = standardPrefs.getBoolean("streaming_enabled", false)
-		set(value) = standardPrefs.edit().putBoolean("streaming_enabled", value).apply()
-
 	/** Pipe-delimited [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]s the user has
 	 *  dismissed the low-memory warning for, via [MemoryWarningDialog]'s "don't warn me again"
 	 *  checkbox. Per-model (not global) so suppressing a small model's warning never silently
