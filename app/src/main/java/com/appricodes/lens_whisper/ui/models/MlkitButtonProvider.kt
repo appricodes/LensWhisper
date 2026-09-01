@@ -19,6 +19,7 @@ import com.appricodes.lens_whisper.offline.OfflineLightDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.ui.components.GridCell
+import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import com.appricodes.lens_whisper.utils.VolumeShortcuts
@@ -434,21 +435,25 @@ class MlkitButtonProvider(
                 GridCell(
                     label = "Detect Objects",
                     contentDescription = "Detect Objects. Names the objects in view, using a dedicated on-device detector.",
+                    icon = GridIcon.DETECT_OBJECTS,
                     onClick = { selectSingleShot(Mode.SEGMENT, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Identify Objects and Colors",
                     contentDescription = "Detect objects and each one's main colors.",
+                    icon = GridIcon.IDENTIFY_OBJECTS_COLORS,
                     onClick = { selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Explore Photo by Touch",
                     contentDescription = "Explore by touch. Detects objects and their colors, then opens a full-screen view — move your finger over the picture to hear what's under it, or tap once for more options.",
+                    icon = GridIcon.EXPLORE,
                     onClick = { launchSegmentationExplore() }
                 ),
                 GridCell(
                     label = "Read Text",
                     contentDescription = "Read text in view. Tap to analyze once, hold to keep watching continuously.",
+                    icon = GridIcon.READ_TEXT,
                     onClick = { selectSingleShot(Mode.TEXT, ctx.prefs) },
                     onLongClick = { selectContinuous(Mode.TEXT) }
                 )
@@ -457,6 +462,7 @@ class MlkitButtonProvider(
                 GridCell(
                     label = "Read Document",
                     contentDescription = "Read a document by touch. Opens a full-screen view — move your finger over a paragraph to hear it read aloud, or tap once for more options.",
+                    icon = GridIcon.READ_DOCUMENT,
                     onClick = { launchReadDocument(ctx.prefs) }
                 ),
                 GridCell(
@@ -466,6 +472,7 @@ class MlkitButtonProvider(
                         isLightActive -> "Light level meter is on. Double tap to stop."
                         else -> "Light level meter. Double tap to hear tones matching the brightness in front of the camera."
                     },
+                    icon = GridIcon.LIGHT_METER,
                     enabled = hasLiveCamera,
                     onClick = { toggleLight() }
                 ),
@@ -476,6 +483,7 @@ class MlkitButtonProvider(
                     } else {
                         "Simple color detection. Not available here — needs a live camera."
                     },
+                    icon = GridIcon.SIMPLE_COLOR,
                     enabled = hasLiveCamera,
                     onClick = { selectSingleShot(Mode.SIMPLE_COLOR, ctx.prefs) },
                     onLongClick = if (hasLiveCamera) { { selectContinuous(Mode.SIMPLE_COLOR) } } else null
