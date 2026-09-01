@@ -156,11 +156,12 @@ class AnalysisSessionController(
 
     /** Mirrors [isOfflineVlmSelected]'s gating on the way in, the same way [handleResponse]/
      *  [runStreamingAnalysis] already gate [OfflineTranslator.translate] on the way out: only the
-     *  on-device VLM catalog now answers in English only (see
-     *  [com.appricodes.lens_whisper.utils.OfflinePromptBuilder]), so only its
-     *  questions need translating to English first. The Local Server still gets its own
-     *  system-instruction-driven target-language answer (untouched by this), and MLKit never
-     *  reaches a "custom question" at all. */
+     *  on-device VLM catalog is ever asked to answer in English (see
+     *  `AnalysisRouter.buildOfflinePrompt`'s `replyLanguage`, on when offline translation is
+     *  enabled — [OfflineTranslator.translateToEnglish] itself checks that same setting and is a
+     *  no-op when it's off), so only its questions ever need translating to English first. The
+     *  Local Server still gets its own system-instruction-driven target-language answer (untouched
+     *  by this), and MLKit never reaches a "custom question" at all. */
     private suspend fun translateVoiceQueryToEnglish(text: String): String =
         if (isOfflineVlmSelected()) OfflineTranslator.translateToEnglish(context, text, prefs) else text
 

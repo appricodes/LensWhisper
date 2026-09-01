@@ -90,15 +90,17 @@ object OfflinePromptBuilder {
      * caller ([com.appricodes.lens_whisper.inference.AnalysisRouter]) already has the prompt id and
      * this function otherwise has no way to know it.
      *
-     * Always asks for English, not [com.appricodes.lens_whisper.data.PreferencesManager.selectedLanguage]
-     * — a fixed instruction instead of a per-user variable, deliberately. The model's reply is what
-     * [com.appricodes.lens_whisper.offline.OfflineTranslator.translate] translates into the
-     * target language afterward, and that step assumes English input; a model asked to answer in
-     * the target language directly used to make that assumption unreliable; asking for English
-     * here is what keeps it true.
+     * [language] is resolved by that same caller, not decided here — this object takes no
+     * [com.appricodes.lens_whisper.data.PreferencesManager] dependency of its own. The policy:
+     * the user's own selected language when offline translation is off (nothing downstream will
+     * translate the reply, so the model has to produce the target language itself, same as
+     * before either translation direction existed), or a fixed "English" when translation is on
+     * (so [com.appricodes.lens_whisper.offline.OfflineTranslator.translate]'s assumption that its
+     * input is English is a guarantee, not a hope — it used to be asked for the target language
+     * directly even with translation on, which made that assumption unreliable on small models).
      */
-    fun buildSystemInstruction(persona: String, isMultiFrame: Boolean, maxWords: Int): String {
-        var instruction = "You describe images for a blind user. Reply in English, under $maxWords words, in a $persona style. " +
+    fun buildSystemInstruction(language: String, persona: String, isMultiFrame: Boolean, maxWords: Int): String {
+        var instruction = "You describe images for a blind user. Reply in $language, under $maxWords words, in a $persona style. " +
             "Describe only what is actually visible. If something is unclear, say so instead of guessing."
         if (isMultiFrame) {
             instruction += " These are consecutive video frames; describe how the scene changes over time."
@@ -107,14 +109,15 @@ object OfflinePromptBuilder {
     }
 
     /** System instruction for a "custom question" (a custom prompt slot or a voice query). Uses
-     *  [DEFAULT_MAX_WORDS] — a custom question is never the brief-narration prompt. Always asks
-     *  for English — see [buildSystemInstruction]'s doc on why that's fixed rather than
-     *  parametrized. [question] itself is expected to already be in English by the time it gets
-     *  here: a question recognized in the user's own language is translated before this is called
-     *  (see [com.appricodes.lens_whisper.offline.OfflineTranslator.translateToEnglish] and its
-     *  caller in `AnalysisSessionController.startVoiceRecognition`). */
-    fun buildCustomQuestionInstruction(question: String): String =
-        "You answer questions about an image for a blind user. Reply in English, in at most $DEFAULT_MAX_WORDS words.\n" +
+     *  [DEFAULT_MAX_WORDS] — a custom question is never the brief-narration prompt. [language] is
+     *  resolved the same way [buildSystemInstruction]'s is — see its doc. [question] is expected
+     *  to already be in that same language by the time it gets here: with translation on, it was
+     *  already translated to English (see
+     *  [com.appricodes.lens_whisper.offline.OfflineTranslator.translateToEnglish] and its caller
+     *  in `AnalysisSessionController.startVoiceRecognition`) before [language] below ever became
+     *  "English"; with translation off, both stay in the user's own selected language untouched. */
+    fun buildCustomQuestionInstruction(language: String, question: String): String =
+        "You answer questions about an image for a blind user. Reply in $language, in at most $DEFAULT_MAX_WORDS words.\n" +
             "Question: \"$question\"\n" +
             "Answer only that question. If the answer is not visible, say so instead of guessing. " +
             PEOPLE_GUARDRAIL

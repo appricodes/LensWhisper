@@ -56,11 +56,18 @@ suspend fun runSelectedModelAnalysis(
  *  can never drift apart on how a prompt gets built for the on-device engine. */
 private fun buildOfflinePrompt(prefs: PreferencesManager, config: PromptConfig, frameCount: Int): Pair<String, String> {
     val isCustomQuestion = config.id == "custom"
+    // The one place this policy is decided (see OfflinePromptBuilder.buildSystemInstruction's
+    // doc): with offline translation off, nothing downstream translates the reply, so the model
+    // has to be asked for the user's own selected language directly. With it on, the model is
+    // asked for English only - OfflineTranslator.translate then produces the target language
+    // from that, and AnalysisSessionController.startVoiceRecognition already translates any
+    // voice question to English before config.prompt ever reaches here, so both ends agree.
+    val replyLanguage = if (prefs.offlineTranslationEnabled) "English" else prefs.selectedLanguage
     val systemInstruction = if (isCustomQuestion) {
-        OfflinePromptBuilder.buildCustomQuestionInstruction(config.prompt)
+        OfflinePromptBuilder.buildCustomQuestionInstruction(replyLanguage, config.prompt)
     } else {
         OfflinePromptBuilder.buildSystemInstruction(
-            prefs.selectedMode, frameCount > 1,
+            replyLanguage, prefs.selectedMode, frameCount > 1,
             maxWords = OfflinePromptBuilder.maxWordsFor(config.id)
         )
     }
