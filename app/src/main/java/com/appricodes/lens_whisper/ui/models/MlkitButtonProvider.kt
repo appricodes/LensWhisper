@@ -60,9 +60,10 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * that `detect` was their only consumer of; [OfflineColorDetector.namedDominantColors] in the same
  * file is still very much alive).
  *
- * [capturePhoto] is null when there's no source to capture from at all — in that case this
- * provider renders an empty (all-null) grid rather than offering buttons that can't do anything.
- * Its `onShutter` parameter fires synchronously at the exact moment the shutter sound does (see
+ * [capturePhoto] is always a real capture function — CameraActivity's live-sensor one or
+ * MediaDescriberScreen's file/frame one (see `MediaDescriberScreen.captureFileFrame`) — every host
+ * has some image to hand back, so there's no "no source at all" case for this provider to render
+ * around. Its `onShutter` parameter fires synchronously at the exact moment the shutter sound does (see
  * `CameraController.capturePhotoInternal`) — modes whose next step needs a "waiting for the model"
  * tone start it from there, not after `capturePhoto` itself returns (which also waits out image
  * readout/decode/scale/file-write). On a file-based host (MediaDescriberScreen) there is no
@@ -85,7 +86,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
 class MlkitButtonProvider(
     private val context: Context,
     private val coroutineScope: CoroutineScope,
-    private val capturePhoto: (suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap)?,
+    private val capturePhoto: suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap,
     private val hasLiveCamera: Boolean = true
 ) : ModelButtonProvider {
 
@@ -172,7 +173,7 @@ class MlkitButtonProvider(
     }
 
     private suspend fun captureAndRun(mode: Mode, prefs: PreferencesManager) {
-        val capture = capturePhoto ?: return
+        val capture = capturePhoto
         // Refuse to start a second request while one is still in flight, rather than letting two
         // captures/detections race each other — continuous mode's own loop already can't overlap
         // with itself (see ObserveContinuousLoop), but a single-shot button press could otherwise
@@ -300,7 +301,7 @@ class MlkitButtonProvider(
             announceBusy()
             return
         }
-        val capture = capturePhoto ?: return
+        val capture = capturePhoto
         isBusy = true
         ProcessingSoundPlayer.playCaptureAcknowledge(context)
         coroutineScope.launch {
@@ -341,7 +342,7 @@ class MlkitButtonProvider(
             announceBusy()
             return
         }
-        val capture = capturePhoto ?: return
+        val capture = capturePhoto
         isBusy = true
         coroutineScope.launch {
             try {
@@ -429,7 +430,6 @@ class MlkitButtonProvider(
     }
 
     override fun rows(ctx: ModelButtonContext): List<List<GridCell?>> {
-        if (capturePhoto == null) return List(3) { listOf(null, null, null, null) }
         return listOf(
             listOf(
                 GridCell(
