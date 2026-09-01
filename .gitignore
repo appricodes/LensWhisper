@@ -29,6 +29,11 @@ desktop/test_images/
 # dropped size/precision is ever wanted back - see app/src/main/assets/models/)
 /model_backups/
 
+# Candidate UI-sound WAV previews (and the scripts that generate them) for auditioning before one
+# gets ported into ProcessingSoundPlayer.kt's synthesis code - never shipped, never meant to be
+# committed, delete once a choice is made
+/sound_previews/
+
 # Downloaded bulk product dumps and generated lookup DBs for the barcode DB builder - large
 # binary artifacts, regenerate with tools/barcode_db/build_barcode_db.py instead of committing
 tools/barcode_db/cache/
