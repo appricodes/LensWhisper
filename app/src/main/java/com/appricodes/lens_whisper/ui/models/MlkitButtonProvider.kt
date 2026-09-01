@@ -73,7 +73,11 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * usual 720p) — only Read Text and Read Document pass true, since OCR needs enough resolution for
  * small glyphs to stay legible, where every other mode here only needs enough detail for
  * object/scene description; a file-based host has no separate higher-fidelity source to request,
- * so it's free to ignore this flag and just use the file/frame's own resolution throughout.
+ * so it's free to ignore this flag and just use the file/frame's own resolution throughout. Its
+ * `allowFlash` parameter is how [captureAndRun] suppresses the flash after the first frame of a
+ * continuous run (see [continuousFlashUsed]) — CameraActivity's live-sensor implementation ANDs it
+ * with [PreferencesManager.flashEnabled] itself; a file-based host has no flash to fire at all and
+ * just ignores it.
  *
  * [hasLiveCamera] gates the two modes that only make sense against a live, continuously-exposed
  * camera feed rather than one already-fixed image: Light Level Meter (needs a live analysis frame
@@ -87,7 +91,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
 class MlkitButtonProvider(
     private val context: Context,
     private val coroutineScope: CoroutineScope,
-    private val capturePhoto: suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap,
+    private val capturePhoto: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, onShutter: () -> Unit) -> Bitmap,
     private val hasLiveCamera: Boolean = true
 ) : ModelButtonProvider {
 
@@ -95,6 +99,13 @@ class MlkitButtonProvider(
 
     private var activeMode by mutableStateOf(Mode.NONE)
     private var continuousEnabled by mutableStateOf(false)
+    // True once a continuous run (Read Text/Simple Color long-press) has fired the flash for its
+    // first frame — every frame after that passes allowFlash = false regardless of
+    // PreferencesManager.flashEnabled, per explicit product decision: flashing every couple of
+    // seconds for as long as continuous mode runs is disruptive/dazzling in a way a single-shot
+    // flash never is, and the first frame already gave the detector a properly lit image. Reset
+    // by selectContinuous whenever a new run actually starts.
+    private var continuousFlashUsed = false
     // True from the moment any button's capture starts until its result has been spoken (or it
     // failed) — every entry point that can trigger a capture checks this first and refuses a
     // second one while it's still set, rather than letting two requests race each other.
@@ -161,6 +172,16 @@ class MlkitButtonProvider(
         else AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
     }
 
+    /** Resets the repeat target to Detect Objects — the grid's first single-shot button — without
+     *  actually running it. Call on a fresh app open or whenever the host switches to this model
+     *  from a different one (see CameraActivity's `LaunchedEffect(selectedModelId)`), so Repeat/a
+     *  headset shortcut always has a sensible default instead of "No previous action to repeat."
+     *  until the user has tapped something. Mirrors [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController.seedDefaultPrompt]
+     *  for the VLM catalog's own "last prompt" tracking. */
+    fun resetRepeatToDefault(prefs: PreferencesManager) {
+        lastRepeatableAction = { selectSingleShot(Mode.SEGMENT, prefs) }
+    }
+
     private fun speak(text: String) {
         AccessibilityUtils.announceToTalkBack(context, text)
     }
@@ -215,8 +236,12 @@ class MlkitButtonProvider(
             // stays bound for the whole mode there (see isContinuousActive), so there's no such gap
             // on any poll after the first, and a tick every few seconds would just be noise.
             if (!continuousEnabled) ProcessingSoundPlayer.playCaptureAcknowledge(context)
+            // Single-shot: always respect the flash setting normally. Continuous: only the first
+            // frame of the run is allowed to use it — see continuousFlashUsed's own doc.
+            val allowFlash = if (continuousEnabled) !continuousFlashUsed else true
+            if (continuousEnabled) continuousFlashUsed = true
             val bitmap = try {
-                capture(MAX_CAPTURE_DIMENSION, mode == Mode.TEXT) {
+                capture(MAX_CAPTURE_DIMENSION, mode == Mode.TEXT, allowFlash) {
                     // Fires the instant the shutter sound plays (see
                     // CameraController.capturePhotoInternal), not after the whole capture — image
                     // readout/decode/scale/file-write shouldn't delay the "still working" cue.
@@ -338,7 +363,7 @@ class MlkitButtonProvider(
                     // No tone starts here — SegmentationExploreActivity owns its own "waiting for
                     // the model" cue, started once the captured image is actually received there.
                     // Not a text task, so the usual 720p (highRes = false).
-                    capture(MAX_CAPTURE_DIMENSION, false) {}
+                    capture(MAX_CAPTURE_DIMENSION, false, true) {}
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -382,7 +407,7 @@ class MlkitButtonProvider(
                     // No tone starts here — ReadDocumentActivity owns its own "waiting for the
                     // model" cue, started once the captured image is actually received there.
                     // A text task, so 1080p (highRes = true) — see MlkitButtonProvider's doc.
-                    capture(MAX_CAPTURE_DIMENSION, true) {}
+                    capture(MAX_CAPTURE_DIMENSION, true, true) {}
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -430,6 +455,7 @@ class MlkitButtonProvider(
     private fun selectContinuous(mode: Mode) {
         activeMode = mode
         continuousEnabled = true
+        continuousFlashUsed = false
         AccessibilityUtils.announceToTalkBack(context, "Continuous mode activated. Press back to stop.")
     }
 

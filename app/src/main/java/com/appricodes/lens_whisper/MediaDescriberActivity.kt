@@ -11,6 +11,7 @@ import androidx.media3.exoplayer.ExoPlayer
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.domain.AppSettings
+import com.appricodes.lens_whisper.media.HeadsetShortcutGestureHandler
 import com.appricodes.lens_whisper.media.MediaSessionHandler
 import com.appricodes.lens_whisper.ui.components.CameraController
 import com.appricodes.lens_whisper.ui.screens.MediaDescriberScreen
@@ -42,6 +43,22 @@ class MediaDescriberActivity : ComponentActivity() {
     private var globalRepeatAction: (() -> Unit)? = null
     private var wasVideoPlaying = false
     private lateinit var volumeKeyHandler: VolumeKeyGestureHandler
+    private lateinit var headsetGestureHandler: HeadsetShortcutGestureHandler
+    // True only between onResume and onPause — see the identical field/note in CameraActivity.
+    // MediaSessionHandler now also self-gates on its own "active" flag (belt-and-braces), but this
+    // still covers the onKeyDown/onKeyUp fallback path below, which doesn't go through that class
+    // at all.
+    private var isForeground = false
+
+    // Shared by the media-session path (onConfiguredShortcut below) and the onKeyDown/onKeyUp
+    // fallback — see HeadsetShortcutGestureHandler's class doc for why both exist. Checked ahead
+    // of this screen's own hard-coded headset-button = play/pause and next/fast-forward = ask-a-
+    // question bindings (see MediaSessionHandler), so a shortcut the user bound in Settings always
+    // wins here too.
+    private fun triggerHeadsetShortcut(event: KeyEvent): Boolean {
+        if (!isForeground) return false
+        return headsetGestureHandler.onKeyEvent(event)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -54,6 +71,11 @@ class MediaDescriberActivity : ComponentActivity() {
             onMicStart = { globalVoiceTrigger?.invoke() },
             onMicStop = { globalMicStop?.invoke() }
         )
+        headsetGestureHandler = HeadsetShortcutGestureHandler(
+            prefs = prefs,
+            onRepeat = { globalRepeatAction?.invoke() ?: AccessibilityUtils.announceToTalkBack(this, "No previous action to repeat.") },
+            onMic = { globalVoiceTrigger?.invoke() }
+        )
 
         appSettings = SettingsRepository(this).loadSettingsFromAssets()
 
@@ -61,6 +83,8 @@ class MediaDescriberActivity : ComponentActivity() {
 
         mediaSessionHandler = MediaSessionHandler(
             context = this,
+            onConfiguredShortcut = { event -> triggerHeadsetShortcut(event) },
+            hardcodedBindingsEnabled = true,
             onPlayPause = { globalPlayPause?.invoke() },
             onVoiceTrigger = { globalVoiceTrigger?.invoke() }
         )
@@ -68,12 +92,15 @@ class MediaDescriberActivity : ComponentActivity() {
 
     override fun onPause() {
         super.onPause()
+        isForeground = false
         wasVideoPlaying = exoPlayer?.isPlaying == true
         exoPlayer?.pause()
+        mediaSessionHandler?.setActive(false)
     }
 
     override fun onResume() {
         super.onResume()
+        isForeground = true
         // See this class's doc: nothing here uses the camera, so nothing may be left holding it.
         CameraController.releaseAllCameras(this)
         mediaSessionHandler?.setActive(true)
@@ -116,10 +143,16 @@ class MediaDescriberActivity : ComponentActivity() {
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        return if (volumeKeyHandler.onKeyDown(keyCode)) true else super.onKeyDown(keyCode, event)
+        if (volumeKeyHandler.onKeyDown(keyCode)) return true
+        // Wired in-line "hook" buttons on some devices arrive here directly instead of through
+        // the media session above — see HeadsetShortcutGestureHandler's class doc.
+        if (event != null && triggerHeadsetShortcut(event)) return true
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        return if (volumeKeyHandler.onKeyUp(keyCode)) true else super.onKeyUp(keyCode, event)
+        if (volumeKeyHandler.onKeyUp(keyCode)) return true
+        if (event != null && triggerHeadsetShortcut(event)) return true
+        return super.onKeyUp(keyCode, event)
     }
 }

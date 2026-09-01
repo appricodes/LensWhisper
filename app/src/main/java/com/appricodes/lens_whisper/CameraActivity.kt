@@ -48,6 +48,8 @@ import com.appricodes.lens_whisper.domain.AppSettings
 import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.legal.LegalTexts
+import com.appricodes.lens_whisper.media.HeadsetShortcutGestureHandler
+import com.appricodes.lens_whisper.media.MediaSessionHandler
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.offline.DualResCapture
@@ -95,9 +97,24 @@ import java.io.FileOutputStream
 class CameraActivity : ComponentActivity() {
     private lateinit var prefs: PreferencesManager
     private lateinit var volumeKeyHandler: VolumeKeyGestureHandler
+    private lateinit var headsetMediaSession: MediaSessionHandler
+    private lateinit var headsetGestureHandler: HeadsetShortcutGestureHandler
     private var globalRepeat: (() -> Unit)? = null
     private var globalVoiceTrigger: (() -> Unit)? = null
     private var globalMicStop: (() -> Unit)? = null
+    // True only between onResume and onPause. Belt-and-braces alongside headsetMediaSession's own
+    // setActive(false) on pause: confirmed on-device that a headset press can still reach this
+    // Activity's session/onKeyDown right after navigating away (e.g. into Settings) on at least
+    // one OEM Bluetooth stack, which without this check would fire a shortcut on a screen the user
+    // can no longer see react to it.
+    private var isForeground = false
+
+    // Shared by the media-session path (onConfiguredShortcut below) and the onKeyDown/onKeyUp
+    // fallback — see HeadsetShortcutGestureHandler's class doc for why both exist.
+    private fun triggerHeadsetShortcut(event: KeyEvent): Boolean {
+        if (!isForeground) return false
+        return headsetGestureHandler.onKeyEvent(event)
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -128,6 +145,18 @@ class CameraActivity : ComponentActivity() {
             onMicStart = { globalVoiceTrigger?.invoke() },
             onMicStop = { globalMicStop?.invoke() }
         )
+        headsetGestureHandler = HeadsetShortcutGestureHandler(
+            prefs = prefs,
+            onRepeat = { globalRepeat?.invoke() ?: AccessibilityUtils.announceToTalkBack(this, "No previous action to repeat.") },
+            onMic = { globalVoiceTrigger?.invoke() }
+        )
+        // No hard-coded video/voice bindings here (unlike MediaDescriberActivity) — this screen
+        // only cares about whichever two headset shortcuts the user actually configured, see
+        // MediaSessionHandler's own doc for why the session still has to stay active regardless.
+        headsetMediaSession = MediaSessionHandler(
+            context = this,
+            onConfiguredShortcut = { event -> triggerHeadsetShortcut(event) }
+        )
 
         val appSettings = SettingsRepository(this).loadSettingsFromAssets()
 
@@ -145,12 +174,35 @@ class CameraActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        isForeground = true
+        headsetMediaSession.setActive(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isForeground = false
+        headsetMediaSession.setActive(false)
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        headsetMediaSession.release()
+    }
+
     override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
-        return if (volumeKeyHandler.onKeyDown(keyCode)) true else super.onKeyDown(keyCode, event)
+        if (volumeKeyHandler.onKeyDown(keyCode)) return true
+        // Wired in-line "hook" buttons on some devices arrive here directly instead of through
+        // the media session above — see HeadsetShortcutGestureHandler's class doc.
+        if (event != null && triggerHeadsetShortcut(event)) return true
+        return super.onKeyDown(keyCode, event)
     }
 
     override fun onKeyUp(keyCode: Int, event: KeyEvent?): Boolean {
-        return if (volumeKeyHandler.onKeyUp(keyCode)) true else super.onKeyUp(keyCode, event)
+        if (volumeKeyHandler.onKeyUp(keyCode)) return true
+        if (event != null && triggerHeadsetShortcut(event)) return true
+        return super.onKeyUp(keyCode, event)
     }
 }
 
@@ -211,8 +263,11 @@ private fun CameraScreen(
     val mlkitProvider = remember {
         MlkitButtonProvider(
             context, coroutineScope,
-            capturePhoto = { maxDim, highRes, onShutter ->
-                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled, highRes) {
+            // allowFlash ANDs with the user's own setting rather than overriding it — MlkitButtonProvider
+            // uses it to force the flash off after a continuous run's first frame; every other
+            // caller always passes true, letting prefs.flashEnabled decide as normal.
+            capturePhoto = { maxDim, highRes, allowFlash, onShutter ->
+                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled && allowFlash, highRes) {
                     cameraController.capturePhoto(maxDim, onShutter)
                 }
             }
@@ -478,6 +533,18 @@ private fun CameraScreen(
         }
         onMicStopReady { controller.stopVoiceListening() }
         onRepeatReady { ctx.onRepeat() }
+
+        // Seeds a sensible Repeat/headset-shortcut default on every model switch (this effect
+        // also fires once on the very first composition, i.e. a fresh app open) — Detect Objects
+        // for Basic Tasks, Brief Narration for every on-device VLM — instead of leaving Repeat
+        // pointing at null ("No previous action to repeat") or a stale prompt left over from
+        // whichever model was selected before switching. Switching the physical camera (front/
+        // back) never touches selectedModelId, so it deliberately does NOT reset this.
+        if (selectedModelId == "mlkit") {
+            mlkitProvider.resetRepeatToDefault(prefs)
+        } else {
+            settings.prompts.find { it.id == "brief_narration" }?.let { controller.seedDefaultPrompt(it) }
+        }
     }
 
     var lastExitBackPressAt by remember { mutableStateOf(0L) }

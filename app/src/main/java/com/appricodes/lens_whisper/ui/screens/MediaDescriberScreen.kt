@@ -215,7 +215,9 @@ fun MediaDescriberScreen(
     // returning null) when there's genuinely nothing to capture, matching capturePhoto's own
     // non-nullable Bitmap contract — MlkitButtonProvider already treats any thrown exception here as
     // "Could not capture photo."
-    val captureFileFrame: suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap = { maxDim, _, onShutter ->
+    // allowFlash is meaningless here — no live sensor/flash to fire in file mode — so it's just
+    // ignored; see MlkitButtonProvider's doc for what it's for on CameraActivity's own capturePhoto.
+    val captureFileFrame: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, onShutter: () -> Unit) -> Bitmap = { maxDim, _, _, onShutter ->
         val uri = currentFileUri ?: throw IllegalStateException("No media loaded")
         // No physical shutter in file mode — start the "model is working" cue as early as possible
         // instead, before the (for video) possibly-slow frame extraction below, mirroring
@@ -265,6 +267,12 @@ fun MediaDescriberScreen(
      */
     suspend fun captureMaxResPairFromFile(): DualResCapture? {
         val uri = currentFileUri ?: return null
+        // Analyzing a moving target makes no sense, and playback audio would talk over the
+        // announcement anyway — the user presses Play again themselves when they're ready; this
+        // never auto-resumes. See captureFrames' identical note, the equivalent choke point for
+        // every plain prompt tap ("Describe TV Image"/"Explore and Describe" build their own
+        // capture instead of going through that one, hence the duplicate here).
+        if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
         return try {
             val source = if (isImageMode) {
                 runtimeLoadedImageBitmap
@@ -353,6 +361,11 @@ fun MediaDescriberScreen(
             AccessibilityUtils.announceToTalkBack(context, "No media source loaded")
             null
         } else {
+            // Every plain prompt tap (grid button, Repeat, a custom slot) reaches analysis through
+            // here — the single choke point to stop the video the instant one is asked for, not
+            // just the mic/voice-query paths that already paused earlier for their own reason (see
+            // those call sites). The user presses Play again themselves; this never auto-resumes.
+            if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
             AccessibilityUtils.announceToTalkBack(context, "Analyzing ${config.title}")
             val currentPlaybackPosition = exoPlayer.currentPosition
             val offlineImages = if (isImageMode) listOfNotNull(runtimeLoadedImageBitmap) else extractVideoFrameBitmaps(uri, currentPlaybackPosition, config)
@@ -384,7 +397,13 @@ fun MediaDescriberScreen(
         customPromptTexts = controller.customPromptTexts,
         customPromptTitles = controller.customPromptTitles,
         onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
-        onRepeat = { gate { controller.onRepeat(selectedModelId, captureFrames) } },
+        // Basic Tasks (mlkit) tracks its own repeat target (MlkitButtonProvider.lastRepeatableAction,
+        // set by selectSingleShot — its buttons never go through onRunPrompt/controller.lastPrompt
+        // at all), same branching as CameraActivity's identical onRepeat.
+        onRepeat = {
+            if (selectedModelId == "mlkit") mlkitProvider.repeatLastAction()
+            else gate { controller.onRepeat(selectedModelId, captureFrames) }
+        },
         onDescribeTv = { gate { coroutineScope.launch { runDescribeTvFromFile() } } },
         onExploreAndDescribe = { gate { coroutineScope.launch { launchExploreAndDescribeFlowFromFile() } } },
         onRecordCustomPrompt = { slotIndex ->
@@ -405,6 +424,14 @@ fun MediaDescriberScreen(
         }
         onMicStopReady { controller.stopVoiceListening() }
         onRepeatReady { ctx.onRepeat() }
+
+        // Seeds a sensible Repeat/headset-shortcut default on every model switch (and on the very
+        // first composition, i.e. opening a file fresh) — see the identical note in CameraActivity.
+        if (selectedModelId == "mlkit") {
+            mlkitProvider.resetRepeatToDefault(prefs)
+        } else {
+            settings.prompts.find { it.id == "brief_narration" }?.let { controller.seedDefaultPrompt(it) }
+        }
     }
 
     Box(

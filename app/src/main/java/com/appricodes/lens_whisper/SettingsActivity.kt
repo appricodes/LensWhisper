@@ -2,12 +2,14 @@ package com.appricodes.lens_whisper
 
 import android.content.Context
 import android.os.Bundle
+import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -20,26 +22,33 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Dialog
+import com.appricodes.lens_whisper.data.NO_HEADSET_KEY_CODE
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.data.SettingsRepository
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
+import com.appricodes.lens_whisper.media.HeadsetKeyCapture
+import com.appricodes.lens_whisper.media.HeadsetShortcuts
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
+import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
+	private lateinit var headsetKeyCapture: HeadsetKeyCapture
 
 	override fun onCreate(savedInstanceState: Bundle?) {
 		super.onCreate(savedInstanceState)
 		val prefs = PreferencesManager(this)
 		val appSettings = SettingsRepository(this).loadSettingsFromAssets()
 		val availableLanguages = appSettings.languages
-		val standardPersonas = listOf("Neutral", "Family", "Childish", "Technical", "explicit", "explicit and naughty", "Humorous", "poetry")
+		val standardPersonas = listOf("Neutral", "Family", "Technical", "poetry")
 		val availableOcrLanguages = listOf("Latin (English/EU)", "Chinese", "Japanese", "Korean", "Devanagari")
+		headsetKeyCapture = HeadsetKeyCapture(this)
 
 		setContent {
 			LensWhisperTheme {
@@ -52,7 +61,9 @@ class SettingsActivity : ComponentActivity() {
 						availableLanguages = availableLanguages,
 						availablePersonas = standardPersonas,
 						availableOcrLanguages = availableOcrLanguages,
-						onBack = { finish() }
+						onBack = { finish() },
+						onStartHeadsetCapture = { onCaptured -> headsetKeyCapture.start(onCaptured) },
+						onStopHeadsetCapture = { headsetKeyCapture.stop() }
 					)
 				}
 			}
@@ -71,6 +82,26 @@ class SettingsActivity : ComponentActivity() {
 			OfflineTranslator.manageModelsInBackground(langCode)
 		}
 	}
+
+	override fun onKeyDown(keyCode: Int, event: KeyEvent?): Boolean {
+		// Wired in-line "hook" buttons on some devices arrive here directly instead of through
+		// HeadsetKeyCapture's media session — see HeadsetShortcuts' class doc. A no-op when no
+		// capture is in progress.
+		if (event != null && headsetKeyCapture.onWindowKeyDown(event)) return true
+		return super.onKeyDown(keyCode, event)
+	}
+
+	override fun onDestroy() {
+		super.onDestroy()
+		headsetKeyCapture.stop()
+	}
+}
+
+/** Which of the two headset shortcuts a capture-in-progress / pending-confirmation belongs to —
+ *  see the "Headset Button Shortcuts" section below. */
+private enum class HeadsetShortcutAction(val label: String) {
+	REPEAT("Repeat Previous Prompt"),
+	MIC("Get a Question from the Microphone")
 }
 
 @Composable
@@ -79,7 +110,9 @@ fun SettingsScreen(
 	availableLanguages: Map<String, String>,
 	availablePersonas: List<String>,
 	availableOcrLanguages: List<String>,
-	onBack: () -> Unit
+	onBack: () -> Unit,
+	onStartHeadsetCapture: ((Int) -> Unit) -> Unit,
+	onStopHeadsetCapture: () -> Unit
 ) {
 	val context = androidx.compose.ui.platform.LocalContext.current
 	val sharedPrefs = remember { context.getSharedPreferences("LensWhisperPrefs", Context.MODE_PRIVATE) }
@@ -111,6 +144,70 @@ fun SettingsScreen(
 
 	var reasoningEffort by remember { mutableStateOf(prefs.reasoningEffort) }
 	var reasoningEffortDropdownExpanded by remember { mutableStateOf(false) }
+
+	// Everything below lives in its own sub-window (see showHeadsetShortcutsDialog / the
+	// HeadsetShortcutsDialog composable at the end of this file) rather than inline here, so this
+	// otherwise-rarely-touched section doesn't permanently take up two rows' worth of the main
+	// Settings screen.
+	var showHeadsetShortcutsDialog by remember { mutableStateOf(false) }
+	var headsetRepeatKeyCode by remember { mutableStateOf(prefs.headsetRepeatKeyCode) }
+	var headsetMicKeyCode by remember { mutableStateOf(prefs.headsetMicKeyCode) }
+	// Dialog #1 ("press a button now") is open while this is non-null; dialog #2 ("use this
+	// button?") is open once a press has been captured, replacing it with the keycode to confirm.
+	var listeningForHeadsetAction by remember { mutableStateOf<HeadsetShortcutAction?>(null) }
+	var pendingHeadsetCapture by remember { mutableStateOf<Pair<HeadsetShortcutAction, Int>?>(null) }
+
+	fun cancelHeadsetCapture() {
+		listeningForHeadsetAction = null
+		onStopHeadsetCapture()
+	}
+
+	fun beginHeadsetCapture(action: HeadsetShortcutAction) {
+		listeningForHeadsetAction = action
+		AccessibilityUtils.announceToTalkBack(context, "Press the headset button you want to use for ${action.label}, or Cancel.")
+		onStartHeadsetCapture { keyCode ->
+			listeningForHeadsetAction = null
+			pendingHeadsetCapture = action to keyCode
+			onStopHeadsetCapture()
+			AccessibilityUtils.announceToTalkBack(
+				context,
+				"You pressed ${HeadsetShortcuts.displayName(keyCode)}. Confirm to use it for ${action.label}, or cancel."
+			)
+		}
+	}
+
+	fun confirmHeadsetCapture() {
+		val (action, keyCode) = pendingHeadsetCapture ?: return
+		// Both shortcuts fire immediately on press (see HeadsetShortcutGestureHandler) — there's no
+		// duration-based disambiguation, so the same button can't usefully drive both at once.
+		// Binding a button to one action steals it back from the other if it was already bound
+		// there, same as before the (removed) press-duration experiment.
+		val otherKeyCode = if (action == HeadsetShortcutAction.REPEAT) headsetMicKeyCode else headsetRepeatKeyCode
+		if (otherKeyCode == keyCode) {
+			when (action) {
+				HeadsetShortcutAction.REPEAT -> { prefs.headsetMicKeyCode = NO_HEADSET_KEY_CODE; headsetMicKeyCode = NO_HEADSET_KEY_CODE }
+				HeadsetShortcutAction.MIC -> { prefs.headsetRepeatKeyCode = NO_HEADSET_KEY_CODE; headsetRepeatKeyCode = NO_HEADSET_KEY_CODE }
+			}
+		}
+		when (action) {
+			HeadsetShortcutAction.REPEAT -> {
+				prefs.headsetRepeatKeyCode = keyCode
+				headsetRepeatKeyCode = keyCode
+			}
+			HeadsetShortcutAction.MIC -> {
+				prefs.headsetMicKeyCode = keyCode
+				headsetMicKeyCode = keyCode
+			}
+		}
+		pendingHeadsetCapture = null
+		val buttonName = HeadsetShortcuts.displayName(keyCode)
+		val message = if (otherKeyCode == keyCode) {
+			"${action.label} is now bound to $buttonName. The other shortcut was using that button too, so it's now unbound."
+		} else {
+			"${action.label} is now bound to $buttonName."
+		}
+		AccessibilityUtils.announceToTalkBack(context, message)
+	}
 
 	Column(
 		modifier = Modifier
@@ -171,7 +268,7 @@ fun SettingsScreen(
 					}
 					.clearAndSetSemantics {
 						val status = if (offlineTranslationEnabled) "enabled" else "disabled"
-						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. When on, both Basic tasks results (other than Read Text and Read Document, which read text exactly as written) and on-device AI model responses are translated to $selectedLanguageName, when a translation is available. When off, Basic tasks results stay in English — they're built from a small fixed set of words, not a model, so there is no language to ask for; on-device AI model responses instead depend entirely on whether the selected model can answer directly in $selectedLanguageName on its own. Double tap to toggle."
+						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Translates Basic tasks and on-device AI results, except Read Text and Read Document, which always read text exactly as written. Double tap to toggle."
 					},
 				verticalAlignment = Alignment.CenterVertically,
 				horizontalArrangement = Arrangement.SpaceBetween
@@ -334,6 +431,30 @@ fun SettingsScreen(
 			})
 		}
 
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Headset Button Shortcuts", fontSize = 18.sp, color = Color.Gray)
+			val headsetSummary = when {
+				headsetRepeatKeyCode == NO_HEADSET_KEY_CODE && headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Not set up"
+				headsetRepeatKeyCode == NO_HEADSET_KEY_CODE -> "Microphone button set"
+				headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Repeat button set"
+				else -> "Both buttons set"
+			}
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { showHeadsetShortcutsDialog = true }
+					.padding(16.dp)
+					.clearAndSetSemantics {
+						contentDescription = "Headset Button Shortcuts. $headsetSummary. Double tap to open. Bind a wired or " +
+							"Bluetooth headset button to repeat the last prompt, or to ask a question by voice."
+					},
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = headsetSummary, fontSize = 18.sp)
+			}
+		}
+
 		if (LocalServerFeature.ENABLED) {
 			// Hidden while the LAN feature is switched off - there is nothing to point these at.
 			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -405,6 +526,71 @@ fun SettingsScreen(
 		}
 	}
 
+	if (showHeadsetShortcutsDialog) {
+		HeadsetShortcutsDialog(
+			headsetRepeatKeyCode = headsetRepeatKeyCode,
+			headsetMicKeyCode = headsetMicKeyCode,
+			onDismiss = { showHeadsetShortcutsDialog = false },
+			onCapture = { action -> beginHeadsetCapture(action) },
+			onClear = { action ->
+				when (action) {
+					HeadsetShortcutAction.REPEAT -> {
+						prefs.headsetRepeatKeyCode = NO_HEADSET_KEY_CODE
+						headsetRepeatKeyCode = NO_HEADSET_KEY_CODE
+					}
+					HeadsetShortcutAction.MIC -> {
+						prefs.headsetMicKeyCode = NO_HEADSET_KEY_CODE
+						headsetMicKeyCode = NO_HEADSET_KEY_CODE
+					}
+				}
+				AccessibilityUtils.announceToTalkBack(context, "${action.label} shortcut cleared.")
+			}
+		)
+	}
+
+	// listeningForHeadsetAction/pendingHeadsetCapture's two dialogs render on top of
+	// HeadsetShortcutsDialog above (each Dialog is its own window, so they stack correctly) —
+	// beginHeadsetCapture/confirmHeadsetCapture don't close that sub-window themselves, so the
+	// user lands back on it (with the newly-bound button visible) once they're done, rather than
+	// being dropped all the way back to the main Settings screen.
+	listeningForHeadsetAction?.let { action ->
+		AlertDialog(
+			onDismissRequest = { cancelHeadsetCapture() },
+			title = { Text("Press a Headset Button") },
+			text = {
+				Text(
+					"Press the button on your wired or Bluetooth headset you want to use for " +
+						"\"${action.label}\"."
+				)
+			},
+			confirmButton = {},
+			dismissButton = {
+				TextButton(onClick = { cancelHeadsetCapture() }) { Text("Cancel") }
+			}
+		)
+	}
+
+	pendingHeadsetCapture?.let { (action, keyCode) ->
+		val otherKeyCode = if (action == HeadsetShortcutAction.REPEAT) headsetMicKeyCode else headsetRepeatKeyCode
+		val message = if (otherKeyCode == keyCode) {
+			"You pressed: ${HeadsetShortcuts.displayName(keyCode)} — the same button already bound to the other " +
+				"shortcut. Use it for \"${action.label}\" instead? The other shortcut will be unbound."
+		} else {
+			"You pressed: ${HeadsetShortcuts.displayName(keyCode)}. Use it for \"${action.label}\"?"
+		}
+		AlertDialog(
+			onDismissRequest = { pendingHeadsetCapture = null },
+			title = { Text("Use This Button?") },
+			text = { Text(message) },
+			confirmButton = {
+				TextButton(onClick = { confirmHeadsetCapture() }) { Text("Set") }
+			},
+			dismissButton = {
+				TextButton(onClick = { pendingHeadsetCapture = null }) { Text("Cancel") }
+			}
+		)
+	}
+
 	if (showLocalServerEditDialog) {
 		AlertDialog(
 			onDismissRequest = { showLocalServerEditDialog = false },
@@ -464,5 +650,99 @@ fun SettingsScreen(
 				}
 			}
 		)
+	}
+}
+
+/** The "Headset Button Shortcuts" sub-window — opened from its one summary row on the main
+ *  Settings screen (see `showHeadsetShortcutsDialog`) rather than living inline there, so this
+ *  rarely-touched section doesn't permanently take up two rows on the main screen. Holds the two
+ *  [HeadsetShortcutRow]s; the actual capture/confirm flow still renders as its own dialogs layered
+ *  on top of this one (see the call site). */
+@Composable
+private fun HeadsetShortcutsDialog(
+	headsetRepeatKeyCode: Int,
+	headsetMicKeyCode: Int,
+	onDismiss: () -> Unit,
+	onCapture: (HeadsetShortcutAction) -> Unit,
+	onClear: (HeadsetShortcutAction) -> Unit
+) {
+	Dialog(onDismissRequest = onDismiss) {
+		Surface(
+			shape = RoundedCornerShape(12.dp),
+			color = MaterialTheme.colorScheme.surface,
+			modifier = Modifier.fillMaxWidth(0.92f)
+		) {
+			Column(modifier = Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
+				Row(
+					modifier = Modifier.fillMaxWidth(),
+					horizontalArrangement = Arrangement.SpaceBetween,
+					verticalAlignment = Alignment.CenterVertically
+				) {
+					Text(text = "Headset Button Shortcuts", fontSize = 20.sp, style = MaterialTheme.typography.titleMedium)
+					TextButton(
+						onClick = onDismiss,
+						modifier = Modifier.clearAndSetSemantics { contentDescription = "Close Headset Button Shortcuts." }
+					) { Text("Close") }
+				}
+				Text(
+					text = "Bind a button on a wired or Bluetooth headset to repeat the last prompt, or to ask a " +
+						"question by voice, without touching the screen. Each needs its own button — binding one " +
+						"shortcut to a button already used by the other unbinds it there.",
+					fontSize = 13.sp,
+					color = Color.Gray
+				)
+				HeadsetShortcutRow(
+					title = HeadsetShortcutAction.REPEAT.label,
+					boundKeyCode = headsetRepeatKeyCode,
+					onClick = { onCapture(HeadsetShortcutAction.REPEAT) },
+					onClear = { onClear(HeadsetShortcutAction.REPEAT) }
+				)
+				HeadsetShortcutRow(
+					title = HeadsetShortcutAction.MIC.label,
+					boundKeyCode = headsetMicKeyCode,
+					onClick = { onCapture(HeadsetShortcutAction.MIC) },
+					onClear = { onClear(HeadsetShortcutAction.MIC) }
+				)
+			}
+		}
+	}
+}
+
+/** One row of the "Headset Button Shortcuts" section — shows the currently bound button (if any)
+ *  and opens the capture flow on tap; a "Clear" button appears only once something is bound. */
+@Composable
+private fun HeadsetShortcutRow(
+	title: String,
+	boundKeyCode: Int,
+	onClick: () -> Unit,
+	onClear: () -> Unit
+) {
+	val isBound = boundKeyCode != NO_HEADSET_KEY_CODE
+	val boundLabel = if (isBound) HeadsetShortcuts.displayName(boundKeyCode) else null
+	Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+		Box(
+			modifier = Modifier
+				.fillMaxWidth()
+				.background(MaterialTheme.colorScheme.surfaceVariant)
+				.clickable(onClick = onClick)
+				.padding(16.dp)
+				.clearAndSetSemantics {
+					contentDescription = if (isBound)
+						"$title is bound to $boundLabel. Double tap to change it."
+					else "$title is not bound to a headset button. Double tap to choose one."
+				},
+			contentAlignment = Alignment.CenterStart
+		) {
+			Column {
+				Text(text = title, fontSize = 16.sp)
+				Text(text = boundLabel ?: "Not set — tap to choose a button", fontSize = 13.sp, color = Color.Gray)
+			}
+		}
+		if (isBound) {
+			TextButton(
+				onClick = onClear,
+				modifier = Modifier.clearAndSetSemantics { contentDescription = "Clear the $title headset shortcut." }
+			) { Text("Clear") }
+		}
 	}
 }

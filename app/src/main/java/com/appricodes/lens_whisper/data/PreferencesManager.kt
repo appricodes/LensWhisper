@@ -4,6 +4,24 @@ import android.content.Context
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerFeature
 
+/** Sentinel for [PreferencesManager.headsetRepeatKeyCode]/[PreferencesManager.headsetMicKeyCode]
+ *  meaning "no button bound yet" — real `android.view.KeyEvent` keycodes are never negative, so
+ *  this can never collide with an actual captured button. */
+const val NO_HEADSET_KEY_CODE = -1
+
+/** Collapses `KEYCODE_MEDIA_PLAY`/`KEYCODE_MEDIA_PAUSE` into `KEYCODE_MEDIA_PLAY_PAUSE` — a single
+ *  physical play/pause button on a Bluetooth headset alternates between sending the two, so
+ *  anything that captures or matches a headset button must treat them as one. The canonical copy
+ *  lives here (not in [com.appricodes.lens_whisper.media.HeadsetShortcuts], which already depends
+ *  on this file) and [PreferencesManager.headsetRepeatKeyCode]/[PreferencesManager.headsetMicKeyCode]
+ *  apply it on every *read*, not just at capture time — a value stored before this normalization
+ *  existed (raw 126/127) is transparently migrated on the next read instead of silently never
+ *  matching a normalized incoming event again. */
+fun normalizeHeadsetKeyCode(keyCode: Int): Int = when (keyCode) {
+	android.view.KeyEvent.KEYCODE_MEDIA_PLAY, android.view.KeyEvent.KEYCODE_MEDIA_PAUSE -> android.view.KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+	else -> keyCode
+}
+
 class PreferencesManager(val context: Context) {
 	private val standardPrefs = context.getSharedPreferences("LensWhisperPrefs", Context.MODE_PRIVATE)
 
@@ -21,10 +39,11 @@ class PreferencesManager(val context: Context) {
 
 	/** The narration persona, e.g. "Neutral" or "Technical" - see assets/settings.json.
 	 *
-	 *  Two personas ("explicit", "explicit and naughty") were removed: they instructed the model to
-	 *  describe whatever is in front of the camera - including bystanders, and including people who
-	 *  may be minors - in sexualised terms. [RETIRED_MODES] maps a stored one back to Neutral so a
-	 *  device that had one selected before the update doesn't keep using it. */
+	 *  "explicit"/"explicit and naughty" were removed: they instructed the model to describe
+	 *  whatever is in front of the camera - including bystanders, and including people who may be
+	 *  minors - in sexualised terms. "Childish"/"Humorous" were removed 2026-09-01, trimming the
+	 *  picker down to Neutral/Family/Technical/poetry. [RETIRED_MODES] maps any of the four back to
+	 *  Neutral so a device that had one selected before the update doesn't keep using it. */
 	var selectedMode: String
 		get() {
 			val stored = standardPrefs.getString("selected_mode", "Neutral") ?: "Neutral"
@@ -60,6 +79,25 @@ class PreferencesManager(val context: Context) {
 	var volumeShortcutsEnabled: Boolean
 		get() = standardPrefs.getBoolean("volume_shortcuts_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("volume_shortcuts_enabled", value).apply()
+
+	/** Physical media-button keycode (`android.view.KeyEvent`) bound to "repeat the last prompt"
+	 *  via a wired or Bluetooth headset button, captured interactively in Settings — see
+	 *  `HeadsetShortcutsDialog` in [com.appricodes.lens_whisper.SettingsActivity]. [NO_HEADSET_KEY_CODE]
+	 *  if unset. Settings itself keeps this and [headsetMicKeyCode] from ever holding the same
+	 *  keycode (binding one steals it back from the other) — [com.appricodes.lens_whisper.media.HeadsetShortcutGestureHandler],
+	 *  which checks this, fires immediately on key-down with no way to disambiguate one button
+	 *  driving both. Checked by that class from both the media-session path
+	 *  ([com.appricodes.lens_whisper.media.MediaSessionHandler]) and the plain `onKeyDown`/`onKeyUp`
+	 *  fallback every Activity that owns this action already wires up for
+	 *  [com.appricodes.lens_whisper.utils.VolumeKeyGestureHandler]. */
+	var headsetRepeatKeyCode: Int
+		get() = normalizeHeadsetKeyCode(standardPrefs.getInt("headset_repeat_key_code", NO_HEADSET_KEY_CODE))
+		set(value) = standardPrefs.edit().putInt("headset_repeat_key_code", value).apply()
+
+	/** Same as [headsetRepeatKeyCode], for "ask a question by voice". */
+	var headsetMicKeyCode: Int
+		get() = normalizeHeadsetKeyCode(standardPrefs.getInt("headset_mic_key_code", NO_HEADSET_KEY_CODE))
+		set(value) = standardPrefs.edit().putInt("headset_mic_key_code", value).apply()
 
 	/** Gates every synthesized UI sound effect this app plays — the shutter click, the "waiting for
 	 *  the model" tone, and the Explore hover enter/exit tones (see
@@ -167,7 +205,7 @@ class PreferencesManager(val context: Context) {
 	}
 
 	private companion object {
-		val RETIRED_MODES = setOf("explicit", "explicit and naughty")
+		val RETIRED_MODES = setOf("explicit", "explicit and naughty", "childish", "humorous")
 	}
 
 	fun getUrlHistoryList(): List<String> = urlHistory.split("|").filter { it.isNotEmpty() }
