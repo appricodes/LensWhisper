@@ -27,9 +27,11 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onGloballyPositioned
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
+import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.media3.common.MediaItem
 import androidx.media3.common.Player
 import androidx.media3.exoplayer.ExoPlayer
+import com.appricodes.lens_whisper.SegmentationExploreActivity
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.AppSettings
@@ -37,9 +39,13 @@ import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.LocalServerFeature
+import com.appricodes.lens_whisper.offline.DualResCapture
+import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
+import com.appricodes.lens_whisper.offline.SegmentationIsolation
 import com.appricodes.lens_whisper.ui.analysis.CapturedBundle
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.ActionButtonGrid
+import com.appricodes.lens_whisper.ui.components.AppLifecycleCameraHandler
 import com.appricodes.lens_whisper.ui.components.DisclaimerDialog
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.components.MediaPreviewArea
@@ -50,19 +56,31 @@ import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.ImageScaling
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import java.io.File
+import java.io.FileOutputStream
+
+// "Describe TV Image"/"Explore and Describe" — matches CameraActivity's own
+// SEGMENTATION_COPY_MAX_DIM constant (kept as a separate file-local constant there, same value).
+private const val SEGMENTATION_COPY_MAX_DIM = 1280
 
 /**
  * Describes a video/image file with the same model-driven top bar + 3-row grid as
- * [com.appricodes.lens_whisper.CameraActivity], but the bottom row shows video transport controls
- * + Microphone instead of camera-switch/flash (there's no live camera here) — see
- * [buildBottomRow]. The button grid is fully transparent — the user watches the media
- * undisturbed; touching the screen lets TalkBack read a button's label (via its semantics), and
- * tapping runs it.
+ * [com.appricodes.lens_whisper.CameraActivity] — Basic Tasks and every on-device VLM catalog
+ * button work here too, sourcing from the already-loaded image or the current video frame in
+ * place of a fresh camera photo (see [captureFileFrame]/`captureFrames`/`captureMaxResPairFromFile`
+ * below) — except Light Level Meter and Simple Color Detection, which stay camera-only (see
+ * [MlkitButtonProvider]'s `hasLiveCamera`). The bottom row shows video transport controls +
+ * Microphone instead of camera-switch/flash (there's no live camera here, and those two stay
+ * unavailable in file mode by simply never being offered — see [buildBottomRow]). The button grid
+ * is fully transparent — the user watches the media undisturbed; touching the screen lets TalkBack
+ * read a button's label (via its semantics), and tapping runs it.
  */
 @Composable
 fun MediaDescriberScreen(
@@ -81,19 +99,13 @@ fun MediaDescriberScreen(
     val offlineModelsRepository = remember { OfflineModelsRepository(context) }
     val offlineModels = remember { offlineModelsRepository.loadModels() }
     val controller = rememberAnalysisSessionController(context, prefs)
-    // No live camera here, so MLKit (capturePhoto = null) resolves to an empty grid if ever
-    // selected — the model picker hides the MLKit option entirely (showMlkitOption = false below).
-    val mlkitProvider = remember { MlkitButtonProvider(context, coroutineScope, capturePhoto = null) }
+    val lifecycleOwner = LocalLifecycleOwner.current
 
     var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
     // See ResyncSelectedModelOnResume's own doc — without this, switching or deleting the selected
     // model from Manage Advanced Models and returning here leaves this screen's own selectedModelId
     // stuck on whatever was selected when this screen was first composed.
     ResyncSelectedModelOnResume(prefs) { selectedModelId = it }
-    val (provider, selectedOfflineModel) = remember(selectedModelId) {
-        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
-    }
-    fun gate(action: () -> Unit) = controller.gateForSelectedModel(selectedModelId, selectedOfflineModel, action)
 
     var disclaimerAccepted by remember { mutableStateOf(prefs.hasAcceptedDisclaimer) }
 
@@ -191,6 +203,149 @@ fun MediaDescriberScreen(
             frames
         }
 
+    // MlkitButtonProvider's own capturePhoto shape — (maxDim, highRes, onShutter) -> Bitmap — asks
+    // only for "hand me a bitmap", so the exact same shape a live camera satisfies with a fresh
+    // capture is satisfied here with the already-loaded image or the current video frame instead;
+    // every button MlkitButtonProvider builds around it (Detect Objects, Identify Objects and
+    // Colors, Explore Photo by Touch, Read Text, Read Document) then needs no changes of its own to
+    // work from a file. `highRes` is ignored — there's no separate higher-fidelity source to ask
+    // for here, unlike a live camera's sensor (see MlkitButtonProvider's own doc) — the file/frame's
+    // own resolution, capped at maxDim, is already the best available. Throws (rather than
+    // returning null) when there's genuinely nothing to capture, matching capturePhoto's own
+    // non-nullable Bitmap contract — MlkitButtonProvider already treats any thrown exception here as
+    // "Could not capture photo."
+    val captureFileFrame: suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap = { maxDim, _, onShutter ->
+        val uri = currentFileUri ?: throw IllegalStateException("No media loaded")
+        // No physical shutter in file mode — start the "model is working" cue as early as possible
+        // instead, before the (for video) possibly-slow frame extraction below, mirroring
+        // captureFrames' own "no shutter, so as soon as the frame is in hand" reasoning.
+        onShutter()
+        val source = if (isImageMode) {
+            runtimeLoadedImageBitmap ?: throw IllegalStateException("No image loaded")
+        } else {
+            // ExoPlayer state must be read on this (composition) thread, before any dispatcher hop
+            // — extractVideoFrameBitmaps below does its own withContext(IO) immediately.
+            val positionMs = exoPlayer.currentPosition
+            extractVideoFrameBitmaps(uri, positionMs, PromptConfig("_frame", "", "", 1, 0.0)).firstOrNull()
+                ?: throw IllegalStateException("Could not extract video frame")
+        }
+        withContext(Dispatchers.Default) { ImageScaling.scaleToMax(source, maxDim) }
+    }
+
+    val mlkitProvider = remember {
+        MlkitButtonProvider(context, coroutineScope, capturePhoto = captureFileFrame, hasLiveCamera = false)
+    }
+    mlkitProvider.ObserveContinuousLoop(prefs)
+    // Mirrors CameraActivity's identical pairing of ObserveContinuousLoop with a pause handler —
+    // continuous Read Text must stop polling once this screen backgrounds, same as it does there.
+    // Reusing the "camera" handler here is harmless despite this screen having no camera of its own
+    // (see this file's own doc): releaseAllCameras is a no-op when nothing is bound, and
+    // MediaDescriberActivity.onResume already calls it defensively for the same reason.
+    AppLifecycleCameraHandler(
+        context = context,
+        lifecycleOwner = lifecycleOwner,
+        onPauseTasks = { mlkitProvider.stopContinuous() }
+    )
+
+    val (provider, selectedOfflineModel) = remember(selectedModelId) {
+        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
+    }
+    fun gate(action: () -> Unit) = controller.gateForSelectedModel(selectedModelId, selectedOfflineModel, action)
+
+    /**
+     * File-mode counterpart of CameraActivity's `captureMaxResPair`: builds the same
+     * [DualResCapture] pair "Describe TV Image"/"Explore and Describe" need (a downscaled copy to
+     * segment, plus a full-detail file to isolate from) — but from the already-loaded image or an
+     * extracted video frame instead of a fresh camera capture. There's no separate "sensor" to ask
+     * for extra detail from here, so both roles are derived from the exact same source bitmap (see
+     * [DualResCapture]'s own doc for why that's still correct). Unlike CameraActivity's version,
+     * this never recycles the source bitmap: in image mode it IS runtimeLoadedImageBitmap, still
+     * bound to the on-screen preview.
+     */
+    suspend fun captureMaxResPairFromFile(): DualResCapture? {
+        val uri = currentFileUri ?: return null
+        return try {
+            val source = if (isImageMode) {
+                runtimeLoadedImageBitmap
+            } else {
+                extractVideoFrameBitmaps(uri, exoPlayer.currentPosition, PromptConfig("_frame", "", "", 1, 0.0)).firstOrNull()
+            } ?: return null
+            val highResFile = withContext(Dispatchers.IO) {
+                val file = File(context.cacheDir, "file_describe_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(file).use { source.compress(Bitmap.CompressFormat.JPEG, 95, it) }
+                file
+            }
+            val lowRes = withContext(Dispatchers.Default) { ImageScaling.scaleToMax(source, SEGMENTATION_COPY_MAX_DIM) }
+            DualResCapture(lowRes, highResFile)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /** File-mode "Describe TV Image" — see CameraActivity's `runDescribeTv` for the camera version
+     *  this mirrors; only the capture step differs. */
+    suspend fun runDescribeTvFromFile() {
+        controller.runGuarded {
+            AccessibilityUtils.announceToTalkBack(context, "Analyzing Describe TV Image")
+            val capture = captureMaxResPairFromFile()
+            if (capture == null) {
+                AccessibilityUtils.announceToTalkBack(context, "Could not load image.")
+                return@runGuarded
+            }
+            controller.startProcessingChime()
+            val instances = withContext(Dispatchers.Default) {
+                OfflineSegmentationDetector.detect(context, capture.lowResBitmap)
+            }
+            val tvInstance = instances.filter { it.label == "tv" }.maxByOrNull { it.confidence }
+            if (tvInstance == null) {
+                controller.stopProcessingChime()
+                AccessibilityUtils.announceToTalkBack(context, "No TV or screen found.")
+                return@runGuarded
+            }
+            val isolated = withContext(Dispatchers.Default) {
+                SegmentationIsolation.isolate(capture.lowResBitmap, tvInstance, capture.highResFile)
+            }
+            if (isolated == null) {
+                controller.stopProcessingChime()
+                AccessibilityUtils.announceToTalkBack(context, "Could not isolate the TV image.")
+                return@runGuarded
+            }
+            val config = settings.prompts.find { it.id == "detailed_scene" }
+            if (config == null) {
+                controller.stopProcessingChime()
+                return@runGuarded
+            }
+            controller.runAnalysisOnBitmap(config, isolated)
+        }
+    }
+
+    /** File-mode "Explore and Describe" — see CameraActivity's `launchExploreAndDescribeFlow` for
+     *  the camera version this mirrors; only the capture step differs. */
+    suspend fun launchExploreAndDescribeFlowFromFile() {
+        controller.runGuarded {
+            AccessibilityUtils.announceToTalkBack(context, "Analyzing Explore and Describe")
+            val capture = captureMaxResPairFromFile()
+            if (capture == null) {
+                AccessibilityUtils.announceToTalkBack(context, "Could not load image.")
+                return@runGuarded
+            }
+            controller.startProcessingChime()
+            val lowResUri = withContext(Dispatchers.IO) {
+                val file = File(context.cacheDir, "explore_describe_${System.currentTimeMillis()}.jpg")
+                FileOutputStream(file).use { capture.lowResBitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                Uri.fromFile(file)
+            }
+            context.startActivity(
+                Intent(context, SegmentationExploreActivity::class.java)
+                    .putExtra("IMAGE_URI", lowResUri.toString())
+                    .putExtra("HIGH_RES_IMAGE_URI", Uri.fromFile(capture.highResFile).toString())
+                    .putExtra("VLM_DESCRIBE_MODE", true)
+            )
+        }
+    }
+
     val captureFrames: suspend (PromptConfig) -> CapturedBundle? = { config ->
         val uri = currentFileUri
         if (uri == null) {
@@ -229,11 +384,8 @@ fun MediaDescriberScreen(
         customPromptTitles = controller.customPromptTitles,
         onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
         onRepeat = { gate { controller.onRepeat(selectedModelId, captureFrames) } },
-        // Both need a live camera capture (max resolution + a 720p segmentation copy from the same
-        // shot) — this screen works from an already-picked video/image file, not a camera, so
-        // there's nothing for either to capture from. See ModelButtonContext's doc.
-        onDescribeTv = null,
-        onExploreAndDescribe = null,
+        onDescribeTv = { gate { coroutineScope.launch { runDescribeTvFromFile() } } },
+        onExploreAndDescribe = { gate { coroutineScope.launch { launchExploreAndDescribeFlowFromFile() } } },
         onRecordCustomPrompt = { slotIndex ->
             gate {
                 if (!isImageMode && exoPlayer.isPlaying) exoPlayer.pause()
@@ -290,7 +442,6 @@ fun MediaDescriberScreen(
                 onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id },
                 showMoreMenuOpenCameraOption = true,
                 showMoreMenuVolumeKeyToggle = true,
-                showMlkitOption = false,
                 backgroundColor = Color.Black.copy(alpha = 0.55f)
             )
             ActionButtonGrid(rows = provider.rows(ctx) + listOf(bottomRow), transparent = true, modifier = Modifier.weight(1f))
@@ -319,9 +470,8 @@ fun MediaDescriberScreen(
     // selection changes), rather than only lazily loading it the first time a button is pressed —
     // ensureEngine() is a quick no-op if it's already loaded, so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
-    // announcement. Not applicable to "mlkit" (this screen doesn't even offer it as an option —
-    // see ModelPickerPopup's doc — but selectedModelId is a shared preference, so it's still worth
-    // guarding here) or the Local Server (nothing here to preload — it runs on a separate machine).
+    // announcement. Not applicable to "mlkit" (Basic Tasks needs no in-memory model) or the Local
+    // Server (nothing here to preload — it runs on a separate machine).
     LaunchedEffect(selectedModelId) {
         if (selectedModelId != "mlkit" && selectedModelId != LocalServerFeature.MODEL_ID) {
             offlineModels.find { it.id == selectedModelId }?.let { OfflineInferenceEngine.preload(context, it) }

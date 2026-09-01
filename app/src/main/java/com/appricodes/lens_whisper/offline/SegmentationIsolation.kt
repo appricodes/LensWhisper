@@ -28,6 +28,20 @@ import java.io.FileInputStream
  * repeated taps) alongside a 1-3GB on-device VLM engine on a 4GB device. Decoding only the
  * instance's own bounding region keeps the peak memory cost to that one crop, not the whole photo.
  */
+/**
+ * What a "Describe TV Image"/"Explore and Describe" capture hands back, from either source: a
+ * downscaled copy (for segmentation and, in [com.appricodes.lens_whisper.SegmentationExploreActivity]'s
+ * describe-mode, for display) plus the *file* the same image was written to at full detail — a
+ * File, not a decoded Bitmap, so nothing holds a large full decode in memory a moment longer than
+ * it takes to produce [lowResBitmap]; see [SegmentationIsolation]'s doc for why.
+ *
+ * Shared between [com.appricodes.lens_whisper.CameraActivity] (where the pair comes from one live
+ * camera capture at max sensor resolution) and `MediaDescriberScreen` (where it comes from an
+ * already-loaded image file or an extracted video frame instead — there is no separate "sensor" to
+ * ask for extra detail from, so both roles are derived from the exact same source bitmap there).
+ */
+data class DualResCapture(val lowResBitmap: Bitmap, val highResFile: File)
+
 object SegmentationIsolation {
 
     /**

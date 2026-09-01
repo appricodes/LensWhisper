@@ -25,11 +25,13 @@ data class ModelButtonContext(
     val onRunPrompt: (config: PromptConfig, label: String) -> Unit,
     val onRepeat: () -> Unit,
     /** "Describe TV Image"/"Explore and Describe" ([OfflineVlmButtonProvider] only) — both need a
-     *  fresh, live camera capture (max resolution + a 720p segmentation copy from the very same
-     *  shot), so they're null wherever there's no live camera to capture from (MediaDescriberScreen,
-     *  which works from an already-picked video/image) — mirroring [MlkitButtonProvider]'s own
-     *  `capturePhoto` nullability. The provider renders the corresponding cell disabled when null
-     *  rather than wiring it to a no-op. */
+     *  [com.appricodes.lens_whisper.offline.DualResCapture] pair (a downscaled copy to segment plus
+     *  a full-detail file to isolate from). On a live camera (CameraActivity) that pair comes from
+     *  one fresh capture at max sensor resolution; on a file-based host (MediaDescriberScreen) it
+     *  comes from the already-loaded image or an extracted video frame instead, written to a cache
+     *  file to serve as both roles — see that screen's own capture helper. Only null if the host
+     *  genuinely has no source at all (e.g. no file loaded yet), in which case the provider renders
+     *  the corresponding cell disabled rather than wiring it to a no-op. */
     val onDescribeTv: (() -> Unit)?,
     val onExploreAndDescribe: (() -> Unit)?,
     /** Long-press on a custom-prompt cell (offline models only, see [com.appricodes.lens_whisper.ui.models.OfflineVlmButtonProvider]) —

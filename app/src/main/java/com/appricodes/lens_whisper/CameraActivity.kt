@@ -50,6 +50,7 @@ import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.legal.LegalTexts
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.network.LocalServerFeature
+import com.appricodes.lens_whisper.offline.DualResCapture
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.SegmentationIsolation
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
@@ -159,13 +160,6 @@ private const val EXIT_CONFIRM_WINDOW_MS = 2000L
 // captureMaxResPair derives from the max-resolution original, matching CameraController's own
 // RESOLUTION_720P convention (every other segmentation-driven button already detects at this size).
 private const val SEGMENTATION_COPY_MAX_DIM = 1280
-
-/** What [captureMaxResPair] hands back: a 720p copy (for segmentation and, in
- *  [SegmentationExploreActivity]'s describe-mode, for display) plus the *file* the same capture was
- *  written to at full sensor resolution — a File, not a decoded Bitmap, so nothing here holds the
- *  ~35MB+ full decode in memory a moment longer than it takes to produce [lowResBitmap]; see
- *  [SegmentationIsolation]'s doc for why. */
-private data class DualResCapture(val lowResBitmap: Bitmap, val highResFile: File)
 
 private fun cameraFacingName(lensFacing: Int) =
     if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back"

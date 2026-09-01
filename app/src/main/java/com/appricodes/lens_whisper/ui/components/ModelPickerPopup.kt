@@ -39,8 +39,9 @@ fun ModelPickerPopup(
     selectedModelId: String,
     onModelSelected: (String) -> Unit,
     onOpenModelManager: () -> Unit,
-    /** MLKit only operates on a live camera feed — hidden on file-based screens (the Video/Image
-     *  describer) where it would have nothing to do. */
+    /** Hides the Basic Tasks entry — currently unused (Basic Tasks is offered everywhere, including
+     *  file-based screens, now that its buttons work from a loaded file/frame too), kept as an
+     *  escape hatch rather than removed outright. */
     showMlkitOption: Boolean = true
 ) {
     val context = LocalContext.current

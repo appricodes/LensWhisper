@@ -59,23 +59,36 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * that `detect` was their only consumer of; [OfflineColorDetector.namedDominantColors] in the same
  * file is still very much alive).
  *
- * [capturePhoto] is null when there's no live camera to capture from (e.g. if ever hosted on a
- * file-based screen) — in that case this provider renders an empty (all-null) grid rather than
- * offering buttons that can't do anything. Its `onShutter` parameter fires synchronously at the
- * exact moment the shutter sound does (see `CameraController.capturePhotoInternal`) — modes whose
- * next step needs a "waiting for the model" tone start it from there, not after `capturePhoto`
- * itself returns (which also waits out image readout/decode/scale/file-write). Its `highRes`
- * parameter asks for a sharper capture (1080p vs. the usual 720p) — only Read Text and Read
- * Document pass true, since OCR needs enough resolution for small glyphs to stay legible, where
- * every other mode here only needs enough detail for object/scene description.
+ * [capturePhoto] is null when there's no source to capture from at all — in that case this
+ * provider renders an empty (all-null) grid rather than offering buttons that can't do anything.
+ * Its `onShutter` parameter fires synchronously at the exact moment the shutter sound does (see
+ * `CameraController.capturePhotoInternal`) — modes whose next step needs a "waiting for the model"
+ * tone start it from there, not after `capturePhoto` itself returns (which also waits out image
+ * readout/decode/scale/file-write). On a file-based host (MediaDescriberScreen) there is no
+ * physical shutter, so `onShutter` there just fires as early as possible instead — see that
+ * screen's own capture lambda. Its `highRes` parameter asks for a sharper capture (1080p vs. the
+ * usual 720p) — only Read Text and Read Document pass true, since OCR needs enough resolution for
+ * small glyphs to stay legible, where every other mode here only needs enough detail for
+ * object/scene description; a file-based host has no separate higher-fidelity source to request,
+ * so it's free to ignore this flag and just use the file/frame's own resolution throughout.
+ *
+ * [hasLiveCamera] gates the two modes that only make sense against a live, continuously-exposed
+ * camera feed rather than one already-fixed image: Light Level Meter (needs a live analysis frame
+ * stream — see [onAnalysisFrame]) and Simple Color Detection (reads "the color in front of the
+ * camera right now"; redundant with Identify Objects and Colors once the source is a fixed file).
+ * Both render disabled, not omitted, when this is false — see [rows]. Every other button here
+ * (Detect Objects, Identify Objects and Colors, Explore Photo by Touch, Read Text, Read Document)
+ * needs nothing camera-specific beyond [capturePhoto] itself, so they work unchanged against
+ * whichever bitmap a file-based host's own `capturePhoto` hands back.
  */
 class MlkitButtonProvider(
     private val context: Context,
     private val coroutineScope: CoroutineScope,
-    private val capturePhoto: (suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap)?
+    private val capturePhoto: (suspend (maxDim: Int, highRes: Boolean, onShutter: () -> Unit) -> Bitmap)?,
+    private val hasLiveCamera: Boolean = true
 ) : ModelButtonProvider {
 
-    private enum class Mode { NONE, TEXT, LIGHT, SEGMENT, SEGMENT_COLOR }
+    private enum class Mode { NONE, TEXT, LIGHT, SEGMENT, SEGMENT_COLOR, SIMPLE_COLOR }
 
     private var activeMode by mutableStateOf(Mode.NONE)
     private var continuousEnabled by mutableStateOf(false)
@@ -84,10 +97,9 @@ class MlkitButtonProvider(
     // second one while it's still set, rather than letting two requests race each other.
     private var isBusy by mutableStateOf(false)
     private var lastTextText: String? = null
-    private var lastSegmentText: String? = null
-    private var lastSegmentColorText: String? = null
+    private var lastSimpleColorText: String? = null
     // The volume-key/on-screen "Repeat" action, for whichever single-shot mode last ran — set by
-    // selectSingleShot/launchSimpleColorDetection right when the user triggers them, and re-invoked
+    // selectSingleShot right when the user triggers it, and re-invoked
     // (not just re-spoken) by repeatLastAction so a "repeat" genuinely captures a fresh photo, the
     // same as every other mode's own capture, rather than re-describing a stale one. Left untouched
     // by selectContinuous/toggleLight/launchSegmentationExplore/launchReadDocument — a continuous
@@ -103,16 +115,18 @@ class MlkitButtonProvider(
     val onAnalysisFrame: ((Bitmap) -> Unit)?
         get() = if (activeMode == Mode.LIGHT) { frame -> OfflineLightDetector.detectAndPlayTone(context, frame) } else null
 
-    /** True while a repeating Objects/Text/Colour/Segment mode is polling. The host holds one
+    /** True while a repeating Text/Simple-Color mode is polling. The host holds one
      *  [com.appricodes.lens_whisper.ui.components.CameraController.withCaptureSession] open for as
      *  long as this is true — otherwise the loop would open and close the camera every couple of
      *  seconds, which is both slower and worse for the battery than simply keeping it open for the
      *  duration of a mode the user explicitly started. Explore is excluded — it leaves this screen
      *  for a new activity, and "keep re-opening a full-screen view every few seconds" isn't a mode
-     *  that makes sense for it. */
+     *  that makes sense for it. Detect Objects/Identify Objects and Colors are excluded too — the
+     *  underlying YOLOv8-seg detector is heavy enough that polling it every few seconds isn't a good
+     *  experience, so their long-press no longer starts continuous mode at all (see [rows]; only a
+     *  single-shot capture remains for [Mode.SEGMENT]/[Mode.SEGMENT_COLOR]). */
     val isContinuousActive: Boolean
-        get() = continuousEnabled &&
-            (activeMode == Mode.TEXT || activeMode == Mode.SEGMENT || activeMode == Mode.SEGMENT_COLOR)
+        get() = continuousEnabled && (activeMode == Mode.TEXT || activeMode == Mode.SIMPLE_COLOR)
 
     /** Call from the host's back-press/stop handling to leave any active mode. Returns true if
      *  a mode was actually active (so the caller can decide whether Back should also exit). */
@@ -201,19 +215,28 @@ class MlkitButtonProvider(
                     if (continuousEnabled) speakIfChanged(lastTextText, text) { lastTextText = it }
                     else { speak(text); lastTextText = text }
                 }
+                // Single-shot only — SEGMENT/SEGMENT_COLOR's long-press no longer starts continuous
+                // mode (see isContinuousActive's doc), so continuousEnabled is always false by the
+                // time either of these runs; nothing here needs the speakIfChanged dedup path.
                 Mode.SEGMENT -> {
                     val text = summarizeInstances(context, bitmap, withColors = false)
                     // Stop the tone the instant there's something to say, not after — otherwise a
                     // tone dispatched a moment earlier can land right on top of the announcement.
                     toneJob?.cancel()
-                    if (continuousEnabled) speakIfChanged(lastSegmentText, text) { lastSegmentText = it }
-                    else { speak(text); lastSegmentText = text }
+                    speak(text)
                 }
                 Mode.SEGMENT_COLOR -> {
                     val text = summarizeInstances(context, bitmap, withColors = true)
                     toneJob?.cancel()
-                    if (continuousEnabled) speakIfChanged(lastSegmentColorText, text) { lastSegmentColorText = it }
-                    else { speak(text); lastSegmentColorText = text }
+                    speak(text)
+                }
+                Mode.SIMPLE_COLOR -> {
+                    val colors = withContext(Dispatchers.Default) {
+                        OfflineColorDetector.namedDominantColors(centerCrop(bitmap, SIMPLE_COLOR_CROP_SIZE), k = 2)
+                    }
+                    val text = if (colors.isEmpty()) "Could not detect a color." else colors.joinToString(" and ")
+                    if (continuousEnabled) speakIfChanged(lastSimpleColorText, text) { lastSimpleColorText = it }
+                    else { speak(text); lastSimpleColorText = text }
                 }
                 else -> {}
             }
@@ -339,43 +362,14 @@ class MlkitButtonProvider(
         }
     }
 
-    /**
-     * "Simple Color Detection": a plain, non-segmentation color reading — captures a photo at the
-     * usual 720p, crops a fixed 50x50-pixel square from its exact center, and announces the crop's
-     * top 2 colors via [OfflineColorDetector.namedDominantColors] (the same Palette-based ranking
-     * "Identify Objects and Colors" uses, just over a plain rectangular center crop instead of a
-     * detected instance's own mask). No detector run at all, unlike every other color-aware button
-     * on this grid — this one is deliberately just "what color is the middle of the frame".
-     */
-    private fun launchSimpleColorDetection() {
-        lastRepeatableAction = { launchSimpleColorDetection() }
-        if (isBusy) {
-            announceBusy()
-            return
-        }
-        val capture = capturePhoto ?: return
-        isBusy = true
-        ProcessingSoundPlayer.playCaptureAcknowledge(context)
-        coroutineScope.launch {
-            try {
-                val bitmap = try {
-                    capture(MAX_CAPTURE_DIMENSION, false) {}
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
-                    return@launch
-                }
-                val colors = withContext(Dispatchers.Default) {
-                    OfflineColorDetector.namedDominantColors(centerCrop(bitmap, SIMPLE_COLOR_CROP_SIZE), k = 2)
-                }
-                speak(if (colors.isEmpty()) "Could not detect a color." else colors.joinToString(" and "))
-            } finally {
-                isBusy = false
-            }
-        }
-    }
-
+    /** "Simple Color Detection"'s crop step: a plain, non-segmentation color reading — a fixed
+     *  50x50-pixel square from the captured frame's exact center, named via
+     *  [OfflineColorDetector.namedDominantColors] (the same Palette-based ranking "Identify Objects
+     *  and Colors" uses, just over a plain rectangular center crop instead of a detected instance's
+     *  own mask). No detector run at all, unlike every other color-aware button on this grid — this
+     *  one is deliberately just "what color is the middle of the frame" — see [Mode.SIMPLE_COLOR]'s
+     *  branch in [captureAndRun], which now owns the capture/busy/continuous handling this used to
+     *  do on its own, the same as every other mode here. */
     private fun centerCrop(bitmap: Bitmap, size: Int): Bitmap {
         val w = size.coerceAtMost(bitmap.width)
         val h = size.coerceAtMost(bitmap.height)
@@ -427,24 +421,22 @@ class MlkitButtonProvider(
             listOf(
                 GridCell(
                     label = "Detect Objects",
-                    contentDescription = "Detect Objects. Names the objects in view, using a dedicated on-device detector. Tap for a single photo, hold to keep watching continuously.",
-                    onClick = { selectSingleShot(Mode.SEGMENT, ctx.prefs) },
-                    onLongClick = { selectContinuous(Mode.SEGMENT) }
+                    contentDescription = "Detect Objects. Names the objects in view, using a dedicated on-device detector.",
+                    onClick = { selectSingleShot(Mode.SEGMENT, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Identify Objects and Colors",
-                    contentDescription = "Detect objects and each one's main colors. Tap for a single photo, hold to keep watching continuously.",
-                    onClick = { selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) },
-                    onLongClick = { selectContinuous(Mode.SEGMENT_COLOR) }
+                    contentDescription = "Detect objects and each one's main colors.",
+                    onClick = { selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Explore Photo by Touch",
-                    contentDescription = "Explore a photo by touch. Detects objects and their colors, then opens a full-screen view — move your finger over the picture to hear what's under it, or tap once for more options.",
+                    contentDescription = "Explore by touch. Detects objects and their colors, then opens a full-screen view — move your finger over the picture to hear what's under it, or tap once for more options.",
                     onClick = { launchSegmentationExplore() }
                 ),
                 GridCell(
                     label = "Read Text",
-                    contentDescription = "Read text in view. Tap for a single photo, hold to keep watching continuously.",
+                    contentDescription = "Read text in view. Tap to analyze once, hold to keep watching continuously.",
                     onClick = { selectSingleShot(Mode.TEXT, ctx.prefs) },
                     onLongClick = { selectContinuous(Mode.TEXT) }
                 )
@@ -452,18 +444,29 @@ class MlkitButtonProvider(
             listOf(
                 GridCell(
                     label = "Read Document",
-                    contentDescription = "Read a document by touch. Opens a full-screen view of a photo — move your finger over a paragraph to hear it read aloud, or tap once for more options.",
+                    contentDescription = "Read a document by touch. Opens a full-screen view — move your finger over a paragraph to hear it read aloud, or tap once for more options.",
                     onClick = { launchReadDocument() }
                 ),
                 GridCell(
                     label = "Light Level Meter",
-                    contentDescription = if (isLightActive) "Light level meter is on. Double tap to stop." else "Light level meter. Double tap to hear tones matching the brightness in front of the camera.",
+                    contentDescription = when {
+                        !hasLiveCamera -> "Light level meter. Not available here — needs a live camera."
+                        isLightActive -> "Light level meter is on. Double tap to stop."
+                        else -> "Light level meter. Double tap to hear tones matching the brightness in front of the camera."
+                    },
+                    enabled = hasLiveCamera,
                     onClick = { toggleLight() }
                 ),
                 GridCell(
                     label = "Simple Color Detection",
-                    contentDescription = "Simple color detection. Captures a photo and announces the two main colors at the center of the frame.",
-                    onClick = { launchSimpleColorDetection() }
+                    contentDescription = if (hasLiveCamera) {
+                        "Simple color detection. Announces the two main colors at the center of the frame. Tap to analyze once, hold to keep watching continuously."
+                    } else {
+                        "Simple color detection. Not available here — needs a live camera."
+                    },
+                    enabled = hasLiveCamera,
+                    onClick = { selectSingleShot(Mode.SIMPLE_COLOR, ctx.prefs) },
+                    onLongClick = if (hasLiveCamera) { { selectContinuous(Mode.SIMPLE_COLOR) } } else null
                 ),
                 null
             ),
