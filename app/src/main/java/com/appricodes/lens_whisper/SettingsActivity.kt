@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
@@ -104,6 +106,47 @@ private enum class HeadsetShortcutAction(val label: String) {
 	MIC("Get a Question from the Microphone")
 }
 
+/** A named, collapsible group of related settings — closed by default, introduced 2026-09-02
+ *  specifically to shorten [SettingsScreen]'s default scroll length on first open; the individual
+ *  items inside a group are otherwise unchanged (same controls, same behavior, same
+ *  contentDescriptions). Not persisted across a screen re-open on purpose, to keep this a pure UI
+ *  convenience rather than a new SharedPreferences key — every group starts collapsed each time.
+ *
+ *  The header row is its own single accessibility node via `clearAndSetSemantics` (matching every
+ *  other clickable row's contentDescription convention in this file) announcing the group's name,
+ *  current expanded/collapsed state, and which double-tap it needs next — deliberately *not*
+ *  [androidx.compose.ui.semantics.heading] the way the plain category-title `Text`s elsewhere on
+ *  this screen are marked, since unlike those, this row really is interactive. */
+@Composable
+private fun CollapsibleSection(
+	title: String,
+	expanded: Boolean,
+	onToggle: () -> Unit,
+	content: @Composable ColumnScope.() -> Unit
+) {
+	Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
+		Row(
+			modifier = Modifier
+				.fillMaxWidth()
+				.clickable(onClick = onToggle)
+				.padding(vertical = 4.dp)
+				.clearAndSetSemantics {
+					val state = if (expanded) "expanded" else "collapsed"
+					val action = if (expanded) "collapse" else "expand"
+					contentDescription = "$title section, $state. Double tap to $action."
+				},
+			horizontalArrangement = Arrangement.SpaceBetween,
+			verticalAlignment = Alignment.CenterVertically
+		) {
+			Text(text = title, fontSize = 20.sp, style = MaterialTheme.typography.titleMedium)
+			Text(text = if (expanded) "▲" else "▼", fontSize = 16.sp, color = Color.Gray)
+		}
+		if (expanded) {
+			Column(verticalArrangement = Arrangement.spacedBy(28.dp), content = content)
+		}
+	}
+}
+
 @Composable
 fun SettingsScreen(
 	prefs: PreferencesManager,
@@ -144,6 +187,11 @@ fun SettingsScreen(
 
 	var reasoningEffort by remember { mutableStateOf(prefs.reasoningEffort) }
 	var reasoningEffortDropdownExpanded by remember { mutableStateOf(false) }
+
+	// Collapsible-group state (see CollapsibleSection's own doc) — every group starts closed.
+	var aiNarrationSectionExpanded by remember { mutableStateOf(false) }
+	var feedbackSoundSectionExpanded by remember { mutableStateOf(false) }
+	var localServerSectionExpanded by remember { mutableStateOf(false) }
 
 	// Everything below lives in its own sub-window (see showHeadsetShortcutsDialog / the
 	// HeadsetShortcutsDialog composable at the end of this file) rather than inline here, so this
@@ -221,15 +269,25 @@ fun SettingsScreen(
 			horizontalArrangement = Arrangement.SpaceBetween,
 			verticalAlignment = Alignment.CenterVertically
 		) {
-			Text(text = "Configuration", fontSize = 26.sp, style = MaterialTheme.typography.titleLarge)
+			Text(
+				text = "Configuration",
+				fontSize = 26.sp,
+				style = MaterialTheme.typography.titleLarge,
+				modifier = Modifier.semantics { heading() }
+			)
 			TextButton(
 				onClick = onBack,
 				modifier = Modifier.clearAndSetSemantics { contentDescription = "Close settings and return to layout panel." }
 			) { Text("Close", fontSize = 18.sp) }
 		}
 
+		CollapsibleSection(
+			title = "AI & Narration",
+			expanded = aiNarrationSectionExpanded,
+			onToggle = { aiNarrationSectionExpanded = !aiNarrationSectionExpanded }
+		) {
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Narration Language Profile", fontSize = 18.sp, color = Color.Gray)
+			Text(text = "Narration Language Profile", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 			Box(
 				modifier = Modifier
 					.fillMaxWidth()
@@ -282,7 +340,7 @@ fun SettingsScreen(
 		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Narration Persona / Style Mode", fontSize = 18.sp, color = Color.Gray)
+			Text(text = "Narration Persona / Style Mode", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 			Box(
 				modifier = Modifier
 					.fillMaxWidth()
@@ -306,7 +364,7 @@ fun SettingsScreen(
 		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Offline OCR Language", fontSize = 18.sp, color = Color.Gray)
+			Text(text = "Offline OCR Language", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 			Box(
 				modifier = Modifier
 					.fillMaxWidth()
@@ -334,7 +392,7 @@ fun SettingsScreen(
 		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Reasoning Effort (Gemma models only)", fontSize = 18.sp, color = Color.Gray)
+			Text(text = "Reasoning Effort (Gemma models only)", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 			Box(
 				modifier = Modifier
 					.fillMaxWidth()
@@ -364,7 +422,13 @@ fun SettingsScreen(
 				color = Color.Gray
 			)
 		}
+		} // end AI & Narration CollapsibleSection
 
+		CollapsibleSection(
+			title = "Feedback & Sound",
+			expanded = feedbackSoundSectionExpanded,
+			onToggle = { feedbackSoundSectionExpanded = !feedbackSoundSectionExpanded }
+		) {
 		Row(
 			modifier = Modifier
 				.fillMaxWidth()
@@ -430,25 +494,37 @@ fun SettingsScreen(
 				sharedPrefs.edit().putBoolean("vibration_enabled", targetState).apply()
 			})
 		}
+		} // end Feedback & Sound CollapsibleSection
 
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+		val headsetSummary = when {
+			headsetRepeatKeyCode == NO_HEADSET_KEY_CODE && headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Not set up"
+			headsetRepeatKeyCode == NO_HEADSET_KEY_CODE -> "Microphone button set"
+			headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Repeat button set"
+			else -> "Both buttons set"
+		}
+		// One accessibility node for the whole row (clickable + clearAndSetSemantics on the outer
+		// Column, not the inner Box) rather than the separate-heading-Text-plus-clickable-Box shape
+		// every other row on this screen uses — that shape exists so a plain value ("English", "Not
+		// set") doesn't get spoken with no idea what it's the value *of*. This row's summary already
+		// names itself ("Headset Button Shortcuts. Not set up. ..."), so a separate heading above it
+		// would only double-announce the same title — confirmed while making the group headers above
+		// single focus stops (see CollapsibleSection) and finding this row was the odd one out.
+		Column(
+			modifier = Modifier
+				.fillMaxWidth()
+				.clickable { showHeadsetShortcutsDialog = true }
+				.clearAndSetSemantics {
+					contentDescription = "Headset Button Shortcuts. $headsetSummary. Double tap to open. Bind a wired or " +
+						"Bluetooth headset button to repeat the last prompt, or to ask a question by voice."
+				},
+			verticalArrangement = Arrangement.spacedBy(8.dp)
+		) {
 			Text(text = "Headset Button Shortcuts", fontSize = 18.sp, color = Color.Gray)
-			val headsetSummary = when {
-				headsetRepeatKeyCode == NO_HEADSET_KEY_CODE && headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Not set up"
-				headsetRepeatKeyCode == NO_HEADSET_KEY_CODE -> "Microphone button set"
-				headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Repeat button set"
-				else -> "Both buttons set"
-			}
 			Box(
 				modifier = Modifier
 					.fillMaxWidth()
 					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { showHeadsetShortcutsDialog = true }
-					.padding(16.dp)
-					.clearAndSetSemantics {
-						contentDescription = "Headset Button Shortcuts. $headsetSummary. Double tap to open. Bind a wired or " +
-							"Bluetooth headset button to repeat the last prompt, or to ask a question by voice."
-					},
+					.padding(16.dp),
 				contentAlignment = Alignment.CenterStart
 			) {
 				Text(text = headsetSummary, fontSize = 18.sp)
@@ -457,8 +533,13 @@ fun SettingsScreen(
 
 		if (LocalServerFeature.ENABLED) {
 			// Hidden while the LAN feature is switched off - there is nothing to point these at.
+			CollapsibleSection(
+				title = "Local Server",
+				expanded = localServerSectionExpanded,
+				onToggle = { localServerSectionExpanded = !localServerSectionExpanded }
+			) {
 			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-				Text(text = "Local Server Address", fontSize = 18.sp, color = Color.Gray)
+				Text(text = "Local Server Address", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 				Box(
 					modifier = Modifier
 						.fillMaxWidth()
@@ -499,7 +580,7 @@ fun SettingsScreen(
 			}
 
 			Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-				Text(text = "Local Server Password", fontSize = 18.sp, color = Color.Gray)
+				Text(text = "Local Server Password", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 				Box(
 					modifier = Modifier
 						.fillMaxWidth()
@@ -523,6 +604,7 @@ fun SettingsScreen(
 					color = Color.Gray
 				)
 			}
+			} // end Local Server CollapsibleSection
 		}
 	}
 
@@ -678,7 +760,12 @@ private fun HeadsetShortcutsDialog(
 					horizontalArrangement = Arrangement.SpaceBetween,
 					verticalAlignment = Alignment.CenterVertically
 				) {
-					Text(text = "Headset Button Shortcuts", fontSize = 20.sp, style = MaterialTheme.typography.titleMedium)
+					Text(
+						text = "Headset Button Shortcuts",
+						fontSize = 20.sp,
+						style = MaterialTheme.typography.titleMedium,
+						modifier = Modifier.semantics { heading() }
+					)
 					TextButton(
 						onClick = onDismiss,
 						modifier = Modifier.clearAndSetSemantics { contentDescription = "Close Headset Button Shortcuts." }
