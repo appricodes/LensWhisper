@@ -23,6 +23,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -178,6 +179,18 @@ object OfflineInferenceEngine {
 
         val modelFile = OfflineModelsRepository(context.applicationContext).localFileFor(model)
 
+        // If the abandoned load eventually does finish, nothing is using it — close it right away
+        // instead of leaking it (and its native/GPU memory, easily 1-3GB+) for the rest of the
+        // process's life. Shared by both ways a load can be abandoned below: this function's own
+        // timeout, and the caller being cancelled out from under it (e.g. a Composable's
+        // LaunchedEffect(selectedModelId) whose key changed because the user switched models
+        // again before the previous one finished loading) — confirmed on-device that repeating
+        // "pick a big model, switch away before it loads" orphans one fully-loaded engine per
+        // cycle, compounding to an OOM crash after a few repeats.
+        fun abandonLoad(loadJob: kotlinx.coroutines.Deferred<Engine>) {
+            loadJob.invokeOnCompletion { cause -> if (cause == null) runCatching { loadJob.getCompleted().close() } }
+        }
+
         suspend fun attemptLoad(useCpuVision: Boolean): Engine {
             val engineConfig = EngineConfig(
                 modelPath = modelFile.absolutePath,
@@ -190,17 +203,28 @@ object OfflineInferenceEngine {
                 engine.initialize()
                 engine
             }
-            return withTimeoutOrNull(LOAD_TIMEOUT_MS) { loadJob.await() }
-                ?: run {
-                    Log.w(TAG, "Loading ${model.id} exceeded ${LOAD_TIMEOUT_MS}ms — likely a low-memory thrash, giving up")
-                    // If the abandoned load eventually does finish, nothing is using it — close it
-                    // right away instead of leaking it for the rest of the process's life.
-                    loadJob.invokeOnCompletion { cause -> if (cause == null) runCatching { loadJob.getCompleted().close() } }
-                    val message = "Loading ${model.displayName} is taking much longer than usual — your device " +
-                        "likely doesn't have enough free memory for this model. Try a smaller model."
-                    _loadState.value = LoadState.Failed(model.id, message)
-                    throw IllegalStateException(message)
-                }
+            try {
+                return withTimeoutOrNull(LOAD_TIMEOUT_MS) { loadJob.await() }
+                    ?: run {
+                        Log.w(TAG, "Loading ${model.id} exceeded ${LOAD_TIMEOUT_MS}ms — likely a low-memory thrash, giving up")
+                        abandonLoad(loadJob)
+                        val message = "Loading ${model.displayName} is taking much longer than usual — your device " +
+                            "likely doesn't have enough free memory for this model. Try a smaller model."
+                        _loadState.value = LoadState.Failed(model.id, message)
+                        throw IllegalStateException(message)
+                    }
+            } catch (e: CancellationException) {
+                // withTimeoutOrNull only swallows *its own* timeout into a null return — a
+                // cancellation of this coroutine's caller propagates straight through it as a
+                // thrown CancellationException instead, leaving loadJob (on engineScope,
+                // deliberately detached from the caller — see this object's class doc) still
+                // running with nothing left to close it once it finishes. Same leak, different
+                // trigger, same fix.
+                Log.w(TAG, "Loading ${model.id} was cancelled by its caller — abandoning the in-flight load")
+                abandonLoad(loadJob)
+                _loadState.value = LoadState.Idle
+                throw e
+            }
         }
 
         // GPU is tried first for every model on every device — a per-(model, device) preference
@@ -596,8 +620,25 @@ object OfflineInferenceEngine {
         }
     }.flowOn(Dispatchers.IO)
 
-    /** Releases the loaded model's resources, e.g. when the user picks a different one. */
+    /** Releases the loaded model's resources — e.g. when the app backgrounds
+     *  ([registerMemoryPressureMonitor]) or the user switches to "mlkit"/Local Server, neither of
+     *  which needs an on-device engine resident. Not itself suspending (so it can be called from
+     *  the non-suspend [onTrimMemory] callback below); fire-and-forget onto [engineScope]/[mutex]
+     *  instead — a caller that can suspend and needs the close to have actually finished before it
+     *  proceeds should call [releaseSuspending] directly rather than this. */
     fun release() {
+        engineScope.launch { releaseSuspending() }
+    }
+
+    /** Suspending counterpart to [release], doing the identical mutex-protected work — the two
+     *  never race each other, since both take [mutex] like every other access to [loadedEngine]
+     *  (unsynchronized `close()` here, concurrent with [ensureEngine] assigning a freshly-loaded
+     *  engine to that same field, is a real native use-after-close race, not just a theoretical
+     *  one). Prefer this over [release] whenever the caller is already in a coroutine that can
+     *  await it — e.g. a Composable's `LaunchedEffect` switching away from an on-device model,
+     *  which needs the close to have genuinely completed before the effect finishes, not just
+     *  dispatched. */
+    suspend fun releaseSuspending() = mutex.withLock {
         loadedEngine?.close()
         loadedEngine = null
         loadedModelId = null

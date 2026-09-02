@@ -69,66 +69,117 @@ data class CapturedBundle(
  * completing two matching whole sentences) or drift into slightly different wrapper phrasing
  * around the same repeated core each time.
  *
- * The signal used instead: normalize the text so far (every non-letter/digit character collapses
- * to a single space — [normalizeForLoopDetection] — so punctuation/spacing differences never
- * matter), then check whether it *ends* with two adjacent, identical runs of at least
- * [LOOP_MIN_REPEAT_LEN] characters — i.e. the model just said the same chunk twice in a row,
- * whatever that chunk actually was. Checked on every streamed delta (not just at a sentence
+ * The signal: does the response so far *end* with two adjacent, identical runs of at least
+ * [LOOP_MIN_REPEAT_WORDS] whole words — i.e. did the model just say the same phrase twice in a
+ * row, whatever that phrase actually was. Checked on every streamed delta (not just at a sentence
  * terminator), so a loop is caught mid-sentence rather than only once/if it happens to complete
  * another whole matching sentence.
- */
-private const val LOOP_MIN_REPEAT_LEN = 10
-
-// Only the last this-many characters of the response are ever normalized/checked — a live loop
-// always shows up at the tail, and bounding the input keeps hasTrailingRepeat's cost small and
-// constant, no matter how long the response has grown by the time it fires. Kept short
-// deliberately: this check runs on every streamed delta, on the same coroutine that's driving the
-// model's own token generation, so its cost is directly added latency, not background work.
-private const val LOOP_LOOKBACK_CHARS = 200
-
-/** Collapses every run of one-or-more characters that aren't a Unicode letter or digit down to a
- *  single space (so "cat," "cat.", "cat\n\n" and "cat  " all normalize the same way), trimmed —
- *  Unicode-aware, so this works the same for Persian/CJK text as for Latin. Keeps single spaces
- *  between words (unlike a plain "strip everything non-alphanumeric") specifically so
- *  [trailingRepeatRegex] is comparing whole words, not letters run together across what used to be
- *  a word boundary. */
-private fun normalizeForLoopDetection(s: String): String {
-    val sb = StringBuilder(s.length)
-    var lastWasSpace = false
-    for (c in s) {
-        if (c.isLetterOrDigit()) {
-            sb.append(c)
-            lastWasSpace = false
-        } else if (!lastWasSpace) {
-            sb.append(' ')
-            lastWasSpace = true
-        }
-    }
-    return sb.toString().trim()
-}
-
-/** True once [fullText] (the whole response streamed so far) ends in a duplicated run — see this
- *  section's doc. Only the tail ([LOOP_LOOKBACK_CHARS]) is ever normalized/checked.
  *
- *  Deliberately a plain length-by-length scan rather than a backreference regex
- *  (`(.{10,}?)\1$`, tried first): a backtracking engine re-tries every start position for every
- *  candidate length, which is worse than quadratic in the tail length — and this runs on every
- *  streamed delta, on the same coroutine driving the model's own generation, so its cost is
- *  latency the user waits through. This scan is a bounded O(n²) of cheap, short-circuiting
- *  [String.regionMatches] calls instead: for each candidate repeat length starting at
- *  [LOOP_MIN_REPEAT_LEN], compare the last `length` characters against the `length` characters
- *  immediately before them. Stops at the first (shortest) match, same as the regex's non-greedy
- *  behavior did — a loop is typically a short phrase, not a long passage. */
-private fun hasTrailingRepeat(fullText: StringBuilder): Boolean {
-    val start = (fullText.length - LOOP_LOOKBACK_CHARS).coerceAtLeast(0)
-    val tail = normalizeForLoopDetection(fullText.substring(start))
-    val n = tail.length
-    var length = LOOP_MIN_REPEAT_LEN
-    while (length * 2 <= n) {
-        if (tail.regionMatches(n - 2 * length, tail, n - length, length)) return true
-        length++
+ * Operates on a rolling `IntArray` of per-word CRC32 hashes ([WordRepeatTracker]) rather than
+ * re-scanning the response's raw characters on every delta (an earlier version of this did
+ * exactly that, first via a backtracking regex, then via a bounded character-range scan — see git
+ * history) — comparing `Int`s is cheaper than comparing character ranges, each word is hashed
+ * exactly once no matter how many later deltas re-check the tail, and bounding the window by word
+ * *count* rather than character count sidesteps a character-window's fixed ceiling on the longest
+ * single repeated unit it can ever catch. That ceiling is exactly what shipped 2026-09-02 and
+ * failed: a 4000-character window (2000-character max repeated unit) still wasn't enough for a
+ * repeated chunk one on-device test turned out to produce. This replaces that window entirely, not
+ * adds to it — see [LOOP_MAX_TRACKED_WORDS]'s own doc for why a word-count window sized well under
+ * that failed one's raw character reach is still correct: it's set from this app's actual on-device
+ * models' real output lengths, confirmed always well under the cap, rather than from
+ * `MAX_OUTPUT_TOKENS`'s theoretical worst case.
+ */
+private const val LOOP_MIN_REPEAT_WORDS = 3
+
+// Hard cap on how many trailing words WordRepeatTracker ever keeps — same "only the tail matters,
+// bound the cost" reasoning the old character window used, just counted in words instead of
+// characters. Also caps the longest single repeated unit catchable at half this value (200 words)
+// the same way the old window did at half its own size. 400 rather than a larger number gone by
+// the raw MAX_OUTPUT_TOKENS math (800 tokens, worst case ~600 words): confirmed on-device that
+// this app's actual on-device models never produce a response anywhere near that in practice
+// (well under 400 words), so a 400-word window can't be the limiting factor the way the earlier
+// 4000-character one turned out to be, without paying for headroom nothing here will ever use. If
+// a future model's real output regularly runs longer, revisit this against its actual word counts,
+// not the token cap alone. Cost stays cheap at this size (~20,000 Int comparisons worst case per
+// call that actually completes a word - see [WordRepeatTracker.feed]'s early-exit for calls that
+// don't).
+private const val LOOP_MAX_TRACKED_WORDS = 400
+
+/**
+ * Tracks the CRC32 hash of every completed word in a streaming response (a "word" being a maximal
+ * run of Unicode letters/digits, matching how [findSentenceEnd]'s siblings define token
+ * boundaries elsewhere) in a fixed-size [IntArray] ring buffer, and answers whether the trailing
+ * words repeat — the word-level replacement for the character-window scan described in the
+ * loop-detection section's own doc.
+ *
+ * One instance per [AnalysisSessionController.runStreamingAnalysis] call (local, not a shared
+ * field) — it holds real per-response state that must never leak between one analysis and the
+ * next.
+ *
+ * [feed] must see every character of every delta, in order, exactly once — a delta has no
+ * obligation to end on a word boundary (a streamed chunk can split a word in half), so
+ * [partialWord] carries whatever's accumulated so far across calls until either a non-letter/digit
+ * character terminates it or the response ends.
+ */
+private class WordRepeatTracker {
+    private val hashes = IntArray(LOOP_MAX_TRACKED_WORDS)
+    private var size = 0 // valid entries so far; grows to hashes.size, then stays there
+    private var head = 0 // physical index of the oldest entry, once size == hashes.size
+    private val partialWord = StringBuilder()
+    private val crc32 = java.util.zip.CRC32()
+
+    /** [logicalIndex] 0 = oldest tracked word, [size] - 1 = newest — maps onto [hashes]' actual
+     *  ring-buffer layout. */
+    private operator fun get(logicalIndex: Int): Int = hashes[(head + logicalIndex) % hashes.size]
+
+    private fun pushWord(word: String) {
+        if (word.isEmpty()) return
+        crc32.reset()
+        crc32.update(word.toByteArray(Charsets.UTF_8))
+        // CRC32 is a 32-bit checksum, not a cryptographic hash - two different words could in
+        // principle collide. Immaterial here: even a stray single-word collision only matters if
+        // every word across an entire LOOP_MIN_REPEAT_WORDS-long run collides the same way, which
+        // is astronomically less likely than any individual collision, and a hash-based approach
+        // over hundreds of ordinary spoken words has no adversary trying to engineer one anyway.
+        hashes[(head + size) % hashes.size] = crc32.value.toInt()
+        if (size < hashes.size) size++ else head = (head + 1) % hashes.size
     }
-    return false
+
+    /** Feeds one streamed delta's characters into the tracker, completing whatever word(s) it
+     *  finishes, and returns whether the hash array now ends with two adjacent, identical runs of
+     *  at least [LOOP_MIN_REPEAT_WORDS] words. Skips the scan entirely (returning `false`) when
+     *  this delta didn't complete any word — most streamed deltas are sub-word fragments, and the
+     *  scan's answer can only change on a call that actually adds a new hash. Otherwise a plain
+     *  length-by-length scan, same shape as the character-window version this replaced: for each
+     *  candidate repeat length starting at [LOOP_MIN_REPEAT_WORDS], compare the last `length`
+     *  word-hashes against the `length` word-hashes immediately before them; stop at the first
+     *  (shortest) match. */
+    fun feed(delta: String): Boolean {
+        var pushedAny = false
+        for (c in delta) {
+            if (c.isLetterOrDigit()) {
+                partialWord.append(c)
+            } else if (partialWord.isNotEmpty()) {
+                pushWord(partialWord.toString())
+                partialWord.clear()
+                pushedAny = true
+            }
+        }
+        if (!pushedAny) return false
+        var length = LOOP_MIN_REPEAT_WORDS
+        while (length * 2 <= size) {
+            var allMatch = true
+            for (i in 0 until length) {
+                if (this[size - 2 * length + i] != this[size - length + i]) {
+                    allMatch = false
+                    break
+                }
+            }
+            if (allMatch) return true
+            length++
+        }
+        return false
+    }
 }
 
 /** Index of the first sentence-terminating character in [sb] that's actually a sentence boundary —
@@ -348,6 +399,22 @@ class AnalysisSessionController(
         AccessibilityUtils.announceToTalkBack(context, "Stopped.")
     }
 
+    /** Cancels any in-flight analysis and *waits* for its teardown to actually finish — the same
+     *  `cancelAndJoin` (not [stopAnalysis]'s bare `cancel`) reasoning as [launchAnalysis]'s own
+     *  `previous?.cancelAndJoin()`: a caller about to touch the shared
+     *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] itself right after (switching
+     *  the selected model, which preloads a different engine or releases the current one) needs the
+     *  old `Conversation` fully torn down first, or that close can race a generation that's still
+     *  using it. Confirmed on-device: switching models mid-inference used to leave the old
+     *  generation running until it failed on the now-closed engine several seconds later, surfacing
+     *  as a delayed "Error occurred" dialog instead of stopping right away. Silent on purpose (no
+     *  chime-stop call, no announcement) — [launchAnalysis]'s own `finally` already runs as part of
+     *  the join and handles both, and a model switch the user just performed doesn't need a
+     *  "Stopped." announcement on top of it. */
+    suspend fun cancelActiveAnalysisAndJoin() {
+        activeAnalysisJob?.cancelAndJoin()
+    }
+
     private fun launchAnalysis(body: suspend () -> Unit) {
         val previous = activeAnalysisJob
         activeAnalysisJob = coroutineScope.launch {
@@ -489,6 +556,7 @@ class AnalysisSessionController(
     private suspend fun runStreamingAnalysis(flow: Flow<String>, translate: Boolean) {
         val fullText = StringBuilder()
         val pending = StringBuilder()
+        val wordRepeatTracker = WordRepeatTracker()
 
         suspend fun speak(sentence: String) {
             val trimmed = sentence.trim()
@@ -504,12 +572,12 @@ class AnalysisSessionController(
                 // stays true until the last token, not just until the first one.
                 fullText.append(delta)
                 pending.append(delta)
-                // Checked on every delta, not just at a sentence boundary — see hasTrailingRepeat's
+                // Checked on every delta, not just at a sentence boundary — see WordRepeatTracker's
                 // doc for why. Throwing LoopDetected here unwinds out of flow.collect and — because
                 // that's the same coroutine actually driving OfflineInferenceEngine's token
                 // generation — genuinely stops the model from generating further tokens, not just
                 // stops this function from speaking them.
-                if (hasTrailingRepeat(fullText)) throw LoopDetected()
+                if (wordRepeatTracker.feed(delta)) throw LoopDetected()
                 var end = findSentenceEnd(pending)
                 while (end != -1) {
                     val sentence = pending.substring(0, end + 1)
@@ -538,7 +606,7 @@ class AnalysisSessionController(
 
     /**
      * Thrown from inside [runStreamingAnalysis]'s `flow.collect` to unwind out of it the moment
-     * [hasTrailingRepeat] fires — see that function's doc and the loop-detection section above it.
+     * [WordRepeatTracker.feed] fires — see that class's doc and the loop-detection section above it.
      *
      * A [CancellationException] subtype *on purpose* — the same early-unwind technique
      * `kotlinx.coroutines.flow`'s own `take()` operator uses internally (its private

@@ -499,10 +499,23 @@ fun MediaDescriberScreen(
     // ensureEngine() is a quick no-op if it's already loaded, so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
     // announcement. Not applicable to "mlkit" (Basic Tasks needs no in-memory model) or the Local
-    // Server (nothing here to preload — it runs on a separate machine).
+    // Server (nothing here to preload — it runs on a separate machine) — switching to either now
+    // releases whatever on-device engine was loaded, see CameraActivity's identical LaunchedEffect
+    // for why (OfflineInferenceEngine.release's doc has the on-device-confirmed OOM story).
+    //
+    // stopProcessingChime() first, synchronously, then cancelActiveAnalysisAndJoin() — see
+    // CameraActivity's identical LaunchedEffect for why both, and in that order: the waiting tone
+    // must not keep looping through however long the join takes, and an analysis still using the
+    // *current* engine has to be fully torn down before either branch below touches that engine, or
+    // the in-flight generation gets closed out from under it instead of stopping cleanly.
+    // releaseSuspending() (not release()) for the same reason — awaited here, not fire-and-forget.
     LaunchedEffect(selectedModelId) {
+        controller.stopProcessingChime()
+        controller.cancelActiveAnalysisAndJoin()
         if (selectedModelId != "mlkit" && selectedModelId != LocalServerFeature.MODEL_ID) {
             offlineModels.find { it.id == selectedModelId }?.let { OfflineInferenceEngine.preload(context, it) }
+        } else {
+            OfflineInferenceEngine.releaseSuspending()
         }
     }
 }

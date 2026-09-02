@@ -648,10 +648,32 @@ private fun CameraScreen(
     // ensureEngine() is a quick no-op if it's already loaded, so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
     // announcement. Not applicable to "mlkit" (Basic Models needs no in-memory model) or the Local
-    // Server (nothing here to preload — it runs on a separate machine).
+    // Server (nothing here to preload — it runs on a separate machine) — switching to either now
+    // releases whatever on-device engine was loaded, instead of leaving a 1-3GB+ model resident in
+    // memory for the rest of the session with nothing left that will ever close it (confirmed
+    // on-device: switching to Basic Models used to leave a big VLM's engine loaded, and repeating
+    // that a few times compounded into an OOM crash — see OfflineInferenceEngine.release's doc).
+    //
+    // stopProcessingChime() first, synchronously — the waiting tone must not keep looping through
+    // however long cancelActiveAnalysisAndJoin() below takes to actually unwind (a real, if usually
+    // short, wait: it's joining a cancelled coroutine, not just requesting cancellation). Same
+    // "stop it right away rather than waiting for the analysis job's own finally" reasoning as
+    // stopProcessingChime's own doc.
+    //
+    // cancelActiveAnalysisAndJoin() runs next and is awaited, every time — an analysis that's
+    // still using the *current* engine has to be fully torn down before either branch below
+    // touches that engine (preloading a different one closes this one as its first step; release()
+    // closes it directly), or the in-flight generation gets closed out from under it instead of
+    // stopping cleanly. Confirmed on-device: without this, switching models mid-inference left the
+    // old generation running until it failed several seconds later with a delayed error dialog.
+    // releaseSuspending() (not release()) for the same reason — awaited here, not fire-and-forget.
     LaunchedEffect(selectedModelId) {
+        controller.stopProcessingChime()
+        controller.cancelActiveAnalysisAndJoin()
         if (selectedModelId != "mlkit" && selectedModelId != LocalServerFeature.MODEL_ID) {
             offlineModels.find { it.id == selectedModelId }?.let { OfflineInferenceEngine.preload(context, it) }
+        } else {
+            OfflineInferenceEngine.releaseSuspending()
         }
     }
 
