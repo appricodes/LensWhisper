@@ -22,11 +22,12 @@ object LegalTexts {
     // Imprint placeholders — FILL THESE IN BEFORE RELEASE
     // ─────────────────────────────────────────────────────────────────────────
 
-    const val OPERATOR_NAME = "[FILL IN: full legal name]"
-    const val OPERATOR_ADDRESS = "[FILL IN: street and number, postal code, city, Germany — a P.O. box is not sufficient under §5 DDG]"
-    const val OPERATOR_EMAIL = "[FILL IN: contact email address]"
-    const val OPERATOR_PHONE = "[FILL IN: phone number, or delete this line if an email address plus another fast electronic contact route is offered]"
-    const val OPERATOR_VAT_ID = "[FILL IN: USt-IdNr. under §27a UStG, or delete this line if none has been issued]"
+    const val OPERATOR_NAME = "Mohammad Amiri Moalla"
+    const val OPERATOR_ADDRESS = "Schütenhofstraße 21, 47800 Krefeld, Germany"
+    const val OPERATOR_EMAIL = "amiri.moalla@wikiponder.com"
+    // No phone number and no VAT ID (USt-IdNr.) - deliberately omitted rather than left blank, per
+    // §5 DDG allowing both when not applicable (no VAT registration) or not offered (phone) as long
+    // as email alone provides fast, direct contact - see this object's class doc.
 
     // ─────────────────────────────────────────────────────────────────────────
     // The AI disclaimer — shown once as an acceptance gate, re-readable any time
@@ -108,10 +109,8 @@ $OPERATOR_ADDRESS
 
 Contact:
 Email: $OPERATOR_EMAIL
-Phone: $OPERATOR_PHONE
 
-VAT identification number pursuant to §27a UStG:
-$OPERATOR_VAT_ID
+No VAT identification number (§27a UStG) has been issued.
 
 CONSUMER DISPUTE RESOLUTION
 
