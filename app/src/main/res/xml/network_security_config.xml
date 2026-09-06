@@ -13,5 +13,7 @@
     <base-config cleartextTrafficPermitted="true" />
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">lw.wikiponder.com</domain>
+        <!-- Where the optional product database is published (see data/ProductDbSource.kt). -->
+        <domain includeSubdomains="true">wikiponder.com</domain>
     </domain-config>
 </network-security-config>

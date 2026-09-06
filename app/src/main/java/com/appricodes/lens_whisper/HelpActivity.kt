@@ -55,8 +55,9 @@ private fun HelpScreen(onClose: () -> Unit) {
         }
 
         Text(
-            text = "Everything in LensWhisper runs on your own phone. Your photos are never uploaded "
-                + "and we never see them.",
+            text = "Everything that looks at your photos runs on your own phone. Your photos are never "
+                + "uploaded and we never see them. The one exception is Scan Barcode, described below, "
+                + "and even there only a barcode number is ever sent — never a picture.",
             fontSize = 18.sp
         )
         Text(
@@ -74,6 +75,25 @@ private fun HelpScreen(onClose: () -> Unit) {
             fontSize = 18.sp
         )
         Text(
+            text = "Scan Barcode keeps looking until it finds a QR code or a product barcode, with a "
+                + "quiet tone every couple of seconds while it searches. A QR code is read out "
+                + "directly. For a product barcode, Settings offers an optional product database you "
+                + "can download once and keep on the phone — with it installed, products are named "
+                + "without going online at all, and the barcode never leaves your phone. Failing that, "
+                + "the app can look the product up online: it asks your permission the first time, "
+                + "sends only the barcode number, and works without the lookup if you would rather it "
+                + "didn't.",
+            fontSize = 18.sp
+        )
+        Text(
+            text = "Once a barcode is found you can leave yourself a note about it, either recorded "
+                + "in your own voice or spoken and turned into text. Scan the same barcode again "
+                + "another day and your note comes straight back. Settings can save all your notes "
+                + "into a file in the Downloads folder, and read one back in again — that file is the "
+                + "only way they ever leave the app, and it never goes online.",
+            fontSize = 18.sp
+        )
+        Text(
             text = "The Advanced AI models give fuller, conversational descriptions and can answer "
                 + "your own spoken questions. Each has to be downloaded once, and they differ a lot "
                 + "in accuracy and speed — open Manage Advanced AI Models to read what each one is "
@@ -81,8 +101,10 @@ private fun HelpScreen(onClose: () -> Unit) {
             fontSize = 18.sp
         )
         Text(
-            text = "The camera is only switched on for the instant a photo is taken. If you turn the "
-                + "flash on, it fires at that moment rather than staying lit.",
+            text = "The camera is only switched on for the instant a photo is taken — the exception "
+                + "being Scan Barcode, which needs it running while it searches, and stops it as "
+                + "soon as a barcode is found. If you turn the flash on, it fires at the moment of a "
+                + "photo rather than staying lit; during a barcode scan it stays on for the search.",
             fontSize = 18.sp
         )
         Text(

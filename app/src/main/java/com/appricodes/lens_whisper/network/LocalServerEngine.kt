@@ -24,7 +24,6 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.ByteArrayOutputStream
 import java.io.IOException
-import java.io.InputStream
 import java.util.concurrent.TimeUnit
 
 /**
@@ -105,9 +104,7 @@ class LocalServerEngine(private val baseUrl: String) {
 	): String = withContext(Dispatchers.IO) {
 		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Static Image] ---")
 		try {
-			val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
-			val baseBitmap = BitmapFactory.decodeStream(inputStream)
-			inputStream?.close()
+			val baseBitmap = context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
 
 			if (baseBitmap == null) return@withContext "ERROR: Error reading image data from device."
 
@@ -127,21 +124,26 @@ class LocalServerEngine(private val baseUrl: String) {
 		Log.i("LocalServerEngine", "--- Starting Local Server Request [Type: Video Frames] ---")
 		try {
 			val retriever = MediaMetadataRetriever()
-			retriever.setDataSource(context, uri)
 			val base64Images = mutableListOf<String>()
-			val intervalMs = (config.framesInterval * 1000).toLong()
+			try {
+				retriever.setDataSource(context, uri)
+				val intervalMs = (config.framesInterval * 1000).toLong()
 
-			for (i in (config.framesCount - 1) downTo 0) {
-				val targetTimeMs = positionMs - (i * intervalMs)
-				if (targetTimeMs >= 0) {
-					val frame = retriever.getFrameAtTime(targetTimeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
-					if (frame != null) {
-						val scaled = scaleToMax448(frame)
-						base64Images.add(encodeBitmapToBase64(scaled))
+				for (i in (config.framesCount - 1) downTo 0) {
+					val targetTimeMs = positionMs - (i * intervalMs)
+					if (targetTimeMs >= 0) {
+						val frame = retriever.getFrameAtTime(targetTimeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
+						if (frame != null) {
+							val scaled = scaleToMax448(frame)
+							base64Images.add(encodeBitmapToBase64(scaled))
+						}
 					}
 				}
+			} finally {
+				// finally, not after the loop: anything thrown while reading the file would
+				// otherwise skip release() and leak the retriever's native resources.
+				runCatching { retriever.release() }
 			}
-			retriever.release()
 
 			if (base64Images.isEmpty()) return@withContext "ERROR: Error capturing video frames."
 
@@ -159,9 +161,7 @@ class LocalServerEngine(private val baseUrl: String) {
 		try {
 			val base64Images = mutableListOf<String>()
 			for (uri in uris) {
-				val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
-				val baseBitmap = BitmapFactory.decodeStream(inputStream)
-				inputStream?.close()
+				val baseBitmap = context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
 				if (baseBitmap != null) {
 					val scaledBitmap = scaleToMax448(baseBitmap)
 					base64Images.add(encodeBitmapToBase64(scaledBitmap))
@@ -186,9 +186,7 @@ class LocalServerEngine(private val baseUrl: String) {
 	fun analyzeStaticImageFileStreaming(
 		context: Context, uri: Uri, config: PromptConfig, prefs: PreferencesManager
 	): Flow<String> = flow {
-		val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
-		val baseBitmap = BitmapFactory.decodeStream(inputStream)
-		inputStream?.close()
+		val baseBitmap = context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
 		if (baseBitmap == null) throw IllegalStateException("Error reading image data from device.")
 		val base64Image = encodeBitmapToBase64(scaleToMax448(baseBitmap))
 		emitAll(callBackendApiStreaming(listOf(base64Image), config, prefs))
@@ -198,17 +196,22 @@ class LocalServerEngine(private val baseUrl: String) {
 		context: Context, uri: Uri, positionMs: Long, config: PromptConfig, prefs: PreferencesManager
 	): Flow<String> = flow {
 		val retriever = MediaMetadataRetriever()
-		retriever.setDataSource(context, uri)
 		val base64Images = mutableListOf<String>()
-		val intervalMs = (config.framesInterval * 1000).toLong()
-		for (i in (config.framesCount - 1) downTo 0) {
-			val targetTimeMs = positionMs - (i * intervalMs)
-			if (targetTimeMs >= 0) {
-				val frame = retriever.getFrameAtTime(targetTimeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
-				if (frame != null) base64Images.add(encodeBitmapToBase64(scaleToMax448(frame)))
+		try {
+			retriever.setDataSource(context, uri)
+			val intervalMs = (config.framesInterval * 1000).toLong()
+			for (i in (config.framesCount - 1) downTo 0) {
+				val targetTimeMs = positionMs - (i * intervalMs)
+				if (targetTimeMs >= 0) {
+					val frame = retriever.getFrameAtTime(targetTimeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)
+					if (frame != null) base64Images.add(encodeBitmapToBase64(scaleToMax448(frame)))
+				}
 			}
+		} finally {
+			// Same reasoning as analyzeVideoFrame above — release on every path, not just the
+			// successful one.
+			runCatching { retriever.release() }
 		}
-		retriever.release()
 		if (base64Images.isEmpty()) throw IllegalStateException("Error capturing video frames.")
 		emitAll(callBackendApiStreaming(base64Images, config, prefs))
 	}.flowOn(Dispatchers.IO)
@@ -218,9 +221,7 @@ class LocalServerEngine(private val baseUrl: String) {
 	): Flow<String> = flow {
 		val base64Images = mutableListOf<String>()
 		for (uri in uris) {
-			val inputStream: InputStream? = context.contentResolver.openInputStream(uri)
-			val baseBitmap = BitmapFactory.decodeStream(inputStream)
-			inputStream?.close()
+			val baseBitmap = context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it) }
 			if (baseBitmap != null) base64Images.add(encodeBitmapToBase64(scaleToMax448(baseBitmap)))
 		}
 		if (base64Images.isEmpty()) throw IllegalStateException("Error capturing timeline frames.")

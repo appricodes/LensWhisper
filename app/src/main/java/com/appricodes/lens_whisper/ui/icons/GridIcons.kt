@@ -26,7 +26,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
  */
 enum class GridIcon {
     DETECT_OBJECTS, IDENTIFY_OBJECTS_COLORS, EXPLORE, READ_TEXT, READ_DOCUMENT,
-    LIGHT_METER, SIMPLE_COLOR,
+    LIGHT_METER, SIMPLE_COLOR, SCAN_BARCODE,
     BRIEF_NARRATION, DETAILED_SCENE, PEOPLE_OUTFIT, DESCRIBE_TV, OBJECTS, CUSTOM_PROMPT,
     VOLUME_KEYS, SWITCH_CAMERA, FLASH_ON, FLASH_OFF, MICROPHONE,
     REWIND, PLAY, PAUSE, FAST_FORWARD
@@ -137,6 +137,22 @@ private fun DrawScope.textLines(tint: Color, strokeWidth: Float, left: Float, ri
     strokeLine(tint, strokeWidth, left, topY + gap * 2, shortRight, topY + gap * 2)
 }
 
+/** [GridIcon.SCAN_BARCODE]: the bars of a 1D barcode inside the same four-corner viewfinder frame
+ *  the detector glyphs use ([viewfinderCorners]) — "point the camera at this and it will be read"
+ *  is exactly the shared idea, and the bars are what distinguishes it from them. Bar x-positions
+ *  and widths are deliberately uneven, the way a real barcode's are; a set of evenly spaced
+ *  identical lines reads as a grid or a menu icon instead. */
+private fun DrawScope.barcodeBars(tint: Color, strokeWidth: Float) {
+    val topY = 8f
+    val bottomY = 16f
+    // (x, thickness multiplier) — a thick bar is drawn as two adjacent strokes rather than with a
+    // per-bar stroke width, keeping every line in this icon set at the one shared weight.
+    for ((x, wide) in listOf(7f to false, 9f to true, 12f to false, 14.5f to true, 17f to false)) {
+        strokeLine(tint, strokeWidth, x, topY, x, bottomY)
+        if (wide) strokeLine(tint, strokeWidth, x + 0.9f, topY, x + 0.9f, bottomY)
+    }
+}
+
 private fun DrawScope.drawGridIcon(icon: GridIcon, tint: Color) {
     val strokeWidth = size.minDimension * STROKE_FRACTION
     val stroke = Stroke(width = strokeWidth, cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -183,6 +199,11 @@ private fun DrawScope.drawGridIcon(icon: GridIcon, tint: Color) {
         }
 
         GridIcon.SIMPLE_COLOR -> teardrop(tint, cx = 12f, apexY = 3.4f, baseCy = 13.6f, r = 4.6f)
+
+        GridIcon.SCAN_BARCODE -> {
+            viewfinderCorners(tint, stroke)
+            barcodeBars(tint, strokeWidth)
+        }
 
         GridIcon.BRIEF_NARRATION -> {
             drawRoundRect(

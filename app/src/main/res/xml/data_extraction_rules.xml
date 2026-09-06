@@ -1,19 +1,23 @@
 <?xml version="1.0" encoding="utf-8"?><!--
-   Sample data extraction rules file; uncomment and customize as necessary.
-   See https://developer.android.com/about/versions/12/backup-restore#xml-changes
-   for details.
+   Backup/transfer rules for API 31 and above. The API 30-and-below equivalent is
+   backup_rules.xml — keep the two in step.
+
+   The barcode notes are excluded from BOTH cloud backup and device-to-device transfer, for the
+   reason spelled out in backup_rules.xml. An earlier version of this file kept device-transfer
+   enabled on the grounds that a direct phone-to-phone transfer is local and user-initiated; that
+   was dropped on request, so that the statement "the only way these notes move is Export to
+   Downloads and Import from Downloads" is true without exceptions and without small print. A user
+   replacing their phone uses that same export, which they can hear the app confirm.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <!-- TODO: Use <include> and <exclude> to control what is backed up.
-        <include .../>
-        <exclude .../>
-        -->
+        <exclude domain="database" path="barcode_notes.db" />
+        <exclude domain="database" path="barcode_notes.db-journal" />
+        <exclude domain="file" path="barcode_notes/" />
     </cloud-backup>
-    <!--
     <device-transfer>
-        <include .../>
-        <exclude .../>
+        <exclude domain="database" path="barcode_notes.db" />
+        <exclude domain="database" path="barcode_notes.db-journal" />
+        <exclude domain="file" path="barcode_notes/" />
     </device-transfer>
-    -->
 </data-extraction-rules>

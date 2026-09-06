@@ -72,7 +72,6 @@ import com.appricodes.lens_whisper.utils.VolumeShortcuts
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -144,10 +143,7 @@ private fun ReadDocumentScreen(prefs: PreferencesManager, imageUri: Uri?, onClos
         // Null for the initial-load path, where starting fresh here already means "exactly when
         // the image is received", since there's no shutter event to anchor to.
         val toneJob = externalToneJob ?: coroutineScope.launch(Dispatchers.IO) {
-            while (true) {
-                ProcessingSoundPlayer.playWaitingTone(context)
-                delay(1100)
-            }
+            ProcessingSoundPlayer.loopClockWaitingTone(context)
         }
         val recognized = try {
             withContext(Dispatchers.Default) { OfflineTextRecognizer.recognizeBlocks(loadedBitmap, prefs.ocrLanguage) }
@@ -179,16 +175,16 @@ private fun ReadDocumentScreen(prefs: PreferencesManager, imageUri: Uri?, onClos
             val newBitmap = try {
                 // highResolution = true — this screen reads text, so it needs enough resolution
                 // for small glyphs to stay legible, same as the initial capture that opened it.
-                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled, highResolution = true) {
+                // correctOrientation = false — Read Document is Explore's text counterpart and
+                // sends the image to the model exactly as taken, same as MlkitButtonProvider's
+                // launchReadDocument (the capture that opened this screen in the first place).
+                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled, highResolution = true, correctOrientation = false) {
                     cameraController.capturePhoto(MAX_CAPTURE_DIMENSION) {
                         // Fires the instant the shutter sound plays (see
                         // CameraController.capturePhotoInternal), not after readout/decode/scale —
                         // runRecognition adopts this job instead of starting its own, later one.
                         toneJob = captureScope.launch(Dispatchers.IO) {
-                            while (true) {
-                                ProcessingSoundPlayer.playWaitingTone(context)
-                                delay(1100)
-                            }
+                            ProcessingSoundPlayer.loopClockWaitingTone(context)
                         }
                     }
                 }

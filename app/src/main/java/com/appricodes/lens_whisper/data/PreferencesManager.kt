@@ -68,6 +68,20 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("has_accepted_disclaimer", false)
 		set(value) = standardPrefs.edit().putBoolean("has_accepted_disclaimer", value).apply()
 
+	/** Whether the user has agreed, once, to let Scan Barcode send a *product* barcode's digits to
+	 *  UPCitemdb (see [com.appricodes.lens_whisper.network.UpcLookupClient]) — the app's only
+	 *  outbound transmission of anything the camera saw. False until the consent dialog in
+	 *  [com.appricodes.lens_whisper.BarcodeScanActivity] is accepted, and while it is false no
+	 *  lookup happens at all (the scan still works; the description just reads "Unknown, or no
+	 *  information available"). QR and other 2D codes never consult this — their payload is their
+	 *  own content, so nothing is ever sent for them. Settable back to false so declining once is
+	 *  not permanent, but there is no UI that does: the dialog is only shown while this is false.
+	 *  Deliberately separate from [hasAcceptedDisclaimer]; that gate is about trusting AI output,
+	 *  this one is about data leaving the device. */
+	var hasAcceptedBarcodeLookup: Boolean
+		get() = standardPrefs.getBoolean("has_accepted_barcode_lookup", false)
+		set(value) = standardPrefs.edit().putBoolean("has_accepted_barcode_lookup", value).apply()
+
 	/** Whether the flash should fire when a photo is taken. This is an *intent*, not live torch
 	 *  state: the camera is only bound for the moment of capture (see
 	 *  [com.appricodes.lens_whisper.ui.components.CameraController]), so there is no continuously

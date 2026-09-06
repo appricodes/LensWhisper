@@ -189,8 +189,8 @@ fun MediaDescriberScreen(
     suspend fun extractVideoFrameBitmaps(uri: Uri, positionMs: Long, config: PromptConfig): List<Bitmap> =
         withContext(Dispatchers.IO) {
             val frames = mutableListOf<Bitmap>()
+            val retriever = MediaMetadataRetriever()
             try {
-                val retriever = MediaMetadataRetriever()
                 retriever.setDataSource(context, uri)
                 val intervalMs = (config.framesInterval * 1000).toLong()
                 for (i in (config.framesCount - 1) downTo 0) {
@@ -199,8 +199,11 @@ fun MediaDescriberScreen(
                         retriever.getFrameAtTime(targetTimeMs * 1000, MediaMetadataRetriever.OPTION_CLOSEST)?.let { frames.add(it) }
                     }
                 }
-                retriever.release()
-            } catch (e: Exception) { /* return whatever frames were extracted */ }
+            } catch (e: Exception) { /* return whatever frames were extracted */ } finally {
+                // finally, not after the loop: an unreadable file or a codec that chokes on one
+                // frame would otherwise skip release() and leak the retriever's native resources.
+                runCatching { retriever.release() }
+            }
             frames
         }
 
@@ -217,7 +220,10 @@ fun MediaDescriberScreen(
     // "Could not capture photo."
     // allowFlash is meaningless here — no live sensor/flash to fire in file mode — so it's just
     // ignored; see MlkitButtonProvider's doc for what it's for on CameraActivity's own capturePhoto.
-    val captureFileFrame: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, onShutter: () -> Unit) -> Bitmap = { maxDim, _, _, onShutter ->
+    // correctOrientation is likewise ignored — there's no live sensor to correct from in file mode,
+    // and a loaded photo/video frame is already handed to the model exactly as decoded (see this
+    // screen's own image-loading doc for why that's the right behavior here regardless).
+    val captureFileFrame: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, correctOrientation: Boolean, onShutter: () -> Unit) -> Bitmap = { maxDim, _, _, _, onShutter ->
         val uri = currentFileUri ?: throw IllegalStateException("No media loaded")
         // No physical shutter in file mode — start the "model is working" cue as early as possible
         // instead, before the (for video) possibly-slow frame extraction below, mirroring

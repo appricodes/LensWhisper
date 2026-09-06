@@ -9,11 +9,13 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import com.appricodes.lens_whisper.BarcodeScanActivity
 import com.appricodes.lens_whisper.ReadDocumentActivity
 import com.appricodes.lens_whisper.SegmentationExploreActivity
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
+import com.appricodes.lens_whisper.offline.OfflineBarcodeScanner
 import com.appricodes.lens_whisper.offline.OfflineColorDetector
 import com.appricodes.lens_whisper.offline.OfflineLightDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
@@ -77,21 +79,29 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * `allowFlash` parameter is how [captureAndRun] suppresses the flash after the first frame of a
  * continuous run (see [continuousFlashUsed]) — CameraActivity's live-sensor implementation ANDs it
  * with [PreferencesManager.flashEnabled] itself; a file-based host has no flash to fire at all and
- * just ignores it.
+ * just ignores it. Its `correctOrientation` parameter is CameraActivity's live-sensor cue to apply
+ * (or skip) the physical-rotation fix described on
+ * [com.appricodes.lens_whisper.ui.components.CameraController.withCaptureSession] — every mode here
+ * passes true except [launchSegmentationExplore] and [launchReadDocument], whose captures are sent
+ * to the model exactly as taken; a file-based host has no live sensor to correct from and just
+ * ignores it.
  *
  * [hasLiveCamera] gates the two modes that only make sense against a live, continuously-exposed
  * camera feed rather than one already-fixed image: Light Level Meter (needs a live analysis frame
  * stream — see [onAnalysisFrame]) and Simple Color Detection (reads "the color in front of the
  * camera right now"; redundant with Identify Objects and Colors once the source is a fixed file).
- * Both render disabled, not omitted, when this is false — see [rows]. Every other button here
- * (Detect Objects, Identify Objects and Colors, Explore Photo by Touch, Read Text, Read Document)
- * needs nothing camera-specific beyond [capturePhoto] itself, so they work unchanged against
- * whichever bitmap a file-based host's own `capturePhoto` hands back.
+ * Both render disabled, not omitted, when this is false — see [rows]. Scan Barcode is a third
+ * case: it reads [hasLiveCamera] not to disable itself but to pick between two genuinely different
+ * behaviours — a continuous live scan on a camera host, a one-shot detect against the current
+ * file/frame otherwise; see [launchBarcodeScan]. Every other button here (Detect Objects, Identify
+ * Objects and Colors, Explore Photo by Touch, Read Text, Read Document) needs nothing
+ * camera-specific beyond [capturePhoto] itself, so they work unchanged against whichever bitmap a
+ * file-based host's own `capturePhoto` hands back.
  */
 class MlkitButtonProvider(
     private val context: Context,
     private val coroutineScope: CoroutineScope,
-    private val capturePhoto: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, onShutter: () -> Unit) -> Bitmap,
+    private val capturePhoto: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, correctOrientation: Boolean, onShutter: () -> Unit) -> Bitmap,
     private val hasLiveCamera: Boolean = true
 ) : ModelButtonProvider {
 
@@ -241,7 +251,7 @@ class MlkitButtonProvider(
             val allowFlash = if (continuousEnabled) !continuousFlashUsed else true
             if (continuousEnabled) continuousFlashUsed = true
             val bitmap = try {
-                capture(MAX_CAPTURE_DIMENSION, mode == Mode.TEXT, allowFlash) {
+                capture(MAX_CAPTURE_DIMENSION, mode == Mode.TEXT, allowFlash, true) {
                     // Fires the instant the shutter sound plays (see
                     // CameraController.capturePhotoInternal), not after the whole capture — image
                     // readout/decode/scale/file-write shouldn't delay the "still working" cue.
@@ -249,10 +259,7 @@ class MlkitButtonProvider(
                     // model; the near-instant ML Kit Objects/Text/Colour modes never had this sound.
                     if (mode == Mode.SEGMENT || mode == Mode.SEGMENT_COLOR) {
                         toneJob = coroutineScope.launch(Dispatchers.IO) {
-                            while (true) {
-                                ProcessingSoundPlayer.playWaitingTone(context)
-                                delay(1100)
-                            }
+                            ProcessingSoundPlayer.loopClockWaitingTone(context)
                         }
                     }
                 }
@@ -362,8 +369,10 @@ class MlkitButtonProvider(
                 val bitmap = try {
                     // No tone starts here — SegmentationExploreActivity owns its own "waiting for
                     // the model" cue, started once the captured image is actually received there.
-                    // Not a text task, so the usual 720p (highRes = false).
-                    capture(MAX_CAPTURE_DIMENSION, false, true) {}
+                    // Not a text task, so the usual 720p (highRes = false). correctOrientation =
+                    // false — Explore sends the image to the model exactly as taken, see
+                    // capturePhoto's own doc.
+                    capture(MAX_CAPTURE_DIMENSION, false, true, false) {}
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -407,7 +416,10 @@ class MlkitButtonProvider(
                     // No tone starts here — ReadDocumentActivity owns its own "waiting for the
                     // model" cue, started once the captured image is actually received there.
                     // A text task, so 1080p (highRes = true) — see MlkitButtonProvider's doc.
-                    capture(MAX_CAPTURE_DIMENSION, true, true) {}
+                    // correctOrientation = false — Read Document is Explore's text counterpart and
+                    // sends the image to the model exactly as taken, same reasoning as
+                    // launchSegmentationExplore above.
+                    capture(MAX_CAPTURE_DIMENSION, true, true, false) {}
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -422,6 +434,59 @@ class MlkitButtonProvider(
                 context.startActivity(
                     Intent(context, ReadDocumentActivity::class.java)
                         .putExtra("IMAGE_URI", uri.toString())
+                )
+            } finally {
+                isBusy = false
+            }
+        }
+    }
+
+    /**
+     * "Scan Barcode": opens [BarcodeScanActivity], which does the whole job itself — it keeps a
+     * live camera stream running until a barcode turns up, rather than taking a photo per attempt
+     * (see that class's doc for why). So on a live-camera host this button is a plain launch with
+     * nothing to capture first, unlike [launchSegmentationExplore]/[launchReadDocument] which hand
+     * their screens an already-taken photo.
+     *
+     * A file-based host (Media Describer) has no live feed to stream, so a continuous scan is
+     * impossible there — but the cell is not left dead either: it runs a one-shot detect against
+     * the current file/frame here and opens the same result screen with the barcode already in
+     * hand (the `BARCODE_*` extras), which is the whole feature minus the hunting-for-it part.
+     * Nothing found is announced as such, without leaving this screen.
+     */
+    private fun launchBarcodeScan() {
+        if (isBusy) {
+            announceBusy()
+            return
+        }
+        if (hasLiveCamera) {
+            context.startActivity(Intent(context, BarcodeScanActivity::class.java))
+            return
+        }
+        val capture = capturePhoto
+        isBusy = true
+        ProcessingSoundPlayer.playCaptureAcknowledge(context)
+        coroutineScope.launch {
+            try {
+                if (!OfflineBarcodeScanner.isReady(context)) return@launch
+                val bitmap = try {
+                    capture(MAX_CAPTURE_DIMENSION, false, true, true) {}
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Exception) {
+                    AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                    return@launch
+                }
+                val found = OfflineBarcodeScanner.pickBest(OfflineBarcodeScanner.scan(bitmap))
+                if (found == null) {
+                    AccessibilityUtils.announceToTalkBack(context, "No barcode found in this image.")
+                    return@launch
+                }
+                context.startActivity(
+                    Intent(context, BarcodeScanActivity::class.java)
+                        .putExtra(BarcodeScanActivity.EXTRA_BARCODE_VALUE, found.value)
+                        .putExtra(BarcodeScanActivity.EXTRA_BARCODE_FORMAT, found.format)
+                        .putExtra(BarcodeScanActivity.EXTRA_BARCODE_IS_2D, found.isTwoDimensional)
                 )
             } finally {
                 isBusy = false
@@ -542,7 +607,18 @@ class MlkitButtonProvider(
                     onClick = { selectSingleShot(Mode.SIMPLE_COLOR, ctx.prefs) },
                     onLongClick = if (hasLiveCamera) { { selectContinuous(Mode.SIMPLE_COLOR) } } else null
                 ),
-                null
+                GridCell(
+                    label = "Scan Barcode",
+                    contentDescription = if (hasLiveCamera) {
+                        "Scan barcode. Keeps looking until it finds a QR code or a product barcode, then " +
+                            "reads out what it is and lets you save your own voice or text note about it."
+                    } else {
+                        "Scan barcode. Looks for a QR code or a product barcode in this image, then reads " +
+                            "out what it is and lets you save your own voice or text note about it."
+                    },
+                    icon = GridIcon.SCAN_BARCODE,
+                    onClick = { launchBarcodeScan() }
+                )
             ),
             listOf(null, null, null, null)
         )

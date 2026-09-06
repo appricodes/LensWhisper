@@ -6,7 +6,11 @@ import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.graphics.Matrix
 import android.net.Uri
+import android.os.Build
 import android.util.Size
+import android.view.OrientationEventListener
+import android.view.Surface
+import android.view.WindowManager
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageAnalysis
@@ -82,6 +86,27 @@ class CameraController(private val context: Context) {
     // Same reasoning as captureFlashEnabled — which resolution the current capture session wants,
     // see withCaptureSession's highResolution parameter.
     private var captureTargetResolution: Size = RESOLUTION_720P
+    // Same reasoning again — whether the *next* takePicture() call should stamp the sensor-read
+    // physical rotation onto the shot, see withCaptureSession's correctOrientation parameter and
+    // rotationTracker below.
+    private var captureCorrectOrientation = true
+    // Tracks the phone's actual physical rotation from the accelerometer, independent of the
+    // display's own rotation. TalkBack users routinely hold the phone at any angle without ever
+    // looking at the screen, including angles the display itself never rotates into (locked
+    // auto-rotate, reverse portrait many devices don't support) — so the display's rotation is not
+    // a reliable stand-in for "which way is up" in the photo. Snapped to the nearest quarter turn
+    // (0/90/180/270) and fed into ImageCapture.targetRotation right before each shot; CameraX
+    // already knows how to combine that with the sensor's mounting angle and lens facing to produce
+    // the correct pixel rotation (see imageProxyToBitmap's use of imageInfo.rotationDegrees), so
+    // nothing else needs to change to make a captured photo come out upright.
+    //
+    // Enabled for this controller's whole lifetime (see init/shutdown below), not just while a
+    // capture session is open: unlike the camera itself, an accelerometer listener has no
+    // in-use indicator and negligible power cost, and a shot can follow session-open by mere
+    // milliseconds — an OrientationEventListener's first callback arrives asynchronously, so
+    // enabling it right before the capture that needs its reading would race that callback and
+    // silently miss the very shot it exists for.
+    private val rotationTracker = DeviceRotationTracker(context)
     private var boundLifecycleOwner: LifecycleOwner? = null
     // What the current binding was built for. rebind() is a no-op when nothing in it changed,
     // which matters because a capture taken *inside* a continuous session bumps the session depth
@@ -115,6 +140,10 @@ class CameraController(private val context: Context) {
     // camera is current/was just switched to, without threading a separate tracking var.
     var lensFacing by mutableStateOf(CameraSelector.LENS_FACING_BACK)
         private set
+
+    init {
+        rotationTracker.enable()
+    }
 
     /**
      * Starts or stops the continuous frame feed. Passing null unbinds it, which — with no capture
@@ -152,6 +181,10 @@ class CameraController(private val context: Context) {
         // resolution the sensor actually has, not just 1080p. Takes priority over [highResolution]
         // if both are somehow true. Left false by every other caller.
         maxResolution: Boolean = false,
+        // Explore Photo by Touch, Explore and Describe, and Read Document (Explore's text
+        // counterpart) all pass false: those modes send the captured image to the model exactly as
+        // taken, unrotated — see each call site for why. Every other capture leaves this true.
+        correctOrientation: Boolean = true,
         block: suspend () -> T
     ): T {
         cameraMutex.withLock {
@@ -162,6 +195,7 @@ class CameraController(private val context: Context) {
             // pass maxResolution; every other capture leaves both false for the 720p default — see
             // RESOLUTION_MAX/RESOLUTION_1080P/RESOLUTION_720P's doc.
             captureTargetResolution = if (maxResolution) RESOLUTION_MAX else if (highResolution) RESOLUTION_1080P else RESOLUTION_720P
+            captureCorrectOrientation = correctOrientation
             rebind()
         }
         try {
@@ -181,6 +215,7 @@ class CameraController(private val context: Context) {
                     if (captureSessionDepth == 0) {
                         captureFlashEnabled = false
                         captureTargetResolution = RESOLUTION_720P
+                        captureCorrectOrientation = true
                         // Releases right away — rebind() recomputes from captureSessionDepth/
                         // analysisFrameSink, so this naturally leaves a continuous mode's live feed
                         // (Light Level, MLKit's continuous polling) bound if one is holding the
@@ -312,6 +347,7 @@ class CameraController(private val context: Context) {
      *  thread alive. */
     fun shutdown() {
         release()
+        rotationTracker.disable()
         cameraExecutor.shutdown()
     }
 
@@ -362,6 +398,15 @@ class CameraController(private val context: Context) {
                 cont.resumeWithException(IllegalStateException("Camera not bound — capture must run inside withCaptureSession"))
                 return@suspendCancellableCoroutine
             }
+            // Stamp the sensor-read physical rotation onto this shot (or explicitly today's display
+            // rotation — CameraX's own un-corrected default — when the caller opted out; see
+            // correctOrientation's doc) right before capture, not just once at bind time: the
+            // ImageCapture use case is reused across repeated captures within one session (Story's
+            // burst, MLKit's continuous polling, or two differently-flagged buttons in a row that
+            // happen to share a binding signature) whenever nothing else about the binding changed,
+            // so a stale value from an earlier, differently-flagged capture on the same instance
+            // must never leak into this one.
+            capture.targetRotation = if (captureCorrectOrientation) rotationTracker.surfaceRotation else currentDisplayRotation(context)
             // The single choke point every capture path in the app goes through (single shot,
             // Story frames, every MLKit/segmentation mode, Explore) — playing the shutter click
             // here, right before the capture command itself is issued, means no call site has to
@@ -429,6 +474,50 @@ class CameraController(private val context: Context) {
         }
     }
 }
+
+/**
+ * Wraps [OrientationEventListener] to expose the phone's physical rotation as one of the four
+ * [Surface] rotation constants, snapped to the nearest quarter turn — the same 45°-wide-bucket
+ * convention CameraX's own samples use to feed [androidx.camera.core.ImageCapture.targetRotation].
+ * Readings near an exact 45°/135°/225°/315° boundary, or while the phone is too flat for the
+ * accelerometer to tell, are ignored (ORIENTATION_UNKNOWN) rather than snapped to a guess — the
+ * tracker just keeps reporting whatever quarter turn it last confidently saw.
+ */
+private class DeviceRotationTracker(context: Context) {
+    // Seeded from the display's own rotation rather than a bare ROTATION_0 guess, so a capture
+    // that lands before the first accelerometer callback arrives (see enable()'s doc on the
+    // controller) still gets a sane, currently-true value instead of an arbitrary default.
+    @Volatile var surfaceRotation: Int = currentDisplayRotation(context)
+        private set
+
+    private val listener = object : OrientationEventListener(context) {
+        override fun onOrientationChanged(orientation: Int) {
+            if (orientation == ORIENTATION_UNKNOWN) return
+            surfaceRotation = when (orientation) {
+                in 45 until 135 -> Surface.ROTATION_270
+                in 135 until 225 -> Surface.ROTATION_180
+                in 225 until 315 -> Surface.ROTATION_90
+                else -> Surface.ROTATION_0
+            }
+        }
+    }
+
+    fun enable() {
+        if (listener.canDetectOrientation()) listener.enable()
+    }
+
+    fun disable() = listener.disable()
+}
+
+/** The display's own current rotation — CameraX's un-corrected default, and the fallback value
+ *  for a capture that opts out of the sensor-based fix (see correctOrientation's doc). */
+private fun currentDisplayRotation(context: Context): Int =
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+        context.display?.rotation ?: Surface.ROTATION_0
+    } else {
+        @Suppress("DEPRECATION")
+        (context.getSystemService(Context.WINDOW_SERVICE) as? WindowManager)?.defaultDisplay?.rotation ?: Surface.ROTATION_0
+    }
 
 private suspend fun awaitCameraProvider(context: Context): ProcessCameraProvider =
     suspendCancellableCoroutine { cont ->

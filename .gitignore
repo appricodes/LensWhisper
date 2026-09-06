@@ -37,7 +37,18 @@ desktop/test_images/
 # Downloaded bulk product dumps and generated lookup DBs for the barcode DB builder - large
 # binary artifacts, regenerate with tools/barcode_db/build_barcode_db.py instead of committing
 tools/barcode_db/cache/
+tools/barcode_db/*.db
+tools/barcode_db/*.db.gz
+tools/barcode_db/*.db.sha256
 tools/barcode_db/*.sqlite3
 tools/barcode_db/*.sqlite3-wal
 tools/barcode_db/*.sqlite3-shm
 tools/barcode_db/__pycache__/
+
+# The export/import passphrase (see secrets.properties.example, which IS committed as its
+# placeholder, and app/build.gradle.kts, which reads this into BuildConfig.BACKUP_PASSPHRASE).
+/secrets.properties
+
+# Generated upload bundle for the app's product-database catalog (compressed copies of the
+# .sqlite3 files above plus catalog.json) - regenerate with publish_barcode_db.py
+tools/barcode_db/publish/

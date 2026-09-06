@@ -1,6 +1,7 @@
 package com.appricodes.lens_whisper
 
 import android.content.Context
+import android.content.pm.PackageManager
 import android.os.Bundle
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
@@ -24,8 +25,18 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.ui.window.Dialog
+import androidx.core.content.ContextCompat
 import com.appricodes.lens_whisper.data.NO_HEADSET_KEY_CODE
+import com.appricodes.lens_whisper.data.DataTransferManager
+import com.appricodes.lens_whisper.data.DataTransferResult
+import com.appricodes.lens_whisper.data.ExportFileRef
+import com.appricodes.lens_whisper.data.ExportSelection
+import com.appricodes.lens_whisper.data.ProductDatabase
+import com.appricodes.lens_whisper.data.ProductDbInfo
+import com.appricodes.lens_whisper.data.ProductDbSource
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.data.SettingsRepository
@@ -35,7 +46,14 @@ import com.appricodes.lens_whisper.media.HeadsetShortcuts
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
+import com.appricodes.lens_whisper.service.ProductDbDownloadService
+import com.appricodes.lens_whisper.service.ProductDbDownloadState
 import com.appricodes.lens_whisper.offline.OfflineTranslator
+import com.appricodes.lens_whisper.ui.components.ExportDataDialog
+import com.appricodes.lens_whisper.ui.components.ImportDataDialog
+import com.appricodes.lens_whisper.ui.components.ProductDbConfirmDialog
+import com.appricodes.lens_whisper.ui.components.ProductDbProgressDialog
+import com.appricodes.lens_whisper.ui.components.ProductDbRemoveDialog
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import kotlinx.coroutines.launch
@@ -192,6 +210,128 @@ fun SettingsScreen(
 	var aiNarrationSectionExpanded by remember { mutableStateOf(false) }
 	var feedbackSoundSectionExpanded by remember { mutableStateOf(false) }
 	var localServerSectionExpanded by remember { mutableStateOf(false) }
+	var yourDataSectionExpanded by remember { mutableStateOf(false) }
+
+	// "Your Data" — export/import of the user's own barcode notes (see DataTransferManager). isBusy
+	// blocks a second run and both dialogs' buttons while one is in flight; a half-written archive
+	// is not something to let the user start twice.
+	var showExportDialog by remember { mutableStateOf(false) }
+	var showImportDialog by remember { mutableStateOf(false) }
+	var exportSelection by remember { mutableStateOf(ExportSelection()) }
+	var importableFiles by remember { mutableStateOf<List<ExportFileRef>>(emptyList()) }
+
+	// "Product Database" — the optional offline product lookup (see ProductDbSource). There is one
+	// database at one URL, so there is nothing to browse: tapping the row asks the server how big it
+	// is and goes straight to the confirmation. Nothing is fetched until the user taps, and nothing
+	// is downloaded until they confirm.
+	var productDbInstalled by remember { mutableStateOf(false) }
+	var productDbInstalledSize by remember { mutableStateOf("") }
+	var productDbSummary by remember { mutableStateOf("Checking…") }
+	var productDbChecking by remember { mutableStateOf(false) }
+	var productDbPendingDownload by remember { mutableStateOf<ProductDbInfo?>(null) }
+	var productDbPendingRemove by remember { mutableStateOf(false) }
+	// Whether the user has asked to stop watching the download — NOT whether the dialog is up.
+	// The difference matters: the service re-emits its progress several times a second, so a
+	// "dialog is visible" flag set from that stream is rewritten to true within a frame of the user
+	// dismissing it, and "Continue in Background" silently does nothing. Visibility is derived
+	// below from "a download is running AND the user has not dismissed it" instead, which no
+	// progress tick can undo.
+	var productDbProgressDismissed by remember { mutableStateOf(false) }
+	val productDbState by ProductDbDownloadService.state.collectAsState()
+	val productDbDownloading = productDbState is ProductDbDownloadState.Downloading ||
+		productDbState == ProductDbDownloadState.Finishing
+
+	suspend fun refreshProductDbStatus() {
+		val bytes = ProductDatabase.installedBytes(context)
+		productDbInstalled = bytes > 0
+		productDbInstalledSize = ProductDbSource.formatBytes(bytes)
+		productDbSummary = if (bytes > 0) {
+			val products = ProductDatabase.productCount(context)
+			if (products > 0) {
+				"Installed — ${"%,d".format(products)} products, $productDbInstalledSize"
+			} else {
+				"Installed, using $productDbInstalledSize"
+			}
+		} else {
+			"Not installed"
+		}
+	}
+
+	LaunchedEffect(Unit) { refreshProductDbStatus() }
+
+	// Reacts to whatever the download service last reported, including a download the user started
+	// and then left the screen during — the service's state is process-wide, so coming back here
+	// picks it up rather than showing a stale "not installed".
+	LaunchedEffect(productDbState) {
+		when (val state = productDbState) {
+			is ProductDbDownloadState.Downloading, ProductDbDownloadState.Finishing -> Unit
+			ProductDbDownloadState.Completed -> {
+				productDbProgressDismissed = false
+				refreshProductDbStatus()
+				AccessibilityUtils.announceToTalkBack(context, "Product database installed. $productDbSummary.")
+				ProductDbDownloadService.acknowledgeState()
+			}
+			is ProductDbDownloadState.Failed -> {
+				productDbProgressDismissed = false
+				AccessibilityUtils.announceToTalkBack(context, "Download failed. ${state.message}")
+				ProductDbDownloadService.acknowledgeState()
+			}
+			ProductDbDownloadState.Cancelled -> {
+				productDbProgressDismissed = false
+				AccessibilityUtils.announceToTalkBack(context, "Download cancelled.")
+				ProductDbDownloadService.acknowledgeState()
+			}
+			ProductDbDownloadState.Idle -> Unit
+		}
+	}
+
+	var dataTransferBusy by remember { mutableStateOf(false) }
+	// The one-line outcome of the last export/import, shown under the two rows and announced —
+	// there is no other place on this screen for "it worked, here is where it went".
+	var dataTransferMessage by remember { mutableStateOf<String?>(null) }
+
+	fun reportResult(result: DataTransferResult) {
+		dataTransferBusy = false
+		val message = when (result) {
+			is DataTransferResult.ExportSucceeded ->
+				"Exported ${result.noteCount} written ${if (result.noteCount == 1) "note" else "notes"} and " +
+					"${result.voiceNoteCount} voice ${if (result.voiceNoteCount == 1) "note" else "notes"} " +
+					"to your Downloads folder, as ${result.fileName}."
+			is DataTransferResult.ImportSucceeded ->
+				"Imported ${result.noteCount} written ${if (result.noteCount == 1) "note" else "notes"} and " +
+					"${result.voiceNoteCount} voice ${if (result.voiceNoteCount == 1) "note" else "notes"}."
+			is DataTransferResult.Failed -> result.message
+		}
+		dataTransferMessage = message
+		AccessibilityUtils.announceToTalkBack(context, message)
+	}
+
+	// The Import window lists the .fdb files in Downloads and imports one directly; this picker is
+	// only its fallback, for the Android 10+ case where scoped storage hides a file the user copied
+	// in from another phone (see DataTransferManager.listExportsInDownloads). There is no export
+	// picker any more — an export always goes to Downloads and nowhere else.
+	val openDocumentLauncher = rememberLauncherForActivityResult(
+		ActivityResultContracts.OpenDocument()
+	) { uri ->
+		if (uri == null) {
+			dataTransferBusy = false
+			return@rememberLauncherForActivityResult
+		}
+		coroutineScope.launch { reportResult(DataTransferManager.importFrom(context, uri)) }
+	}
+
+	// Android 8/9 only: writing into the public Downloads folder there is a real file write, so it
+	// needs the storage permission (declared with maxSdkVersion="28", so it does not exist at all on
+	// newer versions — see DataTransferManager.needsLegacyStoragePermission).
+	val legacyStorageLauncher = rememberLauncherForActivityResult(
+		ActivityResultContracts.RequestPermission()
+	) { granted ->
+		if (granted) {
+			coroutineScope.launch { reportResult(DataTransferManager.exportToDownloads(context, exportSelection)) }
+		} else {
+			reportResult(DataTransferResult.Failed("Storage permission is needed to save the file to your Downloads folder."))
+		}
+	}
 
 	// Everything below lives in its own sub-window (see showHeadsetShortcutsDialog / the
 	// HeadsetShortcutsDialog composable at the end of this file) rather than inline here, so this
@@ -496,6 +636,76 @@ fun SettingsScreen(
 		}
 		} // end Feedback & Sound CollapsibleSection
 
+		CollapsibleSection(
+			title = "Your Data",
+			expanded = yourDataSectionExpanded,
+			onToggle = { yourDataSectionExpanded = !yourDataSectionExpanded }
+		) {
+			DataRow(
+				title = "Export My Data",
+				summary = "Save your barcode notes to Downloads",
+				description = "Export my data. Saves your written and voice notes about barcodes into a single " +
+					"file in this phone's Downloads folder, so you can move them to another phone. Double tap to open.",
+				enabled = !dataTransferBusy,
+				onClick = { showExportDialog = true }
+			)
+			DataRow(
+				title = "Import My Data",
+				summary = "Restore notes from Downloads",
+				description = "Import my data. Reads a Lens Whisper export file from this phone's Downloads " +
+					"folder and adds its barcode notes to this phone. Double tap to open.",
+				enabled = !dataTransferBusy,
+				onClick = {
+					// Listed up front so the dialog opens with its choices already spoken, rather
+					// than appearing empty and filling in a moment later.
+					coroutineScope.launch {
+						importableFiles = DataTransferManager.listExportsInDownloads(context)
+						showImportDialog = true
+					}
+				}
+			)
+			dataTransferMessage?.let { message ->
+				Text(text = message, fontSize = 15.sp, color = Color.Gray)
+			}
+			DataRow(
+				title = "Product Database",
+				summary = if (productDbChecking) "Checking…" else productDbSummary,
+				description = "Product database. $productDbSummary. An optional database of products kept on " +
+					"this phone, so Scan Barcode can name a product without going online and without sending " +
+					"the barcode anywhere. Double tap to " +
+					(if (productDbInstalled) "update or remove it." else "download it."),
+				enabled = !productDbChecking && !productDbDownloading,
+				onClick = {
+					coroutineScope.launch {
+						productDbChecking = true
+						// Ask the server how big it is at the moment the user taps, so the size in
+						// the confirmation is the real one for whatever is published today rather
+						// than a figure baked into the app.
+						val info = ProductDbSource.probe()
+						productDbChecking = false
+						if (info == null) {
+							AccessibilityUtils.announceToTalkBack(
+								context,
+								"The product database could not be reached. Check your internet connection and try again."
+							)
+						} else {
+							productDbPendingDownload = info
+						}
+					}
+				}
+			)
+			if (productDbInstalled) {
+				DataRow(
+					title = "Remove Product Database",
+					summary = "Free up $productDbInstalledSize",
+					description = "Remove product database. Deletes it from this phone and frees " +
+						"$productDbInstalledSize. Double tap to remove.",
+					enabled = !productDbDownloading,
+					onClick = { productDbPendingRemove = true }
+				)
+			}
+		}
+
 		val headsetSummary = when {
 			headsetRepeatKeyCode == NO_HEADSET_KEY_CODE && headsetMicKeyCode == NO_HEADSET_KEY_CODE -> "Not set up"
 			headsetRepeatKeyCode == NO_HEADSET_KEY_CODE -> "Microphone button set"
@@ -732,6 +942,131 @@ fun SettingsScreen(
 				}
 			}
 		)
+	}
+
+	if (showExportDialog) {
+		ExportDataDialog(
+			selection = exportSelection,
+			isBusy = dataTransferBusy,
+			onSelectionChange = { exportSelection = it },
+			onExport = {
+				showExportDialog = false
+				dataTransferBusy = true
+				dataTransferMessage = null
+				coroutineScope.launch {
+					// Checked before anything else happens, so an empty export never gets as far as
+					// writing a file that would fail its own import.
+					if (!DataTransferManager.hasAnythingToExport(context, exportSelection)) {
+						reportResult(DataTransferResult.Failed("There is nothing to export yet. Save a note about a barcode first."))
+						return@launch
+					}
+					if (DataTransferManager.needsLegacyStoragePermission() &&
+						ContextCompat.checkSelfPermission(context, android.Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED
+					) {
+						// Android 8/9 only; the launcher's callback runs the export once granted.
+						legacyStorageLauncher.launch(android.Manifest.permission.WRITE_EXTERNAL_STORAGE)
+					} else {
+						reportResult(DataTransferManager.exportToDownloads(context, exportSelection))
+					}
+				}
+			},
+			onCancel = { showExportDialog = false }
+		)
+	}
+
+	if (showImportDialog) {
+		ImportDataDialog(
+			availableFiles = importableFiles,
+			isBusy = dataTransferBusy,
+			onImportFile = { file ->
+				showImportDialog = false
+				dataTransferBusy = true
+				dataTransferMessage = null
+				coroutineScope.launch { reportResult(DataTransferManager.importFrom(context, file.uri)) }
+			},
+			onChooseOtherFile = {
+				showImportDialog = false
+				dataTransferBusy = true
+				dataTransferMessage = null
+				// "*/*", not a specific type: .fdb has no registered MIME type, and a picker
+				// filtered to application/octet-stream hides the file on providers that report
+				// an unknown extension as something else entirely.
+				openDocumentLauncher.launch(arrayOf("*/*"))
+			},
+			onCancel = { showImportDialog = false }
+		)
+	}
+
+	productDbPendingDownload?.let { info ->
+		ProductDbConfirmDialog(
+			info = info,
+			isUpdate = productDbInstalled,
+			onConfirm = {
+				productDbPendingDownload = null
+				productDbProgressDismissed = false
+				ProductDbDownloadService.start(context, info)
+			},
+			onCancel = { productDbPendingDownload = null }
+		)
+	}
+
+	if (productDbPendingRemove) {
+		ProductDbRemoveDialog(
+			installedSize = productDbInstalledSize,
+			onConfirm = {
+				productDbPendingRemove = false
+				coroutineScope.launch {
+					ProductDatabase.delete(context)
+					refreshProductDbStatus()
+					AccessibilityUtils.announceToTalkBack(context, "Product database removed.")
+				}
+			},
+			onCancel = { productDbPendingRemove = false }
+		)
+	}
+
+	if (productDbDownloading && !productDbProgressDismissed) {
+		val downloading = productDbState as? ProductDbDownloadState.Downloading
+		ProductDbProgressDialog(
+			bytesDownloaded = downloading?.bytesDownloaded ?: 0L,
+			totalBytes = downloading?.totalBytes ?: 0L,
+			isFinishing = productDbState == ProductDbDownloadState.Finishing,
+			// No visibility flag to clear: the dialog goes away because the service stops
+			// reporting a download, which is the thing that actually happened.
+			onCancel = { ProductDbDownloadService.cancel(context) },
+			onHide = { productDbProgressDismissed = true }
+		)
+	}
+}
+
+/** One row in the "Your Data" section — a title, a one-line summary of what it does, and a single
+ *  accessibility node for the pair, matching the Headset Button Shortcuts row's shape (see its own
+ *  comment for why that shape rather than the separate-heading-plus-value one used above). */
+@Composable
+private fun DataRow(
+	title: String,
+	summary: String,
+	description: String,
+	enabled: Boolean,
+	onClick: () -> Unit
+) {
+	Column(
+		modifier = Modifier
+			.fillMaxWidth()
+			.clickable(enabled = enabled, onClick = onClick)
+			.clearAndSetSemantics { contentDescription = description },
+		verticalArrangement = Arrangement.spacedBy(8.dp)
+	) {
+		Text(text = title, fontSize = 18.sp, color = Color.Gray)
+		Box(
+			modifier = Modifier
+				.fillMaxWidth()
+				.background(MaterialTheme.colorScheme.surfaceVariant)
+				.padding(16.dp),
+			contentAlignment = Alignment.CenterStart
+		) {
+			Text(text = summary, fontSize = 18.sp)
+		}
 	}
 }
 

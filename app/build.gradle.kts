@@ -1,7 +1,25 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+}
+
+// The passphrase the Export/Import feature derives its AES key from (see
+// data/BackupCrypto.kt). Kept out of version control on purpose: `secrets.properties` is
+// gitignored and only `secrets.properties.example` is committed, so a fresh clone still builds —
+// it just falls back to the placeholder below and produces .fdb files this build can read but a
+// properly-keyed build cannot. Ship builds must supply the real file.
+val placeholderPassphrase = "lenswhisper-placeholder-passphrase"
+val secretsFile = rootProject.file("secrets.properties")
+val backupPassphrase: String = if (secretsFile.exists()) {
+    Properties().apply { secretsFile.inputStream().use { load(it) } }
+        .getProperty("BACKUP_PASSPHRASE")
+        ?.takeIf { it.isNotBlank() }
+        ?: placeholderPassphrase
+} else {
+    placeholderPassphrase
 }
 
 android {
@@ -16,6 +34,8 @@ android {
         versionName = "1.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        buildConfigField("String", "BACKUP_PASSPHRASE", "\"$backupPassphrase\"")
     }
 
     buildTypes {
@@ -79,6 +99,13 @@ dependencies {
     implementation(libs.androidx.ui.graphics)
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
+
+    // Barcode scanning (QR codes and 1D product barcodes) - the play-services-mlkit-* variant
+    // for the same reason as the OCR dependencies below: no model weights in the APK, the module
+    // is fetched by Play Services instead (see the com.google.mlkit.vision.DEPENDENCIES manifest
+    // meta-data, which now asks for "barcode" alongside "ocr"). Backs
+    // offline/OfflineBarcodeScanner.kt and BarcodeScanActivity.
+    implementation(libs.barcode.scanning)
 
     // Text recognition (OCR) - the play-services-mlkit-text-recognition* variant (see
     // gradle/libs.versions.toml), NOT com.google.mlkit:text-recognition*: no model weights are
@@ -159,4 +186,20 @@ dependencies {
     androidTestImplementation(libs.androidx.ui.test.junit4)
     debugImplementation(libs.androidx.ui.tooling)
     debugImplementation(libs.androidx.ui.test.manifest)
+}
+
+// Shipping a release built on the placeholder key would be a one-way mistake: every .fdb a user
+// exported from that build becomes unreadable the moment the real secrets.properties arrives,
+// because the key it was encrypted under no longer exists anywhere. Checked against the task graph
+// rather than inside `buildTypes.release { }` — that block is configured on every build, so a
+// throw there would fail debug builds as well.
+gradle.taskGraph.whenReady {
+    val buildingRelease = allTasks.any { it.name.contains("Release") }
+    if (buildingRelease && backupPassphrase == placeholderPassphrase) {
+        throw GradleException(
+            "secrets.properties is missing or still holds the placeholder BACKUP_PASSPHRASE. " +
+                "Copy secrets.properties.example to secrets.properties and set a real value " +
+                "before making a release build."
+        )
+    }
 }

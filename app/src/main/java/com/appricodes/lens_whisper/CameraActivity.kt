@@ -266,8 +266,8 @@ private fun CameraScreen(
             // allowFlash ANDs with the user's own setting rather than overriding it — MlkitButtonProvider
             // uses it to force the flash off after a continuous run's first frame; every other
             // caller always passes true, letting prefs.flashEnabled decide as normal.
-            capturePhoto = { maxDim, highRes, allowFlash, onShutter ->
-                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled && allowFlash, highRes) {
+            capturePhoto = { maxDim, highRes, allowFlash, correctOrientation, onShutter ->
+                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled && allowFlash, highRes, correctOrientation = correctOrientation) {
                     cameraController.capturePhoto(maxDim, onShutter)
                 }
             }
@@ -393,10 +393,10 @@ private fun CameraScreen(
      * high-res side is a file, not a held bitmap). [onShutter] fires at the exact moment of
      * exposure, same as every other capture path — see [CameraController.capturePhotoInternal].
      */
-    suspend fun captureMaxResPair(onShutter: () -> Unit): DualResCapture? {
+    suspend fun captureMaxResPair(correctOrientation: Boolean = true, onShutter: () -> Unit): DualResCapture? {
         if (!cameraPermissionGranted) return null
         return try {
-            val frame = cameraController.withCaptureSession(lifecycleOwner, flashEnabled, maxResolution = true) {
+            val frame = cameraController.withCaptureSession(lifecycleOwner, flashEnabled, maxResolution = true, correctOrientation = correctOrientation) {
                 // No maxDim cap here (Int.MAX_VALUE) — the whole point of this capture tier is to
                 // keep the sensor's actual resolution intact for SegmentationIsolation to crop from.
                 cameraController.capturePhotoToFile(Int.MAX_VALUE, onShutter)
@@ -482,7 +482,10 @@ private fun CameraScreen(
             // finally cancels this the moment this function returns; startActivity() below is
             // asynchronous, so that finally fires — and this tone stops — before the new Activity's
             // own composition (and its own tone) ever starts, avoiding two tones overlapping.
-            val capture = captureMaxResPair { controller.startProcessingChime() }
+            // correctOrientation = false: Explore and Describe sends the captured image to the
+            // model exactly as taken, unrotated — same reasoning as SegmentationExploreActivity's
+            // own capture (see its captureNewPhoto).
+            val capture = captureMaxResPair(correctOrientation = false) { controller.startProcessingChime() }
             if (capture == null) {
                 controller.stopProcessingChime()
                 AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")

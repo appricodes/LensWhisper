@@ -1,5 +1,6 @@
 [versions]
 agp = "8.11.2"
+barcodeScanning = "18.3.1"
 cameraxVersion = "1.6.1"
 kotlin = "2.3.21"
 litertlm = "0.16.1"
@@ -24,6 +25,7 @@ textRecognitionKorean = "16.0.1"
 translate = "17.0.3"
 
 [libraries]
+barcode-scanning = { module = "com.google.android.gms:play-services-mlkit-barcode-scanning", version.ref = "barcodeScanning" }
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraxVersion" }
 androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "cameraxVersion" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "cameraxVersion" }

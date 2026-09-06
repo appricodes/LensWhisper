@@ -6,6 +6,7 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import android.os.Handler
 import android.os.Looper
+import kotlinx.coroutines.delay
 import com.appricodes.lens_whisper.data.PreferencesManager
 import kotlin.math.PI
 import kotlin.math.exp
@@ -36,7 +37,26 @@ object ProcessingSoundPlayer {
         .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
         .build()
 
-    private fun play(pcm: ByteArray, releaseDelayMs: Long) {
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    /** Guards [interruptibleTrack]/[interruptibleRelease] — [play] runs on whichever IO thread a
+     *  waiting loop happens to be on, while [stopClockWaitingTone] is usually called from the main
+     *  thread the moment a result arrives. */
+    private val interruptibleLock = Any()
+
+    // The currently-playing sound that is allowed to be cut short mid-phrase, and the pending
+    // "release it" callback to withdraw if it is. Only the waiting tone opts into this: every other
+    // sound here is a click or a short chime that is over before anyone could want it stopped.
+    private var interruptibleTrack: AudioTrack? = null
+    private var interruptibleRelease: Runnable? = null
+
+    /**
+     * [interruptible] registers the track so [stopClockWaitingTone] can end it early. Without it a
+     * sound plays to the end of its buffer no matter what: the PCM has already been handed to
+     * AudioTrack, so cancelling the coroutine that started it stops the *next* phrase and does
+     * nothing about the one already sounding.
+     */
+    private fun play(pcm: ByteArray, releaseDelayMs: Long, interruptible: Boolean = false) {
         try {
             val audioTrack = AudioTrack.Builder()
                 .setAudioAttributes(ACCESSIBILITY_AUDIO_ATTRIBUTES)
@@ -51,11 +71,60 @@ object ProcessingSoundPlayer {
                 .setTransferMode(AudioTrack.MODE_STATIC)
                 .build()
             audioTrack.write(pcm, 0, pcm.size)
-            audioTrack.play()
-            Handler(Looper.getMainLooper()).postDelayed({ audioTrack.release() }, releaseDelayMs)
+
+            val release = Runnable {
+                runCatching { audioTrack.release() }
+                synchronized(interruptibleLock) {
+                    if (interruptibleTrack === audioTrack) {
+                        interruptibleTrack = null
+                        interruptibleRelease = null
+                    }
+                }
+            }
+
+            if (interruptible) {
+                // Registering and starting under the one lock: otherwise a stop arriving in the
+                // gap between them would find nothing to stop and this would start playing
+                // immediately afterwards, unstoppable.
+                synchronized(interruptibleLock) {
+                    releaseInterruptibleLocked()
+                    interruptibleTrack = audioTrack
+                    interruptibleRelease = release
+                    audioTrack.play()
+                }
+            } else {
+                audioTrack.play()
+            }
+            mainHandler.postDelayed(release, releaseDelayMs)
         } catch (e: Exception) {
             e.printStackTrace()
         }
+    }
+
+    /** Call under [interruptibleLock]. Silences and frees the tracked track right now, and withdraws
+     *  its pending release so it cannot be freed twice. */
+    private fun releaseInterruptibleLocked() {
+        val track = interruptibleTrack ?: return
+        interruptibleRelease?.let { mainHandler.removeCallbacks(it) }
+        interruptibleTrack = null
+        interruptibleRelease = null
+        // pause -> flush -> stop -> release: flush() is only legal on a paused or stopped track, and
+        // it is what actually discards the samples still queued in a MODE_STATIC buffer. Each step
+        // is guarded because any of them throws if the track was already torn down on another
+        // thread, and "the sound is already gone" is exactly the outcome wanted anyway.
+        runCatching { track.pause() }
+        runCatching { track.flush() }
+        runCatching { track.stop() }
+        runCatching { track.release() }
+    }
+
+    /**
+     * Cuts the waiting tone off mid-phrase. Called automatically when a
+     * [loopClockWaitingTone] is cancelled, which is how every caller in the app uses it — there
+     * should be no need to call this directly.
+     */
+    fun stopClockWaitingTone() {
+        synchronized(interruptibleLock) { releaseInterruptibleLocked() }
     }
 
     private fun toPcm16(mixBuffer: DoubleArray): ByteArray {
@@ -92,8 +161,13 @@ object ProcessingSoundPlayer {
     )
 
     /**
-     * Call on a loop (see every `startProcessingChime`-style caller — `delay(1100)` between calls
-     * is the established cadence) for as long as a model request is in flight. Must keep being
+     * The previous waiting tone — a held, low murmur. **No longer used anywhere**: every caller
+     * moved to [playClockWaitingTone] on 2026-09-06. Kept rather than deleted so the choice can be
+     * reversed without rewriting the synthesis; if it is still unused a few releases from now, it
+     * can go.
+     *
+     * Was called on a loop with `delay(1100)` between calls, for as long as a model request was in
+     * flight. Must keep being
      * called for the *entire* wait, including the whole duration of a streaming response, not just
      * until the first token/sentence arrives — stopping early would announce "done" before the
      * model actually is.
@@ -125,6 +199,139 @@ object ProcessingSoundPlayer {
         }
 
         play(toPcm16(mixBuffer), (WAIT_DURATION_SEC * 1000).toLong() + 150)
+    }
+
+    // --- "waiting for the model" tone, clock variant -----------------------------------------
+
+    /** The rhythm, read left to right: `-` is a half note, `.` a quarter. One half, two quarters,
+     *  then six more halves — the pattern this sound was asked for. Kept as the literal string
+     *  rather than a list of numbers so it stays legible against the brief, and against
+     *  `sound_previews/render_clock_wait.py`, which renders the identical sound to a WAV for
+     *  auditioning and carries the same table. Change one, change the other. */
+    private const val CLOCK_PATTERN = "-..------"
+
+    /** Seconds per beat. A real wall clock ticks at 1 Hz, which would stretch this phrase to
+     *  sixteen seconds — far too long for something that repeats while the user waits. This is
+     *  about four ticks a second: unmistakably ticking, while the whole phrase still fits into
+     *  roughly two seconds, close enough to [WAIT_DURATION_SEC]'s cadence to loop the same way. */
+    private const val CLOCK_BEAT_SEC = 0.13
+
+    /**
+     * How long to wait between calls to [playClockWaitingTone] when looping it, in milliseconds —
+     * exactly one phrase, so the ticking carries on unbroken instead of restarting over itself.
+     *
+     * This has to be public and has to be used: the phrase is 2.08 s, nearly twice the `delay(1100)`
+     * every waiting loop in the app used for the old [playWaitingTone], and at that cadence each
+     * phrase would start again before the last had finished and the ticking would collapse into
+     * mush. Derived from the pattern rather than written out, so retuning [CLOCK_BEAT_SEC] moves
+     * every caller with it.
+     */
+    val CLOCK_WAIT_LOOP_DELAY_MS: Long =
+        (CLOCK_PATTERN.sumOf { if (it == '.') 1.0 else 2.0 } * CLOCK_BEAT_SEC * 1000).toLong()
+
+    // Tick and tock alternate, the way a real escapement does. Both sit inside the 300-600 Hz
+    // the sound was specified within.
+    private const val CLOCK_TICK_HZ = 560.0
+    private const val CLOCK_TOCK_HZ = 340.0
+
+    // Each note is a hard-damped knock, not a sustained tone: a clock tick is mechanical, so it
+    // has to be over almost as soon as it starts however far apart the notes are.
+    private const val CLOCK_NOTE_SEC = 0.060
+    private const val CLOCK_DECAY_RATE = 60.0
+    private const val CLOCK_ATTACK_SEC = 0.0015
+    private const val CLOCK_NOISE_SEC = 0.004
+    private const val CLOCK_NOISE_AMOUNT = 0.35
+    private const val CLOCK_PEAK = 0.22
+
+    // Fundamental, a strong octave, and a deliberately INHARMONIC partial at 3.5x — that
+    // non-integer ratio is what makes each note read as struck wood rather than a musical pitch.
+    private val clockHarmonics = listOf(1.0 to 1.00, 2.0 to 0.50, 3.5 to 0.25)
+    private val clockHarmonicAmplitudeSum = clockHarmonics.sumOf { it.second }
+
+    private fun clockBeatsFor(symbol: Char): Double = if (symbol == '.') 1.0 else 2.0
+
+    /**
+     * The app's "still working on it" sound: a clock ticking. Call it on a loop for as long as a
+     * request is in flight, waiting [CLOCK_WAIT_LOOP_DELAY_MS] between calls — **not** the
+     * `delay(1100)` the previous tone used, which is shorter than this phrase and would stack
+     * phrases on top of each other.
+     *
+     * Replaced [playWaitingTone] at every call site on 2026-09-06. That one is kept, unused, as the
+     * sound this was chosen over — going back is a matter of swapping the calls and the delay back.
+     *
+     * Rendered identically by `sound_previews/render_clock_wait.py`, so what you audition there is
+     * what the app plays.
+     */
+    fun playClockWaitingTone(context: Context) {
+        if (!PreferencesManager(context).soundEffectsEnabled) return
+
+        val totalBeats = CLOCK_PATTERN.sumOf { clockBeatsFor(it) }
+        val totalSeconds = totalBeats * CLOCK_BEAT_SEC
+        val totalSamples = (totalSeconds * SAMPLE_RATE).toInt()
+        val mixBuffer = DoubleArray(totalSamples)
+
+        val attackSamples = (CLOCK_ATTACK_SEC * SAMPLE_RATE).toInt().coerceAtLeast(1)
+        val noiseSamples = (CLOCK_NOISE_SEC * SAMPLE_RATE).toInt()
+        val noteSamples = (CLOCK_NOTE_SEC * SAMPLE_RATE).toInt()
+
+        var onsetSec = 0.0
+        for ((index, symbol) in CLOCK_PATTERN.withIndex()) {
+            val frequency = if (index % 2 == 0) CLOCK_TICK_HZ else CLOCK_TOCK_HZ
+            val startSample = (onsetSec * SAMPLE_RATE).toInt()
+
+            for (i in 0 until noteSamples) {
+                val bufferIndex = startSample + i
+                if (bufferIndex >= totalSamples) break
+                val t = i.toDouble() / SAMPLE_RATE
+
+                var raw = 0.0
+                for ((harmonicMultiple, amplitude) in clockHarmonics) {
+                    raw += amplitude * sin(2 * PI * frequency * harmonicMultiple * t)
+                }
+                raw /= clockHarmonicAmplitudeSum
+
+                // A few milliseconds of noise on the attack: the click of the mechanism, without
+                // which each note sounds like a marimba rather than a clock.
+                if (i < noiseSamples) raw += CLOCK_NOISE_AMOUNT * (Random.nextDouble() * 2.0 - 1.0)
+
+                val attack = if (i < attackSamples) i.toDouble() / attackSamples else 1.0
+                val envelope = attack * exp(-CLOCK_DECAY_RATE * t)
+                mixBuffer[bufferIndex] += raw * envelope * CLOCK_PEAK
+            }
+
+            onsetSec += clockBeatsFor(symbol) * CLOCK_BEAT_SEC
+        }
+
+        play(toPcm16(mixBuffer), (totalSeconds * 1000).toLong() + 150, interruptible = true)
+    }
+
+    /**
+     * Plays the clock tone on a loop until the calling coroutine is cancelled, and **silences it
+     * the instant that happens** rather than letting the phrase in flight run to its end.
+     *
+     * This is the only supported way to run the waiting tone, and it exists because doing it by
+     * hand was subtly wrong everywhere. The loop itself is trivial, but the teardown is not: a
+     * phrase is 2.08 s of PCM already inside an AudioTrack, so `job.cancel()` alone leaves the app
+     * ticking for up to two seconds after the thing the user was waiting for has finished — which
+     * is precisely the moment they need to hear the result instead. Owning the loop here means the
+     * `finally` cannot be forgotten at a call site, and none of the eight callers has to think
+     * about it.
+     *
+     * [startImmediately] false waits one full phrase before the first tone — for a caller whose
+     * wait may well be over before it is worth making any sound at all (the barcode scanner, which
+     * usually finds its barcode within a second).
+     */
+    suspend fun loopClockWaitingTone(context: Context, startImmediately: Boolean = true) {
+        try {
+            if (!startImmediately) delay(CLOCK_WAIT_LOOP_DELAY_MS)
+            while (true) {
+                playClockWaitingTone(context)
+                delay(CLOCK_WAIT_LOOP_DELAY_MS)
+            }
+        } finally {
+            // Runs on cancellation too — that is the whole point.
+            stopClockWaitingTone()
+        }
     }
 
     // --- shutter click -----------------------------------------------------------------------

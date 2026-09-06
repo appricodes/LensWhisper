@@ -41,7 +41,6 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -327,10 +326,7 @@ class AnalysisSessionController(
      *  send (i.e. after capture/extraction has finished, not before — see each caller). */
     fun startProcessingChime() {
         activeAudioFeedbackJob = coroutineScope.launch(Dispatchers.IO) {
-            while (true) {
-                ProcessingSoundPlayer.playWaitingTone(context)
-                delay(1100)
-            }
+            ProcessingSoundPlayer.loopClockWaitingTone(context)
         }
     }
 

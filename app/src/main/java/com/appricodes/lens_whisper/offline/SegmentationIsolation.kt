@@ -55,8 +55,17 @@ object SegmentationIsolation {
      * with every pixel outside the mask painted opaque white. Returns null if the file can't be
      * decoded (corrupt/missing cache file) rather than throwing, so a caller can fall back to a
      * plain "could not isolate that object" announcement.
+     *
+     * [rotationDegrees] extends that same "same capture" contract: [highResFile]'s own bytes are
+     * never rotated (re-encoding a full-sensor capture just to rotate it would defeat the whole
+     * point of decoding only [instance]'s own region below), but [lowResBitmap] — and so
+     * [instance]'s coordinates, detected against it — may have been rotated a quarter turn after
+     * capture to better fit a display (see
+     * [com.appricodes.lens_whisper.SegmentationExploreActivity]'s `rotateForBestFit`). Pass exactly
+     * that rotation here (clockwise, one of 0/90/180/270) or this call silently isolates the wrong
+     * region of the file whenever it isn't 0.
      */
-    fun isolate(lowResBitmap: Bitmap, instance: DetectedInstance, highResFile: File, dilatePixels: Int = 2): Bitmap? {
+    fun isolate(lowResBitmap: Bitmap, instance: DetectedInstance, highResFile: File, dilatePixels: Int = 2, rotationDegrees: Int = 0): Bitmap? {
         val lw = lowResBitmap.width
         val lh = lowResBitmap.height
 
@@ -104,10 +113,17 @@ object SegmentationIsolation {
         try {
             val hw = decoder.width
             val hh = decoder.height
-            val hLeft = (left.toFloat() / lw * hw).toInt().coerceIn(0, hw - 1)
-            val hTop = (top.toFloat() / lh * hh).toInt().coerceIn(0, hh - 1)
-            val hRight = (right.toFloat() / lw * hw).toInt().coerceIn(hLeft + 1, hw)
-            val hBottom = (bottom.toFloat() / lh * hh).toInt().coerceIn(hTop + 1, hh)
+            // left/top/right/bottom above are in lowResBitmap's own (possibly rotated) space — map
+            // the box's two diagonal corners back to highResFile's native (never-rotated) normalized
+            // space via the inverse rotation before locating the region to crop from it. Both corners
+            // go through the same transform and are then re-sorted into left<right/top<bottom, since
+            // which corner ends up "top-left" changes with the rotation.
+            val (nx1, ny1) = rotateNormalizedPoint(left.toFloat() / lw, top.toFloat() / lh, -rotationDegrees)
+            val (nx2, ny2) = rotateNormalizedPoint(right.toFloat() / lw, bottom.toFloat() / lh, -rotationDegrees)
+            val hLeft = (minOf(nx1, nx2) * hw).toInt().coerceIn(0, hw - 1)
+            val hTop = (minOf(ny1, ny2) * hh).toInt().coerceIn(0, hh - 1)
+            val hRight = (maxOf(nx1, nx2) * hw).toInt().coerceIn(hLeft + 1, hw)
+            val hBottom = (maxOf(ny1, ny2) * hh).toInt().coerceIn(hTop + 1, hh)
 
             val region = try {
                 decoder.decodeRegion(Rect(hLeft, hTop, hRight, hBottom), null)
@@ -123,10 +139,18 @@ object SegmentationIsolation {
             val pixels = IntArray(outW * outH)
             out.getPixels(pixels, 0, outW, 0, 0, outW, outH)
             for (y in 0 until outH) {
-                val ry = (y.toFloat() / outH * rh).toInt().coerceIn(0, rh - 1)
                 for (x in 0 until outW) {
-                    val rx = (x.toFloat() / outW * rw).toInt().coerceIn(0, rw - 1)
-                    if (!mask[ry * rw + rx]) pixels[y * outW + x] = WHITE_OPAQUE
+                    // This output pixel's normalized position in the *whole file* (not just this
+                    // cropped region), then forward-rotated into the mask's own (rotated) space —
+                    // the inverse of the box mapping above. Reduces to the original plain
+                    // proportional scaling when rotationDegrees is 0.
+                    val fnx = (hLeft + x + 0.5f) / hw
+                    val fny = (hTop + y + 0.5f) / hh
+                    val (rnx, rny) = rotateNormalizedPoint(fnx, fny, rotationDegrees)
+                    val rx = (rnx * lw).toInt() - left
+                    val ry = (rny * lh).toInt() - top
+                    val inMask = rx in 0 until rw && ry in 0 until rh && mask[ry * rw + rx]
+                    if (!inMask) pixels[y * outW + x] = WHITE_OPAQUE
                 }
             }
             out.setPixels(pixels, 0, outW, 0, 0, outW, outH)
@@ -137,6 +161,24 @@ object SegmentationIsolation {
     }
 
     private const val WHITE_OPAQUE = 0xFFFFFFFF.toInt()
+
+    /**
+     * Rotates a normalized (0..1) point clockwise by [clockwiseDegrees] (any multiple of 90,
+     * including negative — normalized mod 360) within a unit box whose own width/height swap at 90°
+     * and 270°, matching what actually happens to pixel coordinates when a bitmap is rotated via
+     * `Matrix.postRotate` (see [com.appricodes.lens_whisper.SegmentationExploreActivity]'s
+     * `rotateForBestFit`, which produces the rotation this corrects for). Passing the negated angle
+     * gives the inverse transform — rotating a point by `-d` undoes a rotation by `d`, which is all
+     * [isolate] needs both directions of (rotated lowRes space -> native file space for locating the
+     * crop, then native space -> rotated space again per output pixel to test it against the mask).
+     */
+    private fun rotateNormalizedPoint(x: Float, y: Float, clockwiseDegrees: Int): Pair<Float, Float> =
+        when (((clockwiseDegrees % 360) + 360) % 360) {
+            90 -> (1f - y) to x
+            180 -> (1f - x) to (1f - y)
+            270 -> y to (1f - x)
+            else -> x to y
+        }
 
     private fun openRegionDecoder(file: File): BitmapRegionDecoder? = try {
         FileInputStream(file).use { stream ->

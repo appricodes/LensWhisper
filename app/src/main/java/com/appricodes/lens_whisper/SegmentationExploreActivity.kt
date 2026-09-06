@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.graphics.Matrix
 import android.net.Uri
 import android.os.Bundle
 import androidx.activity.ComponentActivity
@@ -85,7 +86,6 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -192,10 +192,7 @@ private suspend fun detectAndDescribe(
 private suspend fun <T> coroutineScopeWithWaitingTone(context: Context, externalToneJob: Job?, block: suspend CoroutineScope.() -> T): T =
     coroutineScope {
         val toneJob = externalToneJob ?: launch(Dispatchers.IO) {
-            while (true) {
-                ProcessingSoundPlayer.playWaitingTone(context)
-                delay(1100)
-            }
+            ProcessingSoundPlayer.loopClockWaitingTone(context)
         }
         try {
             block()
@@ -203,6 +200,31 @@ private suspend fun <T> coroutineScopeWithWaitingTone(context: Context, external
             toneJob.cancel()
         }
     }
+
+/**
+ * Rotates [bitmap] a quarter turn, clockwise, when its own aspect (landscape vs. portrait)
+ * disagrees with the screen's — e.g. a landscape photo/video frame explored on this normally
+ * portrait, always-full-screen ([ImmersiveFullScreen]) view. Both [SegmentationExploreScreen]'s
+ * `Image` and its `HoverExploreLayer` fill the screen edge to edge via
+ * [androidx.compose.ui.layout.ContentScale.FillBounds] (stretching, not letterboxing — there is no
+ * margin to fall back on), so a mismatched photo is otherwise squeezed hard along one axis (a 16:9
+ * photo on a ~9:19.5 screen loses over half its width) — rotating first removes most, but rarely
+ * all, of that distortion; the two aspect ratios still won't match exactly. Only ever a multiple of
+ * 90° so pixel data and mask coordinates stay exact — this does not attempt a closer non-90° fit.
+ *
+ * Returns [bitmap] itself, unrotated, when the aspects already agree — callers can compare the
+ * result's identity to know whether an actual rotation happened, but should generally just use the
+ * returned [Pair]'s degrees value (fed to [SegmentationIsolation.isolate] in describeMode) rather
+ * than infer it.
+ */
+private fun rotateForBestFit(bitmap: Bitmap, screenWidth: Int, screenHeight: Int): Pair<Bitmap, Int> {
+    val bitmapLandscape = bitmap.width >= bitmap.height
+    val screenLandscape = screenWidth >= screenHeight
+    if (bitmapLandscape == screenLandscape) return bitmap to 0
+    val matrix = Matrix().apply { postRotate(90f) }
+    val rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
+    return rotated to 90
+}
 
 @Composable
 private fun SegmentationExploreScreen(
@@ -248,6 +270,12 @@ private fun SegmentationExploreScreen(
     // restarting it. See analyzeTappedObject.
     var activeDescribeJob by remember { mutableStateOf<Job?>(null) }
     var activeDescribeInstance by remember { mutableStateOf<DetectedInstance?>(null) }
+    // How far [bitmap] was rotated (clockwise, 0/90/180/270) from the orientation it was actually
+    // captured/loaded in, to better fit this screen — see rotateForBestFit's doc. [highResFile]
+    // (when present, describeMode only) was never rotated to match — SegmentationIsolation.isolate
+    // needs this value to map [bitmap]'s (rotated) detection coordinates back to the file's own
+    // native orientation before cropping from it.
+    var appliedRotationDegrees by remember { mutableStateOf(0) }
 
     BackHandler { onClose() }
     DisposableEffect(cameraController) { onDispose { cameraController.shutdown() } }
@@ -303,13 +331,12 @@ private fun SegmentationExploreScreen(
             previousJob?.cancelAndJoin()
             val describeScope = this
             val toneJob = describeScope.launch(Dispatchers.IO) {
-                while (true) {
-                    ProcessingSoundPlayer.playWaitingTone(context)
-                    delay(1100)
-                }
+                ProcessingSoundPlayer.loopClockWaitingTone(context)
             }
             try {
-                val isolated = withContext(Dispatchers.Default) { SegmentationIsolation.isolate(loadedBitmap, hit, file) }
+                val isolated = withContext(Dispatchers.Default) {
+                    SegmentationIsolation.isolate(loadedBitmap, hit, file, rotationDegrees = appliedRotationDegrees)
+                }
                 if (isolated == null) {
                     AccessibilityUtils.announceToTalkBack(context, "Could not isolate that object.")
                     return@launch
@@ -323,6 +350,11 @@ private fun SegmentationExploreScreen(
         }
     }
 
+    // [loadedBitmap] and appliedRotationDegrees must always be set as a pair — analyzeTappedObject
+    // reads both together when it calls SegmentationIsolation.isolate. Nothing enforces that beyond
+    // both call sites setting appliedRotationDegrees immediately before calling this, and describeMode
+    // (the only mode that ever reads it) can't race a tap in here: HoverExploreLayer, where a tap
+    // originates, is gated on `!isLoading`, which this function holds true for its entire body.
     suspend fun runDetection(loadedBitmap: Bitmap, externalToneJob: Job? = null) {
         isLoading = true
         bitmap = loadedBitmap
@@ -362,16 +394,15 @@ private fun SegmentationExploreScreen(
             val captureScope = this
             var toneJob: Job? = null
             val newBitmap = try {
-                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled) {
+                // correctOrientation = false: Explore sends the captured image to the model
+                // exactly as taken, unrotated — see CameraController.withCaptureSession's doc.
+                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled, correctOrientation = false) {
                     cameraController.capturePhoto(MAX_CAPTURE_DIMENSION) {
                         // Fires the instant the shutter sound plays (see
                         // CameraController.capturePhotoInternal), not after readout/decode/scale —
                         // runDetection adopts this job instead of starting its own, later one.
                         toneJob = captureScope.launch(Dispatchers.IO) {
-                            while (true) {
-                                ProcessingSoundPlayer.playWaitingTone(context)
-                                delay(1100)
-                            }
+                            ProcessingSoundPlayer.loopClockWaitingTone(context)
                         }
                     }
                 }
@@ -383,12 +414,25 @@ private fun SegmentationExploreScreen(
                 isLoading = false
                 return@launch
             }
+            // Rotate for best fit before anything else touches this bitmap — display, detection,
+            // Share Photo's saved file, and cropAroundPoint's box size (bitmap.width/50) all need to
+            // agree on one final orientation, and this is the single point every one of them reads
+            // from afterwards. captureNewPhoto only ever runs outside describeMode (see this
+            // function's own doc — no "Capture New Photo" there), so there is no highResFile to keep
+            // in sync with the rotation here; appliedRotationDegrees is still recorded for
+            // consistency's sake.
+            val (fitted, rotation) = withContext(Dispatchers.Default) {
+                rotateForBestFit(newBitmap, context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels)
+            }
+            // See the LaunchedEffect(imageUri) load path's identical guard for why this matters.
+            if (fitted !== newBitmap) newBitmap.recycle()
+            appliedRotationDegrees = rotation
             currentPhotoFile = withContext(Dispatchers.IO) {
                 val file = File(context.cacheDir, "explore_${System.currentTimeMillis()}.jpg")
-                FileOutputStream(file).use { newBitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                FileOutputStream(file).use { fitted.compress(Bitmap.CompressFormat.JPEG, 90, it) }
                 file
             }
-            runDetection(newBitmap, toneJob)
+            runDetection(fitted, toneJob)
         }
     }
 
@@ -406,7 +450,19 @@ private fun SegmentationExploreScreen(
             onClose()
             return@LaunchedEffect
         }
-        runDetection(loaded)
+        // See rotateForBestFit's doc — a loaded file/video frame (unlike a fresh capture, which is
+        // already close to this screen's own orientation) can be any aspect at all. In describeMode,
+        // highResFile (below) was never rotated to match, so appliedRotationDegrees is what lets
+        // analyzeTappedObject's SegmentationIsolation.isolate call still find the right region in it.
+        val (fitted, rotation) = withContext(Dispatchers.Default) {
+            rotateForBestFit(loaded, context.resources.displayMetrics.widthPixels, context.resources.displayMetrics.heightPixels)
+        }
+        // rotateForBestFit returns a new bitmap when it actually rotates — recycle the one it
+        // replaced, same as CameraActivity.captureMaxResPair's identical guard, or this leaks a
+        // full MAX_CAPTURE_DIMENSION-sized ARGB_8888 decode on every photo this screen opens with.
+        if (fitted !== loaded) loaded.recycle()
+        appliedRotationDegrees = rotation
+        runDetection(fitted)
     }
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -416,7 +472,9 @@ private fun SegmentationExploreScreen(
                 contentDescription = null,
                 // Fills the screen exactly, distorting the aspect ratio if needed, rather than
                 // letterboxing — the whole photo stays touchable/visible edge to edge, which
-                // matters more here than preserving its proportions.
+                // matters more here than preserving its proportions. bmp has already been rotated
+                // to the closer-fitting orientation if needed (see rotateForBestFit), so this is
+                // only the residual distortion the two aspect ratios still don't share exactly.
                 modifier = Modifier.fillMaxSize(),
                 contentScale = ContentScale.FillBounds
             )
