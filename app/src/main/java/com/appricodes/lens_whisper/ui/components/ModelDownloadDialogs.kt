@@ -41,9 +41,9 @@ fun DownloadPromptDialog(model: OfflineModelInfo, onConfirm: () -> Unit, onDismi
  * Blocking download-progress dialog — extracted from the original inline `AlertDialog` in
  * `ModelManagementActivity` so the model picker popup and the download-redirect flow can reuse it
  * without duplicating the progress/cancel wiring. [onContinueInBackground], when supplied, adds a
- * button that hides this dialog without cancelling the download — it keeps running as a
- * foreground service either way (see `ModelDownloadService`), this only controls whether the UI
- * blocks on it.
+ * button that hides this dialog without cancelling the download — the system's download manager
+ * keeps it running either way (see `ModelDownloader`), this only controls whether the UI blocks on
+ * it.
  */
 @Composable
 fun DownloadProgressDialog(

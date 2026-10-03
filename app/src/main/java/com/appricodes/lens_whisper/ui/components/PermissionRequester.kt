@@ -88,30 +88,6 @@ class PermissionRequester internal constructor(private val context: Context) {
             }
         }
 
-    /**
-     * Notifications are only what makes a background download's progress (and its Cancel button)
-     * visible — the download itself runs either way, so this never blocks the caller and announces
-     * nothing on a denial. A no-op below Android 13, where there is no such permission to ask for.
-     */
-    suspend fun requestNotifications() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
-        val permission = Manifest.permission.POST_NOTIFICATIONS
-        withContext(Dispatchers.Main.immediate) {
-            if (isGranted(permission)) return@withContext
-            mutex.withLock {
-                val activeLauncher = launcher ?: return@withLock
-                val result = CompletableDeferred<Boolean>()
-                pending = result
-                try {
-                    activeLauncher.launch(permission)
-                    result.await()
-                } finally {
-                    pending = null
-                }
-            }
-        }
-    }
-
     internal fun onResult(granted: Boolean) {
         pending?.complete(granted)
     }

@@ -52,7 +52,7 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
-import com.appricodes.lens_whisper.service.ModelDownloadService
+import com.appricodes.lens_whisper.service.ModelDownloader
 import com.appricodes.lens_whisper.service.ModelDownloadState
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
 import com.appricodes.lens_whisper.network.LocalServerFeature
@@ -106,7 +106,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     var offlineImageSize by remember { mutableStateOf(prefs.offlineImageSize) }
     var imageSizeDropdownExpanded by remember { mutableStateOf(false) }
 
-    val downloadState by ModelDownloadService.state.collectAsState()
+    val downloadState by ModelDownloader.state.collectAsState()
     LaunchedEffect(downloadState) {
         if (downloadState is ModelDownloadState.Completed) downloadedVersion++
     }
@@ -212,10 +212,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                 mightNotRun = remember(model.id) { DeviceMemoryDetector.mightNotRun(context, model) },
                 onSelect = { requestSelectOffline(model) },
                 onDownload = {
-                    coroutineScope.launch {
-                        permissions.requestNotifications()
-                        ModelDownloadService.start(context, model)
-                    }
+                    ModelDownloader.start(context, model)
                 },
                 onDelete = { modelPendingDelete = model }
             )
@@ -314,7 +311,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         DownloadProgressDialog(
             activeDownload = activeDownload,
             displayName = downloadingModel?.displayName ?: "model",
-            onCancel = { ModelDownloadService.cancel(context) },
+            onCancel = { ModelDownloader.cancel(context) },
             onContinueInBackground = { downloadDialogHiddenHere = true }
         )
     }

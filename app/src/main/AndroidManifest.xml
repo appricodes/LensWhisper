@@ -5,9 +5,14 @@
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+
+    <!-- LiteRT's own manifest asks for these, only for its AI-pack model delivery, which this app
+         doesn't use (and whose Play dependency is excluded in app/build.gradle.kts). The app runs
+         no foreground service: big downloads go through the system DownloadManager instead (see
+         service/SystemDownloads.kt), so neither permission — nor Play's foreground-service
+         declaration that comes with them — is needed. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" tools:node="remove" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" tools:node="remove" />
 
     <!-- LocalServerDiscovery: reading the phone's own LAN IP/subnet to probe for a Local Server
          (see network/LocalServerDiscovery.kt). Both are normal-level, no runtime prompt. Kept
@@ -121,17 +126,17 @@
             android:label="Manage Advanced Models"
             android:theme="@style/Theme.LensWhisper" />
 
-        <service
-            android:name=".service.ModelDownloadService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
-
-        <!-- The optional offline product database (Settings > Product Database). Its own service
-             rather than ModelDownloadService's — see that class's doc for why. -->
-        <service
-            android:name=".service.ProductDbDownloadService"
-            android:exported="false"
-            android:foregroundServiceType="dataSync" />
+        <!-- Finishes model / product-database downloads that the system DownloadManager completed
+             while the app was closed. See service/SystemDownloads.kt. Exported because the
+             broadcast comes from the system's download provider; it only triggers a status
+             re-check, so a spoofed one does nothing. -->
+        <receiver
+            android:name=".service.DownloadCompleteReceiver"
+            android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
+            </intent-filter>
+        </receiver>
 
         <receiver android:name="androidx.media.session.MediaButtonReceiver"
             android:exported="true">

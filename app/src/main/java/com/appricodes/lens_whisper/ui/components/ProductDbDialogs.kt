@@ -119,9 +119,9 @@ fun ProductDbRemoveDialog(
     )
 }
 
-/** Progress while the database downloads. The user can leave — the download is a foreground service
- *  and carries on with its own notification — so this is a window onto it, not a modal that has to
- *  be kept open. */
+/** Progress while the database downloads. The user can leave — the system's download manager
+ *  carries on with its own notification — so this is a window onto it, not a modal that has to be
+ *  kept open. */
 @Composable
 fun ProductDbProgressDialog(
     bytesDownloaded: Long,

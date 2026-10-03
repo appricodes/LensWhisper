@@ -23,7 +23,7 @@ import java.io.File
  *                    Build.SOC_MODEL/HARDWARE/BOARD/DEVICE; empty list = generic fallback build
  *     sizeBytes      exact download size in bytes
  *     downloadUrl    direct, unauthenticated HTTPS URL to the .litertlm file
- *     fileName       local file name saved under context.filesDir; must be unique per variant
+ *     fileName       local file name saved under [modelsDir]; must be unique per variant
  *     backend        "CPU", "GPU", or "NPU"
  * At load time, [loadModels] silently resolves each model to its single best-matching variant
  * for the current device (falling back to the generic build) — nothing about the choice is ever
@@ -84,9 +84,29 @@ class OfflineModelsRepository(private val context: Context) {
         }
     }
 
-    fun localFileFor(model: OfflineModelInfo): File = File(context.filesDir, model.fileName)
+    /** Where [model]'s file is, or will be once downloaded. Versions up to 1.2 downloaded into
+     *  `filesDir`; a model already there keeps being used from there rather than making anyone
+     *  download gigabytes again. New downloads go to [modelsDir] (see
+     *  [com.appricodes.lens_whisper.service.ModelDownloader]). */
+    fun localFileFor(model: OfflineModelInfo): File {
+        val legacy = File(context.filesDir, model.fileName)
+        if (legacy.exists()) return legacy
+        return File(modelsDir(context) ?: context.filesDir, model.fileName)
+    }
 
     fun isDownloaded(model: OfflineModelInfo): Boolean = localFileFor(model).let { it.exists() && it.length() > 0 }
 
-    fun deleteDownload(model: OfflineModelInfo): Boolean = localFileFor(model).delete()
+    fun deleteDownload(model: OfflineModelInfo): Boolean {
+        val legacy = File(context.filesDir, model.fileName).delete()
+        val current = modelsDir(context)?.let { File(it, model.fileName).delete() } ?: false
+        return legacy || current
+    }
+
+    companion object {
+        /** Subdirectory of the app's external files directory that model downloads land in — the
+         *  only place the system DownloadManager can write for this app. App-private all the same. */
+        const val MODELS_DIR = "models"
+
+        fun modelsDir(context: Context): File? = context.getExternalFilesDir(MODELS_DIR)
+    }
 }

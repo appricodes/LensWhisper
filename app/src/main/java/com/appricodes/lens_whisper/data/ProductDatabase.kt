@@ -126,7 +126,7 @@ object ProductDatabase {
      * Whether [file] is a usable copy of this database. Run once straight after a download, because
      * a truncated SQLite file still has a valid header and would otherwise install cleanly and then
      * fail deep inside a query — see
-     * [com.appricodes.lens_whisper.service.ProductDbDownloadService], which deletes anything this
+     * [com.appricodes.lens_whisper.service.ProductDbDownloader], which deletes anything this
      * rejects.
      */
     fun isUsableDatabase(file: File): Boolean = try {

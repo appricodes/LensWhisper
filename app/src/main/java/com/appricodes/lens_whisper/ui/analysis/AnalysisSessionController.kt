@@ -29,7 +29,7 @@ import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.runSelectedModelAnalysis
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.inference.runSelectedOfflineModelAnalysisStreaming
-import com.appricodes.lens_whisper.service.ModelDownloadService
+import com.appricodes.lens_whisper.service.ModelDownloader
 import com.appricodes.lens_whisper.service.ModelDownloadState
 import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
@@ -778,7 +778,7 @@ class AnalysisSessionController(
         // something to act on either way.
         pendingDownloadModel = model
         pendingDownloadAction = action
-        val currentlyDownloading = ModelDownloadService.state.value as? ModelDownloadState.Downloading
+        val currentlyDownloading = ModelDownloader.state.value as? ModelDownloadState.Downloading
         if (currentlyDownloading != null && currentlyDownloading.modelId == model.id) {
             stillDownloadingModel = model
             downloadDialogHidden = true
@@ -799,7 +799,7 @@ class AnalysisSessionController(
      *  model finishes downloading, and renders the download prompt/progress dialogs. */
     @Composable
     fun ObserveDownloads() {
-        val downloadState by ModelDownloadService.state.collectAsState()
+        val downloadState by ModelDownloader.state.collectAsState()
         LaunchedEffect(downloadState) {
             val completed = downloadState as? ModelDownloadState.Completed
             if (completed != null && completed.modelId == pendingDownloadModel?.id) {
@@ -817,10 +817,7 @@ class AnalysisSessionController(
                 DownloadPromptDialog(
                     model = model,
                     onConfirm = {
-                        coroutineScope.launch {
-                            permissions.requestNotifications()
-                            ModelDownloadService.start(context, model)
-                        }
+                        ModelDownloader.start(context, model)
                     },
                     onDismiss = { dismissDownloadPrompt() }
                 )
@@ -828,7 +825,7 @@ class AnalysisSessionController(
                 DownloadProgressDialog(
                     activeDownload = activeDownload,
                     displayName = model.displayName,
-                    onCancel = { ModelDownloadService.cancel(context); dismissDownloadPrompt() },
+                    onCancel = { ModelDownloader.cancel(context); dismissDownloadPrompt() },
                     onContinueInBackground = { hideDownloadDialog() }
                 )
             }

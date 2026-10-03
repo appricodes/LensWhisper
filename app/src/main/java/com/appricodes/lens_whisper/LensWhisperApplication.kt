@@ -2,6 +2,8 @@ package com.appricodes.lens_whisper
 
 import android.app.Application
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
+import com.appricodes.lens_whisper.service.ModelDownloader
+import com.appricodes.lens_whisper.service.ProductDbDownloader
 import com.appricodes.lens_whisper.utils.CaptureCacheCleaner
 
 /**
@@ -22,5 +24,9 @@ class LensWhisperApplication : Application() {
         super.onCreate()
         OfflineInferenceEngine.registerMemoryPressureMonitor(this)
         CaptureCacheCleaner.sweepInBackground(this)
+        // A download the system kept running while the app was closed: follow it again, or put
+        // it in place if it finished meanwhile. No-ops when nothing is pending.
+        ModelDownloader.resume(this)
+        ProductDbDownloader.resume(this)
     }
 }

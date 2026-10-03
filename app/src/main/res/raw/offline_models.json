@@ -60,7 +60,7 @@
       "variants": [
         {
           "hardwareMatch": [],
-          "sizeBytes": 361052336,
+          "sizeBytes": 360822960,
           "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-500M/resolve/main/SmolVLM2-500M.litertlm",
           "fileName": "smolvlm2_500m.litertlm",
           "backend": "GPU"
@@ -76,7 +76,7 @@
       "variants": [
         {
           "hardwareMatch": [],
-          "sizeBytes": 1511353264,
+          "sizeBytes": 1511123888,
           "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-2.2B/resolve/main/SmolVLM2-2.2B.litertlm",
           "fileName": "smolvlm2_2200m.litertlm",
           "backend": "GPU"
@@ -92,7 +92,7 @@
       "variants": [
         {
           "hardwareMatch": [],
-          "sizeBytes": 1784096288,
+          "sizeBytes": 1783424544,
           "downloadUrl": "https://huggingface.co/litert-community/Qwen2-VL-2B/resolve/main/Qwen2-VL-2B.litertlm",
           "fileName": "qwen_vl_2b.litertlm",
           "backend": "GPU"
