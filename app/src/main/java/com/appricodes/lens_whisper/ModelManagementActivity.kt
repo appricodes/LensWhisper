@@ -1,14 +1,11 @@
 package com.appricodes.lens_whisper
 
-import android.Manifest
+import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
 import android.content.Intent
-import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -115,12 +112,9 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         if (downloadState is ModelDownloadState.Completed) downloadedVersion++
     }
 
-    val notificationPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
-    fun requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
-    }
+    // Notifications are asked for when a download starts — they show its progress and Cancel
+    // button once the app is in the background. The download runs whatever the answer.
+    val permissions = rememberPermissionRequester()
 
     val activeDownload = downloadState as? ModelDownloadState.Downloading
 
@@ -219,8 +213,10 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                 mightNotRun = remember(model.id) { DeviceMemoryDetector.mightNotRun(context, model) },
                 onSelect = { requestSelectOffline(model) },
                 onDownload = {
-                    requestNotificationPermissionIfNeeded()
-                    ModelDownloadService.start(context, model)
+                    coroutineScope.launch {
+                        permissions.requestNotifications()
+                        ModelDownloadService.start(context, model)
+                    }
                 },
                 onDelete = { modelPendingDelete = model }
             )

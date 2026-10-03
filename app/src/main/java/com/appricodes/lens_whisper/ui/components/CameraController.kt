@@ -70,7 +70,12 @@ data class CapturedFrame(val bitmap: Bitmap, val uri: Uri)
  * [rebind] is the single place that decides what is bound: whatever the current combination of
  * "someone is capturing" and "someone wants frames" calls for, or nothing at all.
  */
-class CameraController(private val context: Context) {
+class CameraController(
+    private val context: Context,
+    // Asked before every bind, so the camera permission is requested at the first capture (see
+    // PermissionRequester) rather than at app start. Returns instantly once granted.
+    private val ensureCameraPermission: suspend () -> Boolean
+) {
 
     private val cameraExecutor = Executors.newSingleThreadExecutor()
     private var provider: ProcessCameraProvider? = null
@@ -147,14 +152,17 @@ class CameraController(private val context: Context) {
 
     /**
      * Starts or stops the continuous frame feed. Passing null unbinds it, which — with no capture
-     * in flight — releases the camera entirely.
+     * in flight — releases the camera entirely. Returns false, binding nothing, when a feed was
+     * asked for and the camera permission was refused.
      */
-    suspend fun setAnalysisFrameSink(lifecycleOwner: LifecycleOwner, sink: ((Bitmap) -> Unit)?) {
+    suspend fun setAnalysisFrameSink(lifecycleOwner: LifecycleOwner, sink: ((Bitmap) -> Unit)?): Boolean {
+        if (sink != null && !ensureCameraPermission()) return false
         cameraMutex.withLock {
             analysisFrameSink = sink
             boundLifecycleOwner = lifecycleOwner
             rebind()
         }
+        return true
     }
 
     /**
@@ -187,6 +195,7 @@ class CameraController(private val context: Context) {
         correctOrientation: Boolean = true,
         block: suspend () -> T
     ): T {
+        if (!ensureCameraPermission()) throw CameraPermissionDeniedException()
         cameraMutex.withLock {
             captureSessionDepth++
             boundLifecycleOwner = lifecycleOwner

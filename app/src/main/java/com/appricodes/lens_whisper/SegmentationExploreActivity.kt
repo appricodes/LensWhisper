@@ -1,5 +1,9 @@
 package com.appricodes.lens_whisper
 
+import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
+import com.appricodes.lens_whisper.ui.components.CAMERA_DENIED_MESSAGE
+import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
+import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -238,11 +242,14 @@ private fun SegmentationExploreScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
-    val cameraController = remember { CameraController(context) }
+    val permissions = rememberPermissionRequester()
+    val cameraController = remember {
+        CameraController(context) { permissions.request(Manifest.permission.CAMERA, CAMERA_DENIED_MESSAGE) }
+    }
     // Only actually used in describeMode (see analyzeTappedObject) — created unconditionally
     // anyway, same as every other Compose remember in this function, rather than only sometimes
     // calling it depending on a runtime value.
-    val controller = rememberAnalysisSessionController(context, prefs)
+    val controller = rememberAnalysisSessionController(context, prefs, permissions)
 
     var isLoading by remember { mutableStateOf(true) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -410,7 +417,7 @@ private fun SegmentationExploreScreen(
                 throw e
             } catch (e: Exception) {
                 toneJob?.cancel()
-                AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                 isLoading = false
                 return@launch
             }

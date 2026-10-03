@@ -1,5 +1,6 @@
 package com.appricodes.lens_whisper.ui.analysis
 
+import android.Manifest
 import android.content.Context
 import android.graphics.Bitmap
 import android.os.Bundle
@@ -31,9 +32,13 @@ import com.appricodes.lens_whisper.inference.runSelectedOfflineModelAnalysisStre
 import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.service.ModelDownloadService
 import com.appricodes.lens_whisper.service.ModelDownloadState
+import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
 import com.appricodes.lens_whisper.ui.components.DownloadPromptDialog
+import com.appricodes.lens_whisper.ui.components.MICROPHONE_DENIED_MESSAGE
+import com.appricodes.lens_whisper.ui.components.PermissionRequester
 import com.appricodes.lens_whisper.ui.components.StillDownloadingDialog
+import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import com.appricodes.lens_whisper.utils.ThermalGuard
@@ -214,7 +219,8 @@ private fun findSentenceEnd(sb: StringBuilder): Int {
 class AnalysisSessionController(
     private val context: Context,
     private val prefs: PreferencesManager,
-    private val coroutineScope: kotlinx.coroutines.CoroutineScope
+    private val coroutineScope: kotlinx.coroutines.CoroutineScope,
+    private val permissions: PermissionRequester
 ) {
     var isAnalyzing by mutableStateOf(false)
         private set
@@ -420,6 +426,8 @@ class AnalysisSessionController(
                 body()
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: CameraPermissionDeniedException) {
+                // Already announced by PermissionRequester — no second "error" on top of it.
             } catch (e: Exception) {
                 AccessibilityUtils.announceToTalkBack(context, "Error occurred.")
                 dialogState = "Error" to (e.localizedMessage ?: "Analysis failed.")
@@ -672,6 +680,15 @@ class AnalysisSessionController(
         targetCustomSlot: Int? = null,
         captureFrames: suspend (PromptConfig) -> CapturedBundle?
     ) {
+        // The microphone is asked for here, on the first voice question, not at app start.
+        if (!permissions.isGranted(Manifest.permission.RECORD_AUDIO)) {
+            coroutineScope.launch {
+                if (permissions.request(Manifest.permission.RECORD_AUDIO, MICROPHONE_DENIED_MESSAGE)) {
+                    startVoiceRecognition(onBeforeListen, targetCustomSlot, captureFrames)
+                }
+            }
+            return
+        }
         onBeforeListen()
         val localeCode = prefs.speechLocaleCode
         AccessibilityUtils.announceToTalkBack(context, "Listening... Please speak your question now.")
@@ -822,7 +839,12 @@ class AnalysisSessionController(
             if (activeDownload == null) {
                 DownloadPromptDialog(
                     model = model,
-                    onConfirm = { ModelDownloadService.start(context, model) },
+                    onConfirm = {
+                        coroutineScope.launch {
+                            permissions.requestNotifications()
+                            ModelDownloadService.start(context, model)
+                        }
+                    },
                     onDismiss = { dismissDownloadPrompt() }
                 )
             } else if (activeDownload.modelId == model.id) {
@@ -875,9 +897,13 @@ class AnalysisSessionController(
 /** Creates and remembers an [AnalysisSessionController] scoped to this composition, disposing
  *  its [SpeechRecognizer] when it leaves composition. */
 @Composable
-fun rememberAnalysisSessionController(context: Context, prefs: PreferencesManager): AnalysisSessionController {
+fun rememberAnalysisSessionController(
+    context: Context,
+    prefs: PreferencesManager,
+    permissions: PermissionRequester = rememberPermissionRequester()
+): AnalysisSessionController {
     val coroutineScope = androidx.compose.runtime.rememberCoroutineScope()
-    val controller = remember { AnalysisSessionController(context, prefs, coroutineScope) }
+    val controller = remember { AnalysisSessionController(context, prefs, coroutineScope, permissions) }
     DisposableEffect(controller) { onDispose { controller.releaseSpeechRecognizer() } }
     return controller
 }

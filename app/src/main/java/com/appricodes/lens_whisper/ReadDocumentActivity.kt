@@ -1,5 +1,9 @@
 package com.appricodes.lens_whisper
 
+import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
+import com.appricodes.lens_whisper.ui.components.CAMERA_DENIED_MESSAGE
+import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
+import android.Manifest
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -119,7 +123,10 @@ private fun ReadDocumentScreen(prefs: PreferencesManager, imageUri: Uri?, onClos
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
-    val cameraController = remember { CameraController(context) }
+    val permissions = rememberPermissionRequester()
+    val cameraController = remember {
+        CameraController(context) { permissions.request(Manifest.permission.CAMERA, CAMERA_DENIED_MESSAGE) }
+    }
 
     var isLoading by remember { mutableStateOf(true) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
@@ -192,7 +199,7 @@ private fun ReadDocumentScreen(prefs: PreferencesManager, imageUri: Uri?, onClos
                 throw e
             } catch (e: Exception) {
                 toneJob?.cancel()
-                AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                 isLoading = false
                 return@launch
             }

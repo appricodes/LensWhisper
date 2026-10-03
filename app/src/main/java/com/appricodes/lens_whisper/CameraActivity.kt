@@ -1,22 +1,21 @@
 package com.appricodes.lens_whisper
 
+import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
+import com.appricodes.lens_whisper.ui.components.CAMERA_DENIED_MESSAGE
+import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
 import android.Manifest
 import android.app.Activity
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.media.AudioManager
 import android.media.ToneGenerator
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
 import android.view.KeyEvent
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.camera.core.Camera
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -39,7 +38,6 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.core.content.ContextCompat
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
@@ -119,8 +117,9 @@ class CameraActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = PreferencesManager(this)
-        // Runtime permissions (camera, microphone, notifications) are requested together from
-        // CameraScreen, once the first-run notice has been accepted — see startupPermissions.
+        // Runtime permissions are requested only when first needed — the camera on the first
+        // capture, the microphone on the first voice question, notifications when a download
+        // starts — see PermissionRequester. Nothing is asked for at launch.
 
         volumeKeyHandler = VolumeKeyGestureHandler(
             context = this,
@@ -199,12 +198,6 @@ private const val EXIT_CONFIRM_WINDOW_MS = 2000L
 // RESOLUTION_720P convention (every other segmentation-driven button already detects at this size).
 private const val SEGMENTATION_COPY_MAX_DIM = 1280
 
-private fun startupPermissions(): List<String> = buildList {
-    add(Manifest.permission.CAMERA)
-    add(Manifest.permission.RECORD_AUDIO)
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
-}
-
 private fun cameraFacingName(lensFacing: Int) =
     if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back"
 
@@ -220,10 +213,16 @@ private fun CameraScreen(
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val coroutineScope = rememberCoroutineScope()
-    val cameraController = remember { CameraController(context) }
+    val permissions = rememberPermissionRequester()
+    suspend fun requireCamera() {
+        if (!permissions.request(Manifest.permission.CAMERA, CAMERA_DENIED_MESSAGE)) throw CameraPermissionDeniedException()
+    }
+    val cameraController = remember {
+        CameraController(context) { permissions.request(Manifest.permission.CAMERA, CAMERA_DENIED_MESSAGE) }
+    }
     val offlineModelsRepository = remember { OfflineModelsRepository(context) }
     val offlineModels = remember { offlineModelsRepository.loadModels() }
-    val controller = rememberAnalysisSessionController(context, prefs)
+    val controller = rememberAnalysisSessionController(context, prefs, permissions)
 
     // A short welcome phrase the instant the app's main screen first opens — LaunchedEffect(Unit)
     // fires once per composition, not on every resume (this Activity is merely paused, not
@@ -235,31 +234,6 @@ private fun CameraScreen(
     // answered — the dialog itself is not dismissible (see DisclaimerDialog).
     var disclaimerAccepted by remember { mutableStateOf(prefs.hasAcceptedDisclaimer) }
     var showDisclaimerReadOnly by remember { mutableStateOf(false) }
-
-    var cameraPermissionGranted by remember {
-        mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
-    }
-    // One combined request, not one launcher per permission: Android shows only one permission
-    // request at a time and drops a second one launched while the first is still on screen, which
-    // used to lose POST_NOTIFICATIONS on a fresh install (RECORD_AUDIO and it were launched back to
-    // back). POST_NOTIFICATIONS (Android 13+) is what lets ModelDownloadService's progress
-    // notification actually show — without it a backgrounded download has no visible progress and
-    // no Cancel in the shade.
-    val permissionsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
-        results[Manifest.permission.CAMERA]?.let { granted ->
-            cameraPermissionGranted = granted
-            if (!granted) AccessibilityUtils.announceToTalkBack(context, "Camera permission is required.")
-        }
-    }
-    // Deferred until the notice has been accepted: asking for the camera or microphone before the
-    // user has been told what the app does with them is the wrong order.
-    LaunchedEffect(disclaimerAccepted) {
-        if (!disclaimerAccepted) return@LaunchedEffect
-        val missing = startupPermissions().filter {
-            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
-        }
-        if (missing.isNotEmpty()) permissionsLauncher.launch(missing.toTypedArray())
-    }
 
     var flashEnabled by remember { mutableStateOf(prefs.flashEnabled) }
 
@@ -296,7 +270,11 @@ private fun CameraScreen(
     // read, so using it as a key restarts this effect on every recomposition and rebinds the camera
     // in a loop.
     LaunchedEffect(mlkitProvider.isLightActive) {
-        cameraController.setAnalysisFrameSink(lifecycleOwner, mlkitProvider.onAnalysisFrame)
+        // False only when Light Level just asked for the camera and was refused — leave the mode
+        // rather than sit in it with no frames arriving.
+        if (!cameraController.setAnalysisFrameSink(lifecycleOwner, mlkitProvider.onAnalysisFrame)) {
+            mlkitProvider.stopActiveMode()
+        }
         activeCameraState = cameraController.activeCamera
     }
 
@@ -304,7 +282,11 @@ private fun CameraScreen(
     // whole mode rather than reopening the camera on every tick.
     LaunchedEffect(mlkitProvider.isContinuousActive) {
         if (mlkitProvider.isContinuousActive) {
-            cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled) { awaitCancellation() }
+            try {
+                cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled) { awaitCancellation() }
+            } catch (e: CameraPermissionDeniedException) {
+                mlkitProvider.stopActiveMode()
+            }
         }
     }
 
@@ -321,7 +303,7 @@ private fun CameraScreen(
     CameraExposureFlashHandler(activeLightMode = mlkitProvider.isLightActive, activeCamera = activeCameraState)
 
     suspend fun captureSingleShot(config: PromptConfig): CapturedBundle? {
-        if (!cameraPermissionGranted) return null
+        requireCamera()
         AccessibilityUtils.announceToTalkBack(context, "Analyzing ${config.title}")
         // Immediate feedback that the tap registered — binding a cold camera can itself take a
         // second or two, and playShutter() below won't fire until that's actually done.
@@ -350,7 +332,7 @@ private fun CameraScreen(
     }
 
     suspend fun captureStory(config: PromptConfig): CapturedBundle? {
-        if (!cameraPermissionGranted) return null
+        requireCamera()
         AccessibilityUtils.announceToTalkBack(context, "Recording ${config.title}, please hold steady.")
         val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
         val frames = mutableListOf<CapturedFrame>()
@@ -402,7 +384,7 @@ private fun CameraScreen(
      * exposure, same as every other capture path — see [CameraController.capturePhotoInternal].
      */
     suspend fun captureMaxResPair(correctOrientation: Boolean = true, onShutter: () -> Unit): DualResCapture? {
-        if (!cameraPermissionGranted) return null
+        requireCamera()
         return try {
             val frame = cameraController.withCaptureSession(lifecycleOwner, flashEnabled, maxResolution = true, correctOrientation = correctOrientation) {
                 // No maxDim cap here (Int.MAX_VALUE) — the whole point of this capture tier is to

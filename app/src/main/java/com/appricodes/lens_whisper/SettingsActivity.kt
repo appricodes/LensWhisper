@@ -198,6 +198,7 @@ fun SettingsScreen(
 	var passwordEditText by remember { mutableStateOf("") }
 	var isScanningForLocalServer by remember { mutableStateOf(false) }
 	val coroutineScope = rememberCoroutineScope()
+	val permissions = com.appricodes.lens_whisper.ui.components.rememberPermissionRequester()
 
 	var langDropdownExpanded by remember { mutableStateOf(false) }
 	var ocrDropdownExpanded by remember { mutableStateOf(false) }
@@ -1004,7 +1005,12 @@ fun SettingsScreen(
 			onConfirm = {
 				productDbPendingDownload = null
 				productDbProgressDismissed = false
-				ProductDbDownloadService.start(context, info)
+				// Notifications are asked for here, when a download actually starts — they are what
+				// shows its progress and Cancel button once the app is in the background.
+				coroutineScope.launch {
+					permissions.requestNotifications()
+					ProductDbDownloadService.start(context, info)
+				}
 			},
 			onCancel = { productDbPendingDownload = null }
 		)

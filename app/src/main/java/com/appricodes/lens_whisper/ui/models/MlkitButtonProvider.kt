@@ -1,5 +1,6 @@
 package com.appricodes.lens_whisper.ui.models
 
+import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
 import android.content.Context
 import android.content.Intent
 import android.graphics.Bitmap
@@ -266,7 +267,7 @@ class MlkitButtonProvider(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                 return
             }
             when (mode) {
@@ -376,7 +377,7 @@ class MlkitButtonProvider(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                    if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                     return@launch
                 }
                 val uri = withContext(Dispatchers.IO) {
@@ -423,7 +424,7 @@ class MlkitButtonProvider(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                    if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                     return@launch
                 }
                 val uri = withContext(Dispatchers.IO) {
@@ -474,7 +475,7 @@ class MlkitButtonProvider(
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
-                    AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
+                    if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
                     return@launch
                 }
                 val found = OfflineBarcodeScanner.pickBest(OfflineBarcodeScanner.scan(bitmap))
