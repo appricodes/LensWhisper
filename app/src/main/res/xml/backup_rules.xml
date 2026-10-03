@@ -1,20 +1,22 @@
-<?xml version="1.0" encoding="utf-8"?><!--
+<?xml version="1.0" encoding="utf-8"?>
+<!--
    Android Auto Backup rules for API 30 and below (API 31+ uses data_extraction_rules.xml
    instead — keep the two in step).
 
-   The app's barcode notes are excluded outright. They are the user's own written and spoken notes
-   about the things around them, kept in app-private storage precisely so that nothing else can
-   read them, and the Privacy Policy (legal/LegalTexts.kt) tells the user they stay on the device
+   Include-only: settings (SharedPreferences) and nothing else.
+
+   The app's barcode notes must stay out. They are the user's own written and spoken notes about
+   the things around them, kept in app-private storage precisely so that nothing else can read
+   them, and the Privacy Policy (legal/LegalTexts.kt) tells the user they stay on the device
    unless the user exports them. Auto Backup would quietly copy them to the user's Google account,
    which is neither what that text describes nor what the user asked for: the one and only
    supported way to move these notes off the phone is Settings > Your Data > Export, which writes
    a file to the Downloads folder, says what it is doing, and waits to be told to go ahead.
 
-   Everything else (settings in SharedPreferences) is left backed up as before. Downloaded model
-   files are far too large for Auto Backup's 25 MB quota and are re-downloadable anyway.
+   Downloaded model files and the offline product database (filesDir) must stay out too: they are
+   far over Auto Backup's 25 MB quota, which would make the whole backup fail, and are
+   re-downloadable anyway.
 -->
 <full-backup-content>
-    <exclude domain="database" path="barcode_notes.db" />
-    <exclude domain="database" path="barcode_notes.db-journal" />
-    <exclude domain="file" path="barcode_notes/" />
+    <include domain="sharedpref" path="." />
 </full-backup-content>

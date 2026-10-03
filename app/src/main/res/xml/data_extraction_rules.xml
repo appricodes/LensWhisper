@@ -1,23 +1,23 @@
-<?xml version="1.0" encoding="utf-8"?><!--
+<?xml version="1.0" encoding="utf-8"?>
+<!--
    Backup/transfer rules for API 31 and above. The API 30-and-below equivalent is
    backup_rules.xml — keep the two in step.
 
-   The barcode notes are excluded from BOTH cloud backup and device-to-device transfer, for the
-   reason spelled out in backup_rules.xml. An earlier version of this file kept device-transfer
-   enabled on the grounds that a direct phone-to-phone transfer is local and user-initiated; that
-   was dropped on request, so that the statement "the only way these notes move is Export to
-   Downloads and Import from Downloads" is true without exceptions and without small print. A user
-   replacing their phone uses that same export, which they can hear the app confirm.
+   Include-only: settings (SharedPreferences) and nothing else. Listing an <include> excludes
+   every other domain, which is what keeps out:
+   - the barcode notes (barcode_notes.db and filesDir/barcode_notes/), for the reason spelled out
+     in backup_rules.xml — that also holds for device-to-device transfer, so the statement "the
+     only way these notes move is Export to Downloads and Import from Downloads" is true without
+     exceptions;
+   - downloaded AI models and the offline product database in filesDir — gigabytes, far over
+     Auto Backup's 25 MB quota (going over it makes the WHOLE backup fail, settings included), and
+     re-downloadable anyway.
 -->
 <data-extraction-rules>
     <cloud-backup>
-        <exclude domain="database" path="barcode_notes.db" />
-        <exclude domain="database" path="barcode_notes.db-journal" />
-        <exclude domain="file" path="barcode_notes/" />
+        <include domain="sharedpref" path="." />
     </cloud-backup>
     <device-transfer>
-        <exclude domain="database" path="barcode_notes.db" />
-        <exclude domain="database" path="barcode_notes.db-journal" />
-        <exclude domain="file" path="barcode_notes/" />
+        <include domain="sharedpref" path="." />
     </device-transfer>
 </data-extraction-rules>

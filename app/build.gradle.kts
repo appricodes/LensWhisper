@@ -22,6 +22,16 @@ val backupPassphrase: String = if (secretsFile.exists()) {
     placeholderPassphrase
 }
 
+// Release signing (the Play upload key). `keystore.properties` is gitignored — it holds storeFile,
+// storePassword, keyAlias and keyPassword. Without it (e.g. a fresh clone of the public repo) a
+// release build still runs, it just comes out unsigned.
+val keystorePropsFile = rootProject.file("keystore.properties")
+val keystoreProps: Properties? = if (keystorePropsFile.exists()) {
+    Properties().apply { keystorePropsFile.inputStream().use { load(it) } }
+} else {
+    null
+}
+
 android {
     namespace = "com.appricodes.lens_whisper"
     compileSdk = 36
@@ -38,8 +48,20 @@ android {
         buildConfigField("String", "BACKUP_PASSPHRASE", "\"$backupPassphrase\"")
     }
 
+    signingConfigs {
+        if (keystoreProps != null) {
+            create("release") {
+                storeFile = file(keystoreProps.getProperty("storeFile"))
+                storePassword = keystoreProps.getProperty("storePassword")
+                keyAlias = keystoreProps.getProperty("keyAlias")
+                keyPassword = keystoreProps.getProperty("keyPassword")
+            }
+        }
+    }
+
     buildTypes {
         release {
+            signingConfig = signingConfigs.findByName("release")
             isMinifyEnabled = false
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
