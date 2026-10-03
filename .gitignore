@@ -47,6 +47,8 @@ tools/barcode_db/__pycache__/
 
 # Release signing: upload-keystore passwords/paths and the keystores themselves.
 /keystore.properties
+# Play publishing service-account key (normally kept in the shared PlayStore tool folder instead)
+play-release-key.json
 *.jks
 *.keystore
 
