@@ -1,41 +1,56 @@
-# Lense Whisper - Secure PHP Backend (Login & AI Processing)
+# LensWhisper
 
-This backend handles Google Sign-In verification and securely proxies AI requests to x.AI for the Android app "LensWhisper".
+An Android app that describes the world to blind and low-vision users — entirely on the phone.
+Point the camera (or open a photo or video) and LensWhisper speaks a description through TalkBack:
+scenes, text, documents, objects and colours, barcodes, light level. The AI runs on-device; no
+photo ever leaves the phone.
 
-## Desktop companion (local, offline analysis)
+## Features
 
-`desktop/` is a separate, standalone Kotlin/JVM project (own Gradle build — not part of the
-Android app) that runs a small vision-language GGUF model locally via llama.cpp and exposes the
-same `/process.php` JSON contract as this backend, so the Android app can eventually point at a
-computer on the local network instead of (or in addition to) this server. See
-[desktop/README.md](desktop/README.md).
+- **Describe** scenes, photos and video frames with an on-device vision-language model
+  (Gemma, Qwen2-VL or SmolVLM2 via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
+  downloaded from Hugging Face on first use).
+- **Read text and documents** with ML Kit text recognition (Latin, Chinese, Japanese, Korean,
+  Devanagari).
+- **Detect objects and colours** and **explore a photo by touch**, using a bundled YOLOv8m-seg
+  segmentation model.
+- **Scan barcodes**, look products up in an optional offline product database (built from
+  Open Food Facts / Open Products Facts), and attach voice or text notes to each barcode.
+- Built for TalkBack throughout: every result is announced, every control is labelled.
 
-## Database Schema
+## Building
 
-```sql
-CREATE DATABASE IF NOT EXISTS lense CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+Requirements: Android Studio (or JDK 17+ and the Android SDK), minSdk 26, compileSdk 36.
 
-USE lense;
+```bash
+./gradlew :app:assembleDebug
+```
 
-CREATE TABLE IF NOT EXISTS users (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    email VARCHAR(254) NOT NULL UNIQUE,
-    google_id VARCHAR(128) NOT NULL,
-    verified TINYINT(1) NOT NULL DEFAULT 0,
-    free_credits INT NOT NULL DEFAULT 0,
-    purchased_credits INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-    INDEX idx_email (email),
-    INDEX idx_google_id (google_id)
-) ENGINE=InnoDB;
+A fresh clone builds as-is. Release builds additionally need:
 
-CREATE TABLE IF NOT EXISTS purchase_log (
-    id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    email VARCHAR(254) NOT NULL,
-    prompt_id VARCHAR(50) NOT NULL,
-    cost_free INT NOT NULL DEFAULT 0,
-    cost_purchased INT NOT NULL DEFAULT 0,
-    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-    INDEX idx_email (email)
-) ENGINE=InnoDB;
+- `secrets.properties` — copy `secrets.properties.example` and set `BACKUP_PASSPHRASE` (the key
+  the Export/Import feature encrypts `.fdb` files with). The build refuses to make a release with
+  the placeholder.
+- Your own signing configuration.
+
+## Repository layout
+
+| Path | What |
+|---|---|
+| `app/` | The Android app |
+| `desktop/` | Optional desktop companion (llama.cpp server); the app side is built but switched off — see `LocalServerFeature.kt` |
+| `tools/barcode_db/` | Scripts that build and publish the offline product database |
+
+## Licence
+
+LensWhisper is free software under the **GNU Affero General Public License v3.0** — see
+[LICENSE](LICENSE). [NOTICE](NOTICE) carries the copyright line, an additional permission
+(AGPL §7) for linking with Google ML Kit / Play services / LiteRT-LM, and details of the bundled
+third-party model:
+
+- `app/src/main/assets/models/yolov8m_seg_int8.tflite` — YOLOv8m-seg by
+  [Ultralytics](https://github.com/ultralytics/ultralytics), AGPL-3.0, exported with
+  `YOLO("yolov8m-seg.pt").export(format="tflite", int8=True, data="coco128-seg.yaml")`.
+
+The downloadable vision-language models are not part of this repository and each comes under its
+own licence (Gemma Terms of Use, Apache-2.0), shown in the app under Legal Information.

@@ -88,26 +88,12 @@ class MediaDescriberActivity : ComponentActivity() {
             onPlayPause = { globalPlayPause?.invoke() },
             onVoiceTrigger = { globalVoiceTrigger?.invoke() }
         )
-    }
 
-    override fun onPause() {
-        super.onPause()
-        isForeground = false
-        wasVideoPlaying = exoPlayer?.isPlaying == true
-        exoPlayer?.pause()
-        mediaSessionHandler?.setActive(false)
-    }
-
-    override fun onResume() {
-        super.onResume()
-        isForeground = true
-        // See this class's doc: nothing here uses the camera, so nothing may be left holding it.
-        CameraController.releaseAllCameras(this)
-        mediaSessionHandler?.setActive(true)
-
-        val player = exoPlayer ?: ExoPlayer.Builder(this).build().apply { setWakeMode(C.WAKE_MODE_LOCAL) }.also { exoPlayer = it }
-        if (wasVideoPlaying) player.play()
-
+        // Player, its listener and the composition are all built once, here — not in onResume.
+        // Doing it on every resume stacked a new listener each time (N duplicate "Video completed"
+        // announcements) and rebuilt the whole screen, which reloaded the file from position 0
+        // and cancelled any analysis in flight, e.g. across a screen lock/unlock.
+        val player = ExoPlayer.Builder(this).build().apply { setWakeMode(C.WAKE_MODE_LOCAL) }.also { exoPlayer = it }
         player.addListener(object : Player.Listener {
             override fun onPlaybackStateChanged(playbackState: Int) {
                 if (playbackState == Player.STATE_ENDED) {
@@ -132,6 +118,24 @@ class MediaDescriberActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onPause() {
+        super.onPause()
+        isForeground = false
+        wasVideoPlaying = exoPlayer?.isPlaying == true
+        exoPlayer?.pause()
+        mediaSessionHandler?.setActive(false)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        isForeground = true
+        // See this class's doc: nothing here uses the camera, so nothing may be left holding it.
+        CameraController.releaseAllCameras(this)
+        mediaSessionHandler?.setActive(true)
+
+        if (wasVideoPlaying) exoPlayer?.play()
     }
 
     override fun onDestroy() {

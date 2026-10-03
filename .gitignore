@@ -45,6 +45,11 @@ tools/barcode_db/*.sqlite3-wal
 tools/barcode_db/*.sqlite3-shm
 tools/barcode_db/__pycache__/
 
+# Release signing: upload-keystore passwords/paths and the keystores themselves.
+/keystore.properties
+*.jks
+*.keystore
+
 # The export/import passphrase (see secrets.properties.example, which IS committed as its
 # placeholder, and app/build.gradle.kts, which reads this into BuildConfig.BACKUP_PASSPHRASE).
 /secrets.properties

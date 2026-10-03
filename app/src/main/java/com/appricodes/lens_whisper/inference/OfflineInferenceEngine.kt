@@ -3,6 +3,7 @@ package com.appricodes.lens_whisper.inference
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.os.PowerManager
 import android.graphics.Bitmap
 import android.util.Log
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
@@ -19,16 +20,20 @@ import com.google.ai.edge.litertlm.Engine
 import com.google.ai.edge.litertlm.EngineConfig
 import com.google.ai.edge.litertlm.ThinkingConfig
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -45,13 +50,12 @@ import java.io.ByteArrayOutputStream
  * time): the LiteRT-LM engine itself gives no cancellation or progress API, and a genuinely
  * out-of-memory device doesn't throw a catchable exception here — it thrashes (heavy swapping)
  * for minutes rather than failing fast, which is indistinguishable from a real hang from the
- * caller's side. [ensureEngine] and [analyze]'s inference call are both wrapped with a generous
+ * caller's side. Model loading ([runLoad]) and inference are both wrapped with a generous
  * timeout as a *during* check: if loading/inference is taking dramatically longer than normal,
  * that's treated as a probable low-memory thrash and reported to the user, rather than leaving
- * the UI stuck indefinitely. This can't force-stop the underlying native call (there's no API for
- * that) — the abandoned attempt keeps running on its own thread and is closed automatically if it
- * ever does complete (see the `invokeOnCompletion` handlers below) — but it does stop the *app*
- * from being unresponsive for minutes on end.
+ * the UI stuck indefinitely. This can't force-stop a native load (there's no API for that) — the
+ * given-up load keeps running and keeps occupying [Slot] until it returns, then is closed — but
+ * it does stop the *app* from being unresponsive for minutes on end.
  */
 object OfflineInferenceEngine {
     private const val TAG = "OfflineInferenceEngine"
@@ -103,13 +107,46 @@ object OfflineInferenceEngine {
     private val _lowMemoryPressure = MutableStateFlow(false)
     val lowMemoryPressure: StateFlow<Boolean> = _lowMemoryPressure
 
-    private var loadedEngine: Engine? = null
-    private var loadedModelId: String? = null
+    /**
+     * The single place a model can live in memory. Every model-memory decision goes through this
+     * one field (always read/written under [mutex]), and a new load only ever starts from [Empty] —
+     * so there is never a moment where one model is loading or loaded while another is too.
+     *
+     * Why a [Loading] state at all, rather than just "loaded engine or null": a native load can't be
+     * cancelled, and it's owned by *this* object, not by whoever asked for it. Previously a caller
+     * cancelled mid-load (a LaunchedEffect whose activity got recreated around a lock/unlock, the
+     * model picker's remembered scope going away, backing out of Manage Models) left its load
+     * running untracked in the background while the slot still read "nothing loaded" — so the next
+     * request started a *second* full load next to it, and found no memory for it.
+     */
+    private sealed class Slot {
+        data object Empty : Slot()
+
+        class Loading(val modelId: String) : Slot() {
+            /** null = loaded fine, otherwise the user-facing failure message. Completes as soon as
+             *  the outcome is known — for a timed-out load that's well before the native call
+             *  actually returns, which is what [done] is for. */
+            val outcome = CompletableDeferred<String?>()
+            /** Completes once the native load has really returned and the slot has moved on. */
+            val done = CompletableDeferred<Unit>()
+            /** Set when nobody wants this model any more (released, superseded by a different model,
+             *  or given up on after a timeout): close it the moment it finishes instead of keeping it. */
+            @Volatile var closeWhenDone = false
+        }
+
+        class Loaded(val modelId: String, val engine: Engine) : Slot()
+    }
+
+    private var slot: Slot = Slot.Empty
     private val mutex = Mutex()
 
-    // Deliberately not tied to any caller's coroutine scope: a load/inference attempt that times
-    // out must keep running here (so it can be closed if it ever finishes) independent of
-    // whatever the UI does next — see the class doc.
+    /** How many conversations are running on the [Slot.Loaded] engine right now. Incremented only
+     *  under [mutex] (in [acquireEngine]), decremented without it (see [withEngine]) — so while
+     *  [mutex] is held and this reads 0, nobody can start using the engine, and it's safe to close. */
+    private val activeUsers = MutableStateFlow(0)
+
+    // Deliberately not tied to any caller's coroutine scope: a load/inference attempt must keep
+    // running here independent of whatever the UI does next — see the class doc and [Slot].
     private val engineScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
     /** Registers for system memory-pressure callbacks — call once from `LensWhisperApplication.onCreate`.
@@ -124,21 +161,38 @@ object OfflineInferenceEngine {
      *  swaps this app does internally, which would release the model on every such swap, not just
      *  on actually leaving the app.
      *
-     *  Trade-off worth knowing: a brief switch away and straight back (checking a notification,
-     *  say) now costs a full reload — up to [LOAD_TIMEOUT_MS] worst case, ~10s normally — on
-     *  return, where previously the model stayed warm. That's the deliberate exchange for not
-     *  holding a 1-3GB model in memory for a backgrounded, screen-reader-driven app the user isn't
-     *  looking at. */
+     *  Except when the screen merely turned off: UI_HIDDEN fires on locking the phone too, and
+     *  locking it while waiting for (or listening to) an answer is routine for a screen-reader
+     *  user — releasing there meant every unlock cost a full reload for a model the user never
+     *  actually left. So with the screen off the model stays loaded; if the system then genuinely
+     *  needs the memory it says so with [ComponentCallbacks2.TRIM_MEMORY_BACKGROUND] (still
+     *  delivered on API 34+, unlike the finer-grained levels), which does release it.
+     *
+     *  Trade-off worth knowing: a brief switch to another app and straight back (checking a
+     *  notification, say) still costs a full reload — up to [LOAD_TIMEOUT_MS] worst case, ~10s
+     *  normally — on return. That's the deliberate exchange for not holding a 1-3GB model in
+     *  memory for a backgrounded app the user isn't looking at. */
     fun registerMemoryPressureMonitor(app: android.app.Application) {
         app.registerComponentCallbacks(object : ComponentCallbacks2 {
             override fun onTrimMemory(level: Int) {
-                if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                // Exact match, not >=: UI_HIDDEN (20) and BACKGROUND (40) are numerically above
+                // RUNNING_CRITICAL (15) but say nothing about memory being critically low.
+                if (level == ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
                     _lowMemoryPressure.value = true
-                    Log.w(TAG, "System reported critical memory pressure (level=$level) while loadState=${_loadState.value}")
+                    Log.w(TAG, "System reported critical memory pressure while loadState=${_loadState.value}")
                 }
-                if (level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN && loadedEngine != null) {
-                    Log.i(TAG, "App backgrounded (all UI hidden) — releasing ${loadedModelId}")
-                    release()
+                val screenOn = app.getSystemService(PowerManager::class.java)?.isInteractive ?: true
+                when {
+                    level >= ComponentCallbacks2.TRIM_MEMORY_BACKGROUND -> {
+                        Log.i(TAG, "System is reclaiming memory from the backgrounded app (level=$level) — releasing")
+                        release()
+                    }
+                    level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN && screenOn -> {
+                        Log.i(TAG, "App backgrounded (all UI hidden) — releasing")
+                        release()
+                    }
+                    level == ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN ->
+                        Log.i(TAG, "Screen turned off — keeping the model loaded")
                 }
             }
             override fun onConfigurationChanged(newConfig: Configuration) {}
@@ -146,21 +200,102 @@ object OfflineInferenceEngine {
         })
     }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
-    private suspend fun ensureEngine(context: Context, model: OfflineModelInfo): Engine = mutex.withLock {
-        loadedEngine?.let { if (loadedModelId == model.id) { _loadState.value = LoadState.Ready(model.id); return@withLock it } }
+    /** Runs [block] against [model]'s engine, loading it first only if it isn't already the one in
+     *  memory, and keeps the engine from being closed until [block] returns. Every conversation
+     *  must go through this — see [activeUsers]. */
+    private suspend fun <T> withEngine(context: Context, model: OfflineModelInfo, block: suspend (Engine) -> T): T {
+        val engine = acquireEngine(context, model)
+        try {
+            return block(engine)
+        } finally {
+            activeUsers.update { it - 1 }
+        }
+    }
 
-        // Release whatever's currently loaded (a different model, if any) BEFORE checking whether
-        // the new one will fit. The check below reads system-wide available memory, so it has to
-        // see memory as it will actually be once the old model is gone — checking first and
-        // closing after would spuriously fail a switch between two similarly-sized models whose
-        // combined size doesn't fit, even though either one alone fits fine. This is also the
-        // actual point where "switching models frees the old one's memory" happens.
-        loadedEngine?.close()
-        loadedEngine = null
-        loadedModelId = null
+    /** Returns [model]'s engine with [activeUsers] already incremented — the caller must decrement
+     *  it when done ([withEngine] does). Never awaits anything while holding [mutex] (the load job
+     *  needs it to install its result); every wait happens outside it, then the slot is re-checked
+     *  from scratch, since anything may have changed in between. */
+    private suspend fun acquireEngine(context: Context, model: OfflineModelInfo): Engine {
+        while (true) {
+            val wait: suspend () -> Unit = mutex.withLock {
+                when (val s = slot) {
+                    is Slot.Loaded -> when {
+                        s.modelId == model.id -> {
+                            activeUsers.update { it + 1 }
+                            _loadState.value = LoadState.Ready(model.id)
+                            return s.engine
+                        }
+                        // A different model, still answering something: wait for it to finish
+                        // before closing it. Callers that switch models already cancel their own
+                        // analysis first, so this is normally instant.
+                        activeUsers.value > 0 -> suspend { activeUsers.first { it == 0 } }
+                        else -> {
+                            // Close BEFORE the memory check inside startLoadLocked — that check
+                            // reads system-wide free memory, so it has to see memory as it will be
+                            // once the old model is gone.
+                            closeLoadedLocked(s)
+                            val loading = startLoadLocked(context, model)
+                            suspend { awaitOwnLoad(loading) }
+                        }
+                    }
+                    is Slot.Loading ->
+                        if (s.modelId == model.id) {
+                            // Same model already on its way in (e.g. its first caller was cancelled
+                            // mid-load): join it rather than starting a second copy. Un-mark a
+                            // release that came in meanwhile — someone wants it again — unless the
+                            // load was already given up on.
+                            if (!s.outcome.isCompleted) s.closeWhenDone = false
+                            suspend { awaitOwnLoad(s) }
+                        } else {
+                            // A different model is mid-load and can't be interrupted: let it finish,
+                            // close it, and only then load this one.
+                            s.closeWhenDone = true
+                            _loadState.value = LoadState.Loading(model.id)
+                            suspend { awaitPreviousLoad(s, model) }
+                        }
+                    Slot.Empty -> {
+                        val loading = startLoadLocked(context, model)
+                        suspend { awaitOwnLoad(loading) }
+                    }
+                }
+            }
+            wait()
+        }
+    }
+
+    private suspend fun awaitOwnLoad(loading: Slot.Loading) {
+        loading.outcome.await()?.let { throw ModelNotReady(it) }
+    }
+
+    private suspend fun awaitPreviousLoad(previous: Slot.Loading, model: OfflineModelInfo) {
+        val finished = try {
+            withTimeoutOrNull(LOAD_TIMEOUT_MS) { previous.done.await() }
+        } catch (e: CancellationException) {
+            // acquireEngine showed Loading(model) for this wait; nobody's waiting any more, and
+            // no load of this model has started, so don't leave that dialog up with nothing behind it.
+            _loadState.compareAndSet(LoadState.Loading(model.id), LoadState.Idle)
+            throw e
+        }
+        if (finished == null) {
+            val message = "The previous model is still loading and can't be interrupted. Try ${model.displayName} again in a moment."
+            _loadState.value = LoadState.Failed(model.id, message)
+            throw ModelNotReady(message)
+        }
+    }
+
+    /** Must hold [mutex], with [activeUsers] at 0. */
+    private fun closeLoadedLocked(loaded: Slot.Loaded) {
+        Log.i(TAG, "Closing ${loaded.modelId}")
+        loaded.engine.close()
+        slot = Slot.Empty
         _loadState.value = LoadState.Idle
+    }
 
+    /** Must hold [mutex], with [slot] [Slot.Empty]. Starts [model]'s load on [engineScope] and
+     *  returns its [Slot.Loading]; the load installs its own result into [slot] when it finishes,
+     *  whether or not anyone is still waiting for it. */
+    private fun startLoadLocked(context: Context, model: OfflineModelInfo): Slot.Loading {
         // Hard pre-check, right before actually starting: if free memory is already below the
         // model's raw file size, it cannot possibly load — fail immediately with a clear message
         // instead of spending a minute finding that out the hard way. This is deliberately a much
@@ -171,99 +306,152 @@ object OfflineInferenceEngine {
             val message = "Not enough free memory to load ${model.displayName} right now (only " +
                 "${availableNow / 1_000_000}MB free). Close other apps or choose a smaller model."
             _loadState.value = LoadState.Failed(model.id, message)
-            throw IllegalStateException(message)
+            throw ModelNotReady(message)
         }
 
+        val loading = Slot.Loading(model.id)
+        slot = loading
         _loadState.value = LoadState.Loading(model.id)
         _lowMemoryPressure.value = false
+        Log.i(TAG, "Loading ${model.id}")
+        engineScope.launch { runLoad(context.applicationContext, model, loading) }
+        return loading
+    }
 
-        val modelFile = OfflineModelsRepository(context.applicationContext).localFileFor(model)
-
-        // If the abandoned load eventually does finish, nothing is using it — close it right away
-        // instead of leaking it (and its native/GPU memory, easily 1-3GB+) for the rest of the
-        // process's life. Shared by both ways a load can be abandoned below: this function's own
-        // timeout, and the caller being cancelled out from under it (e.g. a Composable's
-        // LaunchedEffect(selectedModelId) whose key changed because the user switched models
-        // again before the previous one finished loading) — confirmed on-device that repeating
-        // "pick a big model, switch away before it loads" orphans one fully-loaded engine per
-        // cycle, compounding to an OOM crash after a few repeats.
-        fun abandonLoad(loadJob: kotlinx.coroutines.Deferred<Engine>) {
-            loadJob.invokeOnCompletion { cause -> if (cause == null) runCatching { loadJob.getCompleted().close() } }
+    /** Wraps [loadAndInstall] so that, whatever goes wrong in it, [Slot.Loading.outcome] and
+     *  [Slot.Loading.done] always complete and the slot always moves on — every waiter depends on
+     *  that, and a slot stuck in Loading would block every later load and keep the undismissable
+     *  "Loading…" dialog up for good. */
+    private suspend fun runLoad(context: Context, model: OfflineModelInfo, loading: Slot.Loading) {
+        try {
+            loadAndInstall(context, model, loading)
+        } finally {
+            if (!loading.done.isCompleted) {
+                Log.e(TAG, "Loading ${model.id} ended unexpectedly — clearing its slot")
+                val message = "Loading ${model.displayName} failed unexpectedly."
+                withContext(NonCancellable) {
+                    mutex.withLock {
+                        if (slot === loading) slot = Slot.Empty
+                        _loadState.compareAndSet(LoadState.Loading(model.id), LoadState.Failed(model.id, message))
+                    }
+                }
+                loading.outcome.complete(message)
+                loading.done.complete(Unit)
+            }
         }
+    }
 
+    private suspend fun loadAndInstall(context: Context, model: OfflineModelInfo, loading: Slot.Loading) {
+        val modelFile = OfflineModelsRepository(context).localFileFor(model)
+
+        // The native call can't be interrupted, so the timeout here only decides when to stop
+        // *waiting* and tell the user. A load that's taking dramatically longer than normal is
+        // treated as a probable low-memory thrash — but it still occupies the slot until the
+        // native call really returns, so nothing else can start loading next to it meanwhile.
         suspend fun attemptLoad(useCpuVision: Boolean): Engine {
             val engineConfig = EngineConfig(
                 modelPath = modelFile.absolutePath,
                 backend = Backend.CPU(),
                 visionBackend = if (useCpuVision) Backend.CPU() else Backend.GPU(),
-                cacheDir = context.applicationContext.cacheDir.path
+                cacheDir = context.cacheDir.path
             )
-            val loadJob = engineScope.async {
-                val engine = Engine(engineConfig)
-                engine.initialize()
-                engine
-            }
-            try {
-                return withTimeoutOrNull(LOAD_TIMEOUT_MS) { loadJob.await() }
-                    ?: run {
-                        Log.w(TAG, "Loading ${model.id} exceeded ${LOAD_TIMEOUT_MS}ms — likely a low-memory thrash, giving up")
-                        abandonLoad(loadJob)
-                        val message = "Loading ${model.displayName} is taking much longer than usual — your device " +
-                            "likely doesn't have enough free memory for this model. Try a smaller model."
-                        _loadState.value = LoadState.Failed(model.id, message)
-                        throw IllegalStateException(message)
-                    }
-            } catch (e: CancellationException) {
-                // withTimeoutOrNull only swallows *its own* timeout into a null return — a
-                // cancellation of this coroutine's caller propagates straight through it as a
-                // thrown CancellationException instead, leaving loadJob (on engineScope,
-                // deliberately detached from the caller — see this object's class doc) still
-                // running with nothing left to close it once it finishes. Same leak, different
-                // trigger, same fix.
-                Log.w(TAG, "Loading ${model.id} was cancelled by its caller — abandoning the in-flight load")
-                abandonLoad(loadJob)
-                _loadState.value = LoadState.Idle
-                throw e
-            }
+            val nativeLoad = engineScope.async { Engine(engineConfig).also { it.initialize() } }
+            withTimeoutOrNull(LOAD_TIMEOUT_MS) { nativeLoad.await() }?.let { return it }
+
+            Log.w(TAG, "Loading ${model.id} exceeded ${LOAD_TIMEOUT_MS}ms — likely a low-memory thrash, giving up")
+            val message = "Loading ${model.displayName} is taking much longer than usual — your device " +
+                "likely doesn't have enough free memory for this model. Try a smaller model."
+            loading.closeWhenDone = true
+            _loadState.value = LoadState.Failed(model.id, message)
+            loading.outcome.complete(message)
+            runCatching { nativeLoad.await() }.getOrNull()?.close()
+            throw LoadTimedOut(message)
         }
 
         // GPU is tried first for every model on every device — a per-(model, device) preference
         // learned from a real failure (see PreferencesManager.getVisionBackendOverride) is the only
         // thing that skips straight to CPU. If GPU fails right here at load time (rather than later,
         // at conversation time — see analyze()'s own fallback below for that case) and this is the
-        // first time we're seeing it, retry once on CPU and remember the result.
-        val prefs = PreferencesManager(context.applicationContext)
-        val engine = if (prefs.getVisionBackendOverride(model.id) == "CPU") {
-            attemptLoad(useCpuVision = true)
-        } else {
-            try {
-                attemptLoad(useCpuVision = false)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: Exception) {
-                Log.w(TAG, "GPU vision init failed for ${model.id}, retrying once on CPU", e)
-                prefs.setVisionBackendOverride(model.id, "CPU")
+        // first time we're seeing it, retry once on CPU and remember the result. A timeout isn't a
+        // GPU incompatibility, so it doesn't trigger that retry.
+        val prefs = PreferencesManager(context)
+        var failure: String? = null
+        val engine: Engine? = try {
+            if (prefs.getVisionBackendOverride(model.id) == "CPU") {
                 attemptLoad(useCpuVision = true)
+            } else {
+                try {
+                    attemptLoad(useCpuVision = false)
+                } catch (e: LoadTimedOut) {
+                    throw e
+                } catch (e: Exception) {
+                    Log.w(TAG, "GPU vision init failed for ${model.id}, retrying once on CPU", e)
+                    prefs.setVisionBackendOverride(model.id, "CPU")
+                    attemptLoad(useCpuVision = true)
+                }
             }
+        } catch (e: Exception) {
+            if (e !is LoadTimedOut) Log.e(TAG, "Loading ${model.id} failed", e)
+            failure = e.localizedMessage ?: "Failed to load ${model.displayName}"
+            null
         }
 
-        loadedEngine = engine
-        loadedModelId = model.id
-        _loadState.value = LoadState.Ready(model.id)
-        engine
+        mutex.withLock {
+            // Nothing else replaces a Loading slot — only this job moves it on — so the slot is
+            // still `loading` here, and loadState changes below can't stomp a newer request's
+            // state except where checked.
+            if (engine != null && !loading.closeWhenDone) {
+                slot = Slot.Loaded(model.id, engine)
+                _loadState.value = LoadState.Ready(model.id)
+                Log.i(TAG, "Loaded ${model.id}")
+            } else {
+                engine?.let { runCatching { it.close() } }
+                slot = Slot.Empty
+                val current = _loadState.value
+                if (failure != null && !loading.outcome.isCompleted) {
+                    _loadState.value = LoadState.Failed(model.id, failure)
+                } else if (current is LoadState.Loading && current.modelId == model.id) {
+                    _loadState.value = LoadState.Idle
+                }
+                Log.i(TAG, "Discarded ${model.id} (failure=$failure, closeWhenDone=${loading.closeWhenDone})")
+            }
+        }
+        loading.outcome.complete(if (engine != null && !loading.closeWhenDone) null else failure ?: "Loading ${model.displayName} was cancelled.")
+        loading.done.complete(Unit)
     }
 
-    /** Eagerly loads [model] into memory right away (rather than waiting for the first
-     *  [analyze] call) so selecting a model shows its loading cost immediately, via [loadState],
-     *  instead of surfacing as unexplained lag the first time the user taps a button. */
+    private class LoadTimedOut(message: String) : IllegalStateException(message)
+
+    /** The model couldn't be made ready (not enough memory, load failed/timed out/was dropped, an
+     *  earlier load still in the way) — as opposed to something going wrong *during* a
+     *  conversation. [analyze]/[analyzeStreaming]'s GPU→CPU fallback must not treat this as a
+     *  vision-backend failure: [runLoad] already does its own GPU→CPU retry at load time, and
+     *  pinning the model to CPU for good because, say, the user pressed Home mid-load would be wrong. */
+    private class ModelNotReady(message: String) : IllegalStateException(message)
+
+    /** Inference ran past its timeout — a probable low-memory thrash, not a GPU incompatibility, so
+     *  [analyze]/[analyzeStreaming]'s GPU→CPU fallback must rethrow it, not pin the model to CPU for
+     *  good and then make the user wait out a second full timeout on the retry. Same reasoning as
+     *  [LoadTimedOut] at load time. */
+    private class InferenceTimedOut(message: String) : IllegalStateException(message)
+
+    /** Loads [model] into memory right away (rather than waiting for the first [analyze] call) so
+     *  selecting a model shows its loading cost immediately, via [loadState], instead of surfacing
+     *  as unexplained lag the first time the user taps a button. A no-op if it's already loaded,
+     *  and joins the existing load if it's already loading — so it's safe to call on every screen
+     *  open. Cancelling the caller only stops it waiting; the load itself carries on and is kept. */
     suspend fun preload(context: Context, model: OfflineModelInfo) {
         try {
-            ensureEngine(context, model)
+            acquireEngine(context, model)
+            activeUsers.update { it - 1 }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
+            // Not touching loadState: every failure path that should show the user something has
+            // already set LoadState.Failed itself. The one that hasn't — this model's load being
+            // dropped because a different model was asked for meanwhile — must not overwrite that
+            // newer model's state.
             Log.e(TAG, "Preload failed for model ${model.id}", e)
-            _loadState.value = LoadState.Failed(model.id, e.localizedMessage ?: "Failed to load model")
         }
     }
 
@@ -423,15 +611,14 @@ object OfflineInferenceEngine {
         val prefs = PreferencesManager(context.applicationContext)
         val plan = reasoningPlanFor(model, prefs.reasoningEffort)
 
-        suspend fun runOnce(): String {
-            val engine = ensureEngine(context, model)
+        suspend fun runOnce(): String = withEngine(context, model) { engine ->
             val conversationConfig = ConversationConfig(
                 systemInstruction = Contents.of(Content.Text(plan.systemInstructionPrefix + systemInstruction)),
                 maxOutputToken = plan.maxOutputToken,
                 thinkingConfig = plan.thinkingConfig,
                 channels = plan.channels
             )
-            return engine.createConversation(conversationConfig).use { conversation ->
+            engine.createConversation(conversationConfig).use { conversation ->
                 val contents = mutableListOf<Content>()
                 for (bitmap in images) {
                     val scaled = ImageScaling.scaleToMax(bitmap, maxImageDimension)
@@ -443,11 +630,21 @@ object OfflineInferenceEngine {
                 contents.add(Content.Text(userPrompt))
 
                 val inferenceJob = engineScope.async { conversation.sendMessage(Contents.of(contents)).toString() }
-                val rawResult = withTimeoutOrNull(plan.inferenceTimeoutMs) { inferenceJob.await() }
+                // Leaving this block in any way but a normal finish (timeout, or the caller being
+                // cancelled) closes the conversation — and, once withEngine returns, lets the engine
+                // itself be closed — while sendMessage may still be generating on engineScope.
+                // cancelProcess() first, for the same native-crash reason as analyzeStreaming's own
+                // cancellation handler.
+                val rawResult = try {
+                    withTimeoutOrNull(plan.inferenceTimeoutMs) { inferenceJob.await() }
+                } catch (e: CancellationException) {
+                    conversation.cancelProcess()
+                    throw e
+                }
                     ?: run {
                         Log.w(TAG, "Inference on ${model.id} exceeded ${plan.inferenceTimeoutMs}ms — likely a low-memory thrash")
-                        inferenceJob.invokeOnCompletion { /* nothing owns the result; let it be discarded */ }
-                        throw IllegalStateException(
+                        conversation.cancelProcess()
+                        throw InferenceTimedOut(
                             "Analysis with ${model.displayName} is taking much longer than usual — your device " +
                                 "likely doesn't have enough free memory for this model right now."
                         )
@@ -471,7 +668,7 @@ object OfflineInferenceEngine {
         }
 
         // Some GPU/vision incompatibilities only surface once a real conversation with an actual
-        // image runs — not at engine-init time (see ensureEngine's own, earlier fallback, and
+        // image runs — not at engine-init time (see runLoad's own, earlier fallback, and
         // PreferencesManager.getVisionBackendOverride) — confirmed on Exynos 2100/Mali with
         // `lfm2_5_vl_450m` (2026-08-24): engine.initialize() succeeded, createConversation() didn't.
         // Retry once on CPU before giving up, and remember it so every later load on this device
@@ -480,11 +677,17 @@ object OfflineInferenceEngine {
             runOnce()
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ModelNotReady) {
+            throw e
+        } catch (e: InferenceTimedOut) {
+            throw e
         } catch (e: Exception) {
             if (prefs.getVisionBackendOverride(model.id) == "CPU") throw e
             Log.w(TAG, "Vision inference failed for ${model.id}, retrying once on CPU", e)
             prefs.setVisionBackendOverride(model.id, "CPU")
-            release()
+            // Awaited, not fire-and-forget release(): otherwise runOnce() below can grab the
+            // still-loaded GPU engine first and have the queued release close it mid-use.
+            releaseSuspending()
             runOnce()
         }
 
@@ -493,7 +696,7 @@ object OfflineInferenceEngine {
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            // Not touching loadState here: if this came from ensureEngine() failing to load,
+            // Not touching loadState here: if this came from the model failing to load,
             // it already set LoadState.Failed itself before throwing. If the model loaded fine
             // and only this one query failed (including the inference timeout above), the
             // engine is still perfectly usable for the next query — loadState should stay
@@ -532,8 +735,7 @@ object OfflineInferenceEngine {
         val prefs = PreferencesManager(context.applicationContext)
         val plan = reasoningPlanFor(model, prefs.reasoningEffort)
 
-        suspend fun collectOnce(emit: suspend (String) -> Unit) {
-            val engine = ensureEngine(context, model)
+        suspend fun collectOnce(emit: suspend (String) -> Unit) = withEngine(context, model) { engine ->
             val conversationConfig = ConversationConfig(
                 systemInstruction = Contents.of(Content.Text(plan.systemInstructionPrefix + systemInstruction)),
                 maxOutputToken = plan.maxOutputToken,
@@ -594,7 +796,10 @@ object OfflineInferenceEngine {
                 }
                 if (completed != true) {
                     Log.w(TAG, "Streaming inference on ${model.id} exceeded ${plan.inferenceTimeoutMs}ms — likely a low-memory thrash")
-                    throw IllegalStateException(
+                    // Same as the cancellation case above: about to close the conversation, and
+                    // possibly the engine after it, so make sure generation has really stopped.
+                    conversation.cancelProcess()
+                    throw InferenceTimedOut(
                         "Analysis with ${model.displayName} is taking much longer than usual — your device " +
                             "likely doesn't have enough free memory for this model right now."
                     )
@@ -607,15 +812,23 @@ object OfflineInferenceEngine {
             }
         }
 
+        // Once any text has gone out, a retry can't be made invisible: it would start the answer over
+        // from scratch, and the caller would speak those sentences a second time. Only a failure
+        // before the first delta (where a GPU incompatibility actually shows up) is retried.
+        var emittedAny = false
         try {
-            collectOnce { emit(it) }
+            collectOnce { emittedAny = true; emit(it) }
         } catch (e: CancellationException) {
             throw e
+        } catch (e: ModelNotReady) {
+            throw e
+        } catch (e: InferenceTimedOut) {
+            throw e
         } catch (e: Exception) {
-            if (prefs.getVisionBackendOverride(model.id) == "CPU") throw e
+            if (emittedAny || prefs.getVisionBackendOverride(model.id) == "CPU") throw e
             Log.w(TAG, "Streaming vision inference failed for ${model.id}, retrying once on CPU", e)
             prefs.setVisionBackendOverride(model.id, "CPU")
-            release()
+            releaseSuspending() // awaited — see analyze()'s identical fallback
             collectOnce { emit(it) }
         }
     }.flowOn(Dispatchers.IO)
@@ -624,25 +837,41 @@ object OfflineInferenceEngine {
      *  ([registerMemoryPressureMonitor]) or the user switches to "mlkit"/Local Server, neither of
      *  which needs an on-device engine resident. Not itself suspending (so it can be called from
      *  the non-suspend [onTrimMemory] callback below); fire-and-forget onto [engineScope]/[mutex]
-     *  instead — a caller that can suspend and needs the close to have actually finished before it
-     *  proceeds should call [releaseSuspending] directly rather than this. */
+     *  instead — see [releaseSuspending] for exactly what releasing does in each state. */
     fun release() {
         engineScope.launch { releaseSuspending() }
     }
 
-    /** Suspending counterpart to [release], doing the identical mutex-protected work — the two
-     *  never race each other, since both take [mutex] like every other access to [loadedEngine]
-     *  (unsynchronized `close()` here, concurrent with [ensureEngine] assigning a freshly-loaded
-     *  engine to that same field, is a real native use-after-close race, not just a theoretical
-     *  one). Prefer this over [release] whenever the caller is already in a coroutine that can
-     *  await it — e.g. a Composable's `LaunchedEffect` switching away from an on-device model,
-     *  which needs the close to have genuinely completed before the effect finishes, not just
-     *  dispatched. */
-    suspend fun releaseSuspending() = mutex.withLock {
-        loadedEngine?.close()
-        loadedEngine = null
-        loadedModelId = null
-        _loadState.value = LoadState.Idle
-        _lowMemoryPressure.value = false
+    /** Suspending counterpart to [release]. Prefer this over [release] whenever the caller is
+     *  already in a coroutine that can await it — e.g. a Composable's `LaunchedEffect` switching
+     *  away from an on-device model.
+     *
+     *  - Loaded and idle: closed right away.
+     *  - Loaded and still answering something: waits for that to finish first (never closes an
+     *    engine out from under a running conversation), then closes it.
+     *  - Still loading: the native load can't be interrupted, so it's marked to be closed the moment
+     *    it finishes instead of being kept — and until then it still occupies the slot, so no other
+     *    model can start loading next to it. */
+    suspend fun releaseSuspending() {
+        while (true) {
+            val wait: suspend () -> Unit = mutex.withLock {
+                when (val s = slot) {
+                    Slot.Empty -> return
+                    is Slot.Loading -> {
+                        s.closeWhenDone = true
+                        return
+                    }
+                    is Slot.Loaded ->
+                        if (activeUsers.value > 0) {
+                            suspend { activeUsers.first { it == 0 } }
+                        } else {
+                            closeLoadedLocked(s)
+                            _lowMemoryPressure.value = false
+                            return
+                        }
+                }
+            }
+            wait()
+        }
     }
 }

@@ -71,6 +71,10 @@ import java.io.FileOutputStream
 // SEGMENTATION_COPY_MAX_DIM constant (kept as a separate file-local constant there, same value).
 private const val SEGMENTATION_COPY_MAX_DIM = 1280
 
+// Upper bound on the long edge of an opened image file, reached by power-of-two subsampling — see
+// the image-loading LaunchedEffect for why it's capped at all.
+private const val MAX_FILE_IMAGE_DIM = 4000
+
 /**
  * Describes a video/image file with the same model-driven top bar + 3-row grid as
  * [com.appricodes.lens_whisper.CameraActivity] — Basic Tasks and every on-device VLM catalog
@@ -165,20 +169,35 @@ fun MediaDescriberScreen(
 
     LaunchedEffect(currentFileUri) {
         currentFileUri?.let { uri ->
-            val isImage = context.contentResolver.getType(uri)?.startsWith("image/") == true || uri.toString().endsWith(".jpg")
+            val mimeType = context.contentResolver.getType(uri)
+                ?: android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(
+                    android.webkit.MimeTypeMap.getFileExtensionFromUrl(uri.toString()).lowercase()
+                )
+            val isImage = mimeType?.startsWith("image/") == true
             if (isImage) {
                 isImageMode = true; exoPlayer.stop()
-                runCatching {
-                    context.contentResolver.openInputStream(uri).use { stream ->
-                        val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-                        BitmapFactory.decodeStream(stream, null, options)
-                        nativeMediaWidth = options.outWidth.toFloat().coerceAtLeast(1f)
-                        nativeMediaHeight = options.outHeight.toFloat().coerceAtLeast(1f)
-                    }
-                    context.contentResolver.openInputStream(uri).use { stream ->
-                        runtimeLoadedImageBitmap = BitmapFactory.decodeStream(stream)
-                    }
+                // Off the main thread, and subsampled: a full-resolution decode of a 48-50MP photo is
+                // a 150-200MB bitmap — slow enough to freeze this screen, and past the size Compose's
+                // canvas will draw at all (it throws instead). Nothing downstream needs more than
+                // MAX_FILE_IMAGE_DIM: the on-device models scale to far less, and isolation crops
+                // from this same bitmap.
+                val decoded = withContext(Dispatchers.IO) {
+                    runCatching {
+                        val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                        context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, bounds) }
+                        var sample = 1
+                        while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= MAX_FILE_IMAGE_DIM) sample *= 2
+                        val options = BitmapFactory.Options().apply { inSampleSize = sample }
+                        val bitmap = context.contentResolver.openInputStream(uri).use { BitmapFactory.decodeStream(it, null, options) }
+                        Triple(bounds.outWidth, bounds.outHeight, bitmap)
+                    }.getOrNull()
                 }
+                if (decoded != null) {
+                    nativeMediaWidth = decoded.first.toFloat().coerceAtLeast(1f)
+                    nativeMediaHeight = decoded.second.toFloat().coerceAtLeast(1f)
+                    runtimeLoadedImageBitmap = decoded.third
+                }
+                if (decoded?.third == null) AccessibilityUtils.announceToTalkBack(context, "Could not load the image.")
             } else {
                 isImageMode = false; runtimeLoadedImageBitmap = null
                 exoPlayer.setMediaItem(MediaItem.fromUri(uri)); exoPlayer.prepare(); exoPlayer.playWhenReady = true
@@ -502,7 +521,7 @@ fun MediaDescriberScreen(
 
     // Proactively warms the selected on-device model as soon as this screen opens (or the
     // selection changes), rather than only lazily loading it the first time a button is pressed —
-    // ensureEngine() is a quick no-op if it's already loaded, so this is cheap to re-run.
+    // preload() is a quick no-op if it's already loaded (and joins a load already in progress), so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
     // announcement. Not applicable to "mlkit" (Basic Tasks needs no in-memory model) or the Local
     // Server (nothing here to preload — it runs on a separate machine) — switching to either now

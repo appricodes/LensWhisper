@@ -53,10 +53,11 @@ class VoiceNoteRecorder(private val context: Context) {
         stopPlayback()
         if (recorder != null) return false
         target.parentFile?.mkdirs()
-        // Delete first: MediaRecorder truncates, but a failure between here and the first written
-        // frame would otherwise leave the *previous* note in place while the UI says a new
-        // recording is in progress.
-        runCatching { target.delete() }
+        // Recorded into a sibling ".part" file and only moved over [target] once stopRecording
+        // succeeds — so a cancelled or too-short re-recording leaves the previous note intact
+        // instead of having already deleted it.
+        val temp = partFileFor(target)
+        runCatching { temp.delete() }
         val newRecorder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             MediaRecorder(context)
         } else {
@@ -71,7 +72,7 @@ class VoiceNoteRecorder(private val context: Context) {
                 setAudioChannels(1)
                 setAudioSamplingRate(22050)
                 setAudioEncodingBitRate(64000)
-                setOutputFile(target.absolutePath)
+                setOutputFile(temp.absolutePath)
                 prepare()
                 start()
             }
@@ -81,7 +82,7 @@ class VoiceNoteRecorder(private val context: Context) {
         } catch (e: Exception) {
             Log.w(TAG, "Could not start recording", e)
             runCatching { newRecorder.release() }
-            runCatching { target.delete() }
+            runCatching { temp.delete() }
             recorder = null
             recordingTarget = null
             false
@@ -108,25 +109,32 @@ class VoiceNoteRecorder(private val context: Context) {
         } finally {
             runCatching { current.release() }
         }
-        if (!stopped || target == null) {
-            target?.let { runCatching { it.delete() } }
+        if (target == null) return null
+        val temp = partFileFor(target)
+        if (!stopped || !temp.exists() || temp.length() < MIN_USEFUL_BYTES) {
+            runCatching { temp.delete() }
             return null
         }
-        return if (target.exists() && target.length() >= MIN_USEFUL_BYTES) {
-            target
-        } else {
-            runCatching { target.delete() }
+        runCatching { target.delete() }
+        return if (temp.renameTo(target)) target else {
+            runCatching { temp.delete() }
             null
         }
     }
 
-    /** Abandons an in-progress recording and removes its partial file. Used when the screen goes
-     *  away mid-recording — see [release]. */
+    /** Abandons an in-progress recording and removes its partial file, leaving any previously
+     *  saved note untouched. Used when the screen goes away mid-recording — see [release]. */
     fun cancelRecording() {
-        val target = recordingTarget
-        stopRecording()
-        target?.let { runCatching { it.delete() } }
+        val target = recordingTarget ?: return
+        val current = recorder
+        recorder = null
+        recordingTarget = null
+        runCatching { current?.stop() }
+        runCatching { current?.release() }
+        runCatching { partFileFor(target).delete() }
     }
+
+    private fun partFileFor(target: File) = File(target.parentFile, target.name + ".part")
 
     /**
      * Plays [file], replacing any playback already running. [onComplete] fires on normal

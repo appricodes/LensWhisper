@@ -9,8 +9,13 @@
   call this app makes already targets HTTPS, so this doesn't relax anything else the app does)
   while explicitly re-locking the one known cloud domain to HTTPS-only as defense in depth.
 -->
+<!--
+  Cleartext is OFF while LocalServerFeature.ENABLED is false (the shipping configuration): nothing
+  else in the app uses plain http://, so allowing it would only widen the attack surface. Flip this
+  base-config back to "true" in the same change that re-enables the Local Server.
+-->
 <network-security-config>
-    <base-config cleartextTrafficPermitted="true" />
+    <base-config cleartextTrafficPermitted="false" />
     <domain-config cleartextTrafficPermitted="false">
         <domain includeSubdomains="true">lw.wikiponder.com</domain>
         <!-- Where the optional product database is published (see data/ProductDbSource.kt). -->

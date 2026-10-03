@@ -84,15 +84,9 @@
                 <data android:mimeType="video/*" />
                 <data android:mimeType="image/*" />
             </intent-filter>
-
-            <intent-filter android:label="Lens Whisper Media Player">
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="file" />
-                <data android:mimeType="video/*" />
-                <data android:mimeType="image/*" />
-            </intent-filter>
+            <!-- No file:// filter: since Android 7 other apps can't hand out file:// Uris at all
+                 (FileUriExposedException), and this app holds no storage permission to read one
+                 if they did. -->
         </activity>
 
         <activity

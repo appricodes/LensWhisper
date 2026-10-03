@@ -33,6 +33,14 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getString("selected_language_code", "en-US") ?: "en-US"
 		set(value) = standardPrefs.edit().putString("selected_language_code", value).apply()
 
+	/** The locale to hand Android's SpeechRecognizer — [selectedLanguageCode], except Persian is
+	 *  always sent as "fa-IR", which recognizers expect. Shared by every screen that listens. */
+	val speechLocaleCode: String
+		get() {
+			val rawCode = selectedLanguageCode
+			return if (rawCode.startsWith("fa", ignoreCase = true) || selectedLanguage.equals("Persian", ignoreCase = true)) "fa-IR" else rawCode
+		}
+
 	var ocrLanguage: String
 		get() = standardPrefs.getString("ocr_language", "Latin (English/EU)") ?: "Latin (English/EU)"
 		set(value) = standardPrefs.edit().putString("ocr_language", value).apply()

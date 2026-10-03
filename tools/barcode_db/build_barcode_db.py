@@ -126,7 +126,7 @@ from typing import Iterator, Optional
 
 # Fill this in with your own address before running a full download (see the
 # "A note on politeness" section above).
-CONTACT_EMAIL = "amiri.moalla@gmail.com"
+CONTACT_EMAIL = ""
 
 USER_AGENT = (
     "LensWhisper-BarcodeDBBuilder/2.0"

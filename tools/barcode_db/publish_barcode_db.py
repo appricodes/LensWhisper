@@ -29,10 +29,8 @@ certain rather than probably. Upload it alongside the database.
 
 Uploading
 ---------
-NOTE: wikiponder.com (192.196.157.59) is NOT the LensWhisper backend droplet
-(lw.wikiponder.com, 167.172.172.0) — it is a different server, so the droplet's SSH key
-and /var/www/lw.wikiponder.com/ webroot do not apply here. Upload however you normally
-reach that host; the target directory /lense_whisper/ already exists and is served.
+Upload however you normally reach the host; the target directory /lense_whisper/
+already exists and is served.
 
 Whatever the transport, the result must be readable at:
 

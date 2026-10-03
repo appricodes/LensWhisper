@@ -419,15 +419,23 @@ class CameraController(private val context: Context) {
             onShutter()
             capture.takePicture(cameraExecutor, object : ImageCapture.OnImageCapturedCallback() {
                 override fun onCaptureSuccess(image: ImageProxy) {
-                    val bitmap = try { imageProxyToBitmap(image) } finally { image.close() }
-                    if (bitmap == null) {
-                        cont.resumeWithException(IllegalStateException("Failed to decode captured photo"))
-                        return
+                    // Everything here runs on cameraExecutor, outside any coroutine: an exception
+                    // escaping this callback (a full disk on the file write, an OOM decoding a
+                    // max-resolution frame) would crash the whole process and leave the caller
+                    // suspended forever. Hand every failure back through the continuation instead.
+                    try {
+                        val bitmap = try { imageProxyToBitmap(image) } finally { image.close() }
+                        if (bitmap == null) {
+                            cont.resumeWithException(IllegalStateException("Failed to decode captured photo"))
+                            return
+                        }
+                        val scaled = ImageScaling.scaleToMax(bitmap, maxDim)
+                        val file = File(context.cacheDir, "$CAPTURE_FILE_PREFIX${System.currentTimeMillis()}.jpg")
+                        FileOutputStream(file).use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
+                        cont.resume(CapturedFrame(scaled, Uri.fromFile(file)))
+                    } catch (t: Throwable) {
+                        cont.resumeWithException(if (t is Exception) t else IllegalStateException("Capture failed", t))
                     }
-                    val scaled = ImageScaling.scaleToMax(bitmap, maxDim)
-                    val file = File(context.cacheDir, "capture_${System.currentTimeMillis()}.jpg")
-                    FileOutputStream(file).use { scaled.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-                    cont.resume(CapturedFrame(scaled, Uri.fromFile(file)))
                 }
 
                 override fun onError(exception: ImageCaptureException) {
@@ -438,6 +446,9 @@ class CameraController(private val context: Context) {
     }
 
     companion object {
+        /** File-name prefix of every capture this class writes — swept by [com.appricodes.lens_whisper.utils.CaptureCacheCleaner]. */
+        const val CAPTURE_FILE_PREFIX = "capture_"
+
         // Capture targets for withCaptureSession's highResolution flag — Read Text/Read Document
         // need enough resolution for small glyphs to stay legible to OCR; every other capture
         // (custom VLM prompts, Story, Detect Objects/Object and Color Detection, Explore) only

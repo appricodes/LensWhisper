@@ -227,7 +227,7 @@ object OfflineSegmentationDetector {
     private val loadLock = Any()
 
     /** Loads the interpreter once and keeps it — there's only ever one model to load now, so
-     *  unlike [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.ensureEngine] (which
+     *  unlike [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.preload] (which
      *  genuinely does switch between different VLMs) this never has to close and reload. */
     private fun ensureInterpreter(context: Context): Interpreter {
         interpreter?.let { return it }
@@ -253,7 +253,16 @@ object OfflineSegmentationDetector {
      * first. Safe to call from a background thread (the caller — see the MLKit button handlers —
      * already runs capture+detect off the main thread; this does no thread-switching of its own).
      */
-    fun detect(context: Context, bitmap: Bitmap): List<DetectedInstance> {
+    fun detect(context: Context, bitmap: Bitmap): List<DetectedInstance> = synchronized(runLock) {
+        // Serialized: a TFLite Interpreter is not thread-safe, and two callers can overlap — e.g. a
+        // Basic Tasks Detect Objects still running when the user switches model and presses
+        // Describe TV Image. Cancelling a coroutine doesn't stop a detect already in progress.
+        detectLocked(context, bitmap)
+    }
+
+    private val runLock = Any()
+
+    private fun detectLocked(context: Context, bitmap: Bitmap): List<DetectedInstance> {
         val interpreter = ensureInterpreter(context)
         val letterbox = computeLetterbox(bitmap.width, bitmap.height)
         val inputBuffer = preprocess(bitmap, letterbox, interpreter.getInputTensor(0))

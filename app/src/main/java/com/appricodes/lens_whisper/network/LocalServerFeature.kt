@@ -4,7 +4,7 @@ package com.appricodes.lens_whisper.network
  * The Local Server ("run the model on your own desktop and let the phone talk to it over the LAN")
  * feature is **built but switched off**, and every entry point to it is hidden while [ENABLED] is
  * false. The code is deliberately kept rather than deleted — see `desktop/` for the companion app
- * it talks to, and `backend/local_server_setup.html` for the user-facing setup guide.
+ * it talks to, and `desktop/local_server_setup.html` for the user-facing setup guide.
  *
  * Flipping this to `true` is all that is needed to bring it back. What it re-exposes:
  * - `ModelPickerPopup` / `ModelManagementActivity` list "Local Server" as a selectable model.
@@ -20,6 +20,8 @@ package com.appricodes.lens_whisper.network
  * pairing and setup that the current release deliberately does not carry.
  */
 object LocalServerFeature {
+    // Turning this on also needs res/xml/network_security_config.xml's base-config set back to
+    // cleartextTrafficPermitted="true" — the Local Server is plain http:// on the LAN.
     const val ENABLED = false
 
     const val MODEL_ID = "local_server"

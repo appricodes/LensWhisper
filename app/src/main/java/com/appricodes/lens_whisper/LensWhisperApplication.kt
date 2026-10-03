@@ -2,6 +2,7 @@ package com.appricodes.lens_whisper
 
 import android.app.Application
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
+import com.appricodes.lens_whisper.utils.CaptureCacheCleaner
 
 /**
  * Startup does almost nothing on purpose.
@@ -20,5 +21,6 @@ class LensWhisperApplication : Application() {
     override fun onCreate() {
         super.onCreate()
         OfflineInferenceEngine.registerMemoryPressureMonitor(this)
+        CaptureCacheCleaner.sweepInBackground(this)
     }
 }

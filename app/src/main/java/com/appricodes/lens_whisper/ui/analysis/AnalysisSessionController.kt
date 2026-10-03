@@ -673,8 +673,7 @@ class AnalysisSessionController(
         captureFrames: suspend (PromptConfig) -> CapturedBundle?
     ) {
         onBeforeListen()
-        val rawCode = prefs.selectedLanguageCode
-        val localeCode = if (rawCode.startsWith("fa", ignoreCase = true) || prefs.selectedLanguage.equals("Persian", ignoreCase = true)) "fa-IR" else rawCode
+        val localeCode = prefs.speechLocaleCode
         AccessibilityUtils.announceToTalkBack(context, "Listening... Please speak your question now.")
         isListening = true
 
@@ -691,7 +690,23 @@ class AnalysisSessionController(
             override fun onEndOfSpeech() {}
             override fun onError(error: Int) {
                 isListening = false
-                if (targetCustomSlot != null) clearCustomSlot(targetCustomSlot)
+                // Always said out loud: a user who can't see the screen otherwise hears "Listening…"
+                // and then nothing at all. Only "nothing was heard" clears a custom slot, matching
+                // onResults' blank case below — a network or busy-recognizer error shouldn't wipe a
+                // question the user saved earlier.
+                val nothingHeard = error == SpeechRecognizer.ERROR_NO_MATCH || error == SpeechRecognizer.ERROR_SPEECH_TIMEOUT
+                val message = when {
+                    nothingHeard && targetCustomSlot != null -> {
+                        clearCustomSlot(targetCustomSlot)
+                        "No question heard. Custom ${targetCustomSlot + 1} cleared."
+                    }
+                    nothingHeard -> "No question heard. Please try again."
+                    error == SpeechRecognizer.ERROR_INSUFFICIENT_PERMISSIONS -> "Microphone permission is required to ask a question."
+                    error == SpeechRecognizer.ERROR_NETWORK || error == SpeechRecognizer.ERROR_NETWORK_TIMEOUT ->
+                        "Speech recognition needs a network connection on this phone. Please try again."
+                    else -> "Speech recognition failed. Please try again."
+                }
+                AccessibilityUtils.announceToTalkBack(context, message)
             }
             override fun onResults(results: Bundle?) {
                 isListening = false

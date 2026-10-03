@@ -25,6 +25,9 @@ object LegalTexts {
     const val OPERATOR_NAME = "Mohammad Amiri Moalla"
     const val OPERATOR_ADDRESS = "Schütenhofstraße 21, 47800 Krefeld, Germany"
     const val OPERATOR_EMAIL = "amiri.moalla@wikiponder.com"
+
+    /** Public source repository — required by the AGPL-3.0 the app is released under. */
+    const val SOURCE_CODE_URL = "github.com/appricodes/LensWhisper"
     // No phone number and no VAT ID (USt-IdNr.) - deliberately omitted rather than left blank, per
     // §5 DDG allowing both when not applicable (no VAT registration) or not offered (phone) as long
     // as email alone provides fast, direct contact - see this object's class doc.
@@ -147,7 +150,7 @@ Email: $OPERATOR_EMAIL
 
 WHAT STAYS ON YOUR DEVICE
 
-• Photos and video frames you capture or open. They are analysed on-device and are held only for as long as the analysis takes. A working copy may be written to the app's private cache and is replaced or removed by the system in the normal course; nothing is uploaded.
+• Photos and video frames you capture or open. They are analysed on-device. A working copy is written to the app's private cache, which other apps cannot read; these copies are deleted automatically the next time the app starts (and earlier by the system if it needs the space). Nothing is uploaded.
 • Your settings — language, description style, selected model, image size, volume shortcuts, and whether you have accepted the notice on first run.
 • Any custom questions you record by voice.
 • Notes you save about a scanned barcode — the text you dictate, and any voice recording you make — together with the barcode they belong to. These are held in the app's private storage, which other apps cannot read. They are also excluded from Android's automatic cloud backup and from device-to-device transfer, so they are never copied off the phone behind your back; the only way they leave is the export described below, which you start yourself.
@@ -213,8 +216,13 @@ Licensed under the Apache License, Version 2.0.
 
 Model files listed above are hosted on Hugging Face and are downloaded directly by your device.
 
-YOLOv8n-seg (Ultralytics) — object and colour detection, and the Explore screens
-Licensed under AGPL-3.0. Unlike the other models on this page, this one is bundled directly inside the app rather than downloaded, and Ultralytics' own stated position is that the AGPL-3.0 licence covers the trained model weights themselves, not only their code. Distributing this app publicly with this model included is only compliant if the app itself is released under AGPL-3.0 with its source made available, or under an Ultralytics Enterprise licence. See ultralytics.com and docs.ultralytics.com/help/licensing for the licence itself.
+YOLOv8m-seg (Ultralytics) — object and colour detection, and the Explore screens
+Licensed under AGPL-3.0. Unlike the other models on this page, this one is bundled directly inside the app rather than downloaded. See docs.ultralytics.com/help/licensing for the licence itself.
+
+LENSWHISPER ITSELF
+LensWhisper is free software, licensed under the GNU Affero General Public License, version 3 (AGPL-3.0), with an additional permission for the Google libraries listed below. Its complete source code, including the bundled YOLOv8m-seg model, is available at:
+$SOURCE_CODE_URL
+You may use, study, change and share it under the terms of that licence. A copy of the AGPL-3.0 is at gnu.org/licenses/agpl-3.0
 
 APPLICATION LIBRARIES
 

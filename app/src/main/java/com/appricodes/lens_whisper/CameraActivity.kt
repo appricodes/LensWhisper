@@ -119,23 +119,8 @@ class CameraActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         prefs = PreferencesManager(this)
-
-        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-            .launch(Manifest.permission.RECORD_AUDIO)
-
-        // POST_NOTIFICATIONS (Android 13+ only — the permission doesn't exist before it) — without
-        // this, ModelDownloadService's ongoing-progress notification silently fails to display
-        // (the foreground service itself still runs and the download still completes; confirmed
-        // on-device — see the diagnosis for "Continue in Background doesn't work correctly"), which
-        // leaves a user who backgrounds a long download with zero visible indication anything is
-        // happening: no progress, no way to cancel from the shade, and a real risk they conclude
-        // it's stuck and force-close the app themselves, actually killing it. Requested once here,
-        // at the app's launcher Activity, rather than only right before a download starts — a grant
-        // is process-wide and persists across app runs, same as the RECORD_AUDIO request above.
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
-                .launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+        // Runtime permissions (camera, microphone, notifications) are requested together from
+        // CameraScreen, once the first-run notice has been accepted — see startupPermissions.
 
         volumeKeyHandler = VolumeKeyGestureHandler(
             context = this,
@@ -214,6 +199,12 @@ private const val EXIT_CONFIRM_WINDOW_MS = 2000L
 // RESOLUTION_720P convention (every other segmentation-driven button already detects at this size).
 private const val SEGMENTATION_COPY_MAX_DIM = 1280
 
+private fun startupPermissions(): List<String> = buildList {
+    add(Manifest.permission.CAMERA)
+    add(Manifest.permission.RECORD_AUDIO)
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+}
+
 private fun cameraFacingName(lensFacing: Int) =
     if (lensFacing == androidx.camera.core.CameraSelector.LENS_FACING_FRONT) "front" else "back"
 
@@ -248,14 +239,26 @@ private fun CameraScreen(
     var cameraPermissionGranted by remember {
         mutableStateOf(ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED)
     }
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        cameraPermissionGranted = granted
-        if (!granted) AccessibilityUtils.announceToTalkBack(context, "Camera permission is required.")
+    // One combined request, not one launcher per permission: Android shows only one permission
+    // request at a time and drops a second one launched while the first is still on screen, which
+    // used to lose POST_NOTIFICATIONS on a fresh install (RECORD_AUDIO and it were launched back to
+    // back). POST_NOTIFICATIONS (Android 13+) is what lets ModelDownloadService's progress
+    // notification actually show — without it a backgrounded download has no visible progress and
+    // no Cancel in the shade.
+    val permissionsLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { results ->
+        results[Manifest.permission.CAMERA]?.let { granted ->
+            cameraPermissionGranted = granted
+            if (!granted) AccessibilityUtils.announceToTalkBack(context, "Camera permission is required.")
+        }
     }
-    // Deferred until the notice has been accepted: asking for the camera before the user has been
-    // told what the app does with it is the wrong order.
+    // Deferred until the notice has been accepted: asking for the camera or microphone before the
+    // user has been told what the app does with them is the wrong order.
     LaunchedEffect(disclaimerAccepted) {
-        if (disclaimerAccepted && !cameraPermissionGranted) cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+        if (!disclaimerAccepted) return@LaunchedEffect
+        val missing = startupPermissions().filter {
+            ContextCompat.checkSelfPermission(context, it) != PackageManager.PERMISSION_GRANTED
+        }
+        if (missing.isNotEmpty()) permissionsLauncher.launch(missing.toTypedArray())
     }
 
     var flashEnabled by remember { mutableStateOf(prefs.flashEnabled) }
@@ -351,19 +354,24 @@ private fun CameraScreen(
         AccessibilityUtils.announceToTalkBack(context, "Recording ${config.title}, please hold steady.")
         val toneGen = ToneGenerator(AudioManager.STREAM_NOTIFICATION, 100)
         val frames = mutableListOf<CapturedFrame>()
-        // One session for the whole burst — the camera opens once, not once per frame.
-        cameraController.withCaptureSession(lifecycleOwner, flashEnabled) {
-            for (i in 0 until config.framesCount) {
-                toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
-                try {
-                    frames.add(cameraController.capturePhotoToFile(MAX_CAPTURE_DIMENSION))
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) { /* skip this frame */ }
-                if (i < config.framesCount - 1) delay((config.framesInterval * 1000).toLong())
+        // One session for the whole burst — the camera opens once, not once per frame. The tone
+        // generator is released in finally: a cancel-and-replace mid-burst would otherwise leak its
+        // native AudioTrack, of which the system allows only a limited number.
+        try {
+            cameraController.withCaptureSession(lifecycleOwner, flashEnabled) {
+                for (i in 0 until config.framesCount) {
+                    toneGen.startTone(ToneGenerator.TONE_PROP_BEEP, 100)
+                    try {
+                        frames.add(cameraController.capturePhotoToFile(MAX_CAPTURE_DIMENSION))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Exception) { /* skip this frame */ }
+                    if (i < config.framesCount - 1) delay((config.framesInterval * 1000).toLong())
+                }
             }
+        } finally {
+            toneGen.release()
         }
-        toneGen.release()
         if (frames.isEmpty()) return null
         controller.startProcessingChime()
         return CapturedBundle(
@@ -648,7 +656,7 @@ private fun CameraScreen(
 
     // Proactively warms the selected on-device model as soon as this screen opens (or the
     // selection changes), rather than only lazily loading it the first time a button is pressed —
-    // ensureEngine() is a quick no-op if it's already loaded, so this is cheap to re-run.
+    // preload() is a quick no-op if it's already loaded (and joins a load already in progress), so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
     // announcement. Not applicable to "mlkit" (Basic Models needs no in-memory model) or the Local
     // Server (nothing here to preload — it runs on a separate machine) — switching to either now

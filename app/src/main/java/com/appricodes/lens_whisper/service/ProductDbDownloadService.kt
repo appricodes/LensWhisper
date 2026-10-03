@@ -18,14 +18,15 @@ import com.appricodes.lens_whisper.data.ProductDbInfo
 import com.appricodes.lens_whisper.data.ProductDbSource
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.asCoroutineDispatcher
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import okhttp3.Call
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import java.io.File
@@ -34,6 +35,7 @@ import java.io.IOException
 import java.io.InputStream
 import java.security.DigestOutputStream
 import java.security.MessageDigest
+import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.zip.GZIPInputStream
 
@@ -110,8 +112,18 @@ class ProductDbDownloadService : Service() {
         }
     }
 
-    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    // A dedicated thread, same as ModelDownloadService's, not Dispatchers.IO: the download lowers
+    // its own thread's priority to BACKGROUND, and doing that to a pooled IO thread leaves it lowered
+    // for whatever runs on it next — including OfflineInferenceEngine's work, which is on IO too.
+    private val downloadDispatcher = Executors.newSingleThreadExecutor { runnable ->
+        Thread(runnable, "ProductDbDownload")
+    }.asCoroutineDispatcher()
+    private val serviceScope = CoroutineScope(SupervisorJob() + downloadDispatcher)
     private var downloadJob: Job? = null
+    // Cancelled alongside downloadJob: with no read timeout (see client below), a read blocked on a
+    // stalled connection would otherwise never return to notice the job was cancelled, leaving
+    // the notification's Cancel button with no effect.
+    @Volatile private var activeCall: Call? = null
 
     private val client = OkHttpClient.Builder()
         .connectTimeout(30, TimeUnit.SECONDS)
@@ -136,13 +148,17 @@ class ProductDbDownloadService : Service() {
                 sizeBytes = intent.getLongExtra(EXTRA_SIZE_BYTES, 0L),
                 expectedSha256 = intent.getStringExtra(EXTRA_SHA256).orEmpty()
             )
-            ACTION_CANCEL -> downloadJob?.cancel()
+            ACTION_CANCEL -> {
+                downloadJob?.cancel()
+                activeCall?.cancel()
+            }
         }
         return START_NOT_STICKY
     }
 
     private fun startDownload(sizeBytes: Long, expectedSha256: String) {
         downloadJob?.cancel()
+        activeCall?.cancel()
         startForegroundCompat(buildNotification(0))
         _state.value = ProductDbDownloadState.Downloading(0, sizeBytes)
 
@@ -164,7 +180,9 @@ class ProductDbDownloadService : Service() {
 
                 val digest = MessageDigest.getInstance("SHA-256")
                 var expectedNetworkBytes = 0L
-                client.newCall(Request.Builder().url(ProductDbSource.DATABASE_URL).build()).execute().use { response ->
+                val call = client.newCall(Request.Builder().url(ProductDbSource.DATABASE_URL).build())
+                activeCall = call
+                call.execute().use { response ->
                     if (!response.isSuccessful) throw IOException("Server error ${response.code}")
                     val body = response.body ?: throw IOException("Empty response")
                     expectedNetworkBytes = body.contentLength()
@@ -244,10 +262,17 @@ class ProductDbDownloadService : Service() {
                 tempFile.delete()
                 _state.value = ProductDbDownloadState.Cancelled
             } catch (e: Exception) {
-                Log.e("ProductDbDownload", "Product database download failed", e)
                 tempFile.delete()
-                _state.value = ProductDbDownloadState.Failed(e.localizedMessage ?: "Download failed")
+                if (!isActive) {
+                    // A cancelled Call surfaces as an IOException from the blocked read, not as a
+                    // CancellationException — it's still the user's Cancel, not a failure.
+                    _state.value = ProductDbDownloadState.Cancelled
+                } else {
+                    Log.e("ProductDbDownload", "Product database download failed", e)
+                    _state.value = ProductDbDownloadState.Failed(e.localizedMessage ?: "Download failed")
+                }
             } finally {
+                activeCall = null
                 stopForeground(STOP_FOREGROUND_REMOVE)
                 stopSelf()
             }
@@ -303,6 +328,8 @@ class ProductDbDownloadService : Service() {
     override fun onDestroy() {
         super.onDestroy()
         serviceScope.cancel()
+        activeCall?.cancel()
+        downloadDispatcher.close()
     }
 }
 

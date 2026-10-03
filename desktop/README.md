@@ -6,9 +6,9 @@ by default (no GPU required), tested with SmolVLM2-500M and LFM2-VL-450M. Option
 acceleration via `--gpu` — see below.
 
 This is **Phase 1**: no phone involved. It's a CLI that analyzes one image at a time, plus an
-HTTP server that speaks the exact same JSON contract as the Android app's backend
-(`backend/process.php` in the repo root), so a phone on the same network can later point at it
-by just changing a base URL.
+HTTP server that speaks the `/process.php` JSON contract the Android app's Local Server engine
+(`network/LocalServerEngine.kt`) expects, so a phone on the same network can point at it by just
+changing a base URL. The user-facing setup guide is `local_server_setup.html` in this folder.
 
 This is a **separate Gradle project** from the Android app (`desktop/` has its own
 `settings.gradle.kts` and Gradle wrapper) — Android Studio won't sync it. Open `desktop/` in

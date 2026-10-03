@@ -82,32 +82,44 @@ object ProductDatabase {
             val code = barcode.trim()
             if (code.isEmpty() || !code.all { it.isDigit() }) return@withContext null
             val database = openIfPresent(context) ?: return@withContext null
+            // ML Kit reports a UPC-A barcode as 12 digits, while Open Food Facts commonly files the
+            // same product under its 13-digit EAN form (the same digits with a leading 0) — and the
+            // reverse for a scanned EAN-13 that starts with 0. Try the code as scanned first, then
+            // its other form.
+            val candidates = buildList {
+                add(code)
+                if (code.length == 12) add("0$code")
+                if (code.length == 13 && code.startsWith("0")) add(code.substring(1))
+            }
             try {
-                database.query(
-                    "products",
-                    arrayOf("product_name", "brands", "category", "countries"),
-                    "barcode = ?",
-                    arrayOf(code),
-                    null, null, null, "1"
-                ).use { cursor ->
-                    if (!cursor.moveToFirst()) return@withContext null
-                    val fields = mutableListOf<Pair<String, String>>()
-                    fun add(label: String, columnIndex: Int) {
-                        val value = if (cursor.isNull(columnIndex)) null else cursor.getString(columnIndex)?.trim()
-                        if (!value.isNullOrEmpty()) fields.add(label to value)
-                    }
-                    add("Product", 0)
-                    add("Brand", 1)
-                    add("Category", 2)
-                    add("Sold in", 3)
-                    fields.ifEmpty { null }
-                }
+                candidates.firstNotNullOfOrNull { candidate -> lookupExact(database, candidate) }
             } catch (e: Exception) {
                 // A corrupt file should degrade to "not found" and let the online lookup have its
                 // turn, not take the scan screen down.
                 Log.w(TAG, "Product lookup failed", e)
                 null
             }
+        }
+
+    private fun lookupExact(database: SQLiteDatabase, code: String): List<Pair<String, String>>? =
+        database.query(
+            "products",
+            arrayOf("product_name", "brands", "category", "countries"),
+            "barcode = ?",
+            arrayOf(code),
+            null, null, null, "1"
+        ).use { cursor ->
+            if (!cursor.moveToFirst()) return null
+            val fields = mutableListOf<Pair<String, String>>()
+            fun add(label: String, columnIndex: Int) {
+                val value = if (cursor.isNull(columnIndex)) null else cursor.getString(columnIndex)?.trim()
+                if (!value.isNullOrEmpty()) fields.add(label to value)
+            }
+            add("Product", 0)
+            add("Brand", 1)
+            add("Category", 2)
+            add("Sold in", 3)
+            fields.ifEmpty { null }
         }
 
     /**
