@@ -59,7 +59,12 @@ class PermissionRequester internal constructor(private val context: Context) {
                 if (isGranted(permission)) return@withLock true
                 val deniedRecently = lastDeniedAt[permission]
                     ?.let { SystemClock.elapsedRealtime() - it < RECENT_DENIAL_MS } == true
-                if (deniedRecently) return@withLock false
+                if (deniedRecently) {
+                    // Still said out loud: callers drop the denial silently on the assumption it
+                    // was announced, and a quick second tap must not end in silence.
+                    AccessibilityUtils.announceToTalkBack(context, deniedMessage)
+                    return@withLock false
+                }
                 val activeLauncher = launcher ?: return@withLock false
                 val result = CompletableDeferred<Boolean>()
                 pending = result
