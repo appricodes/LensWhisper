@@ -44,8 +44,7 @@ A fresh clone builds as-is. Release builds additionally need:
 ## Licence
 
 LensWhisper is free software under the **GNU Affero General Public License v3.0** — see
-[LICENSE](LICENSE). [NOTICE](NOTICE) carries the copyright line, an additional permission
-(AGPL §7) for linking with Google ML Kit / Play services / LiteRT-LM, and details of the bundled
+[LICENSE](LICENSE). [NOTICE](NOTICE) carries the copyright line and details of the bundled
 third-party model:
 
 - `app/src/main/assets/models/yolov8m_seg_int8.tflite` — YOLOv8m-seg by

@@ -220,7 +220,7 @@ YOLOv8m-seg (Ultralytics) — object and colour detection, and the Explore scree
 Licensed under AGPL-3.0. Unlike the other models on this page, this one is bundled directly inside the app rather than downloaded. See docs.ultralytics.com/help/licensing for the licence itself.
 
 LENSWHISPER ITSELF
-LensWhisper is free software, licensed under the GNU Affero General Public License, version 3 (AGPL-3.0), with an additional permission for the Google libraries listed below. Its complete source code, including the bundled YOLOv8m-seg model, is available at:
+LensWhisper is free software, licensed under the GNU Affero General Public License, version 3 (AGPL-3.0). Its complete source code, including the bundled YOLOv8m-seg model, is available at:
 $SOURCE_CODE_URL
 You may use, study, change and share it under the terms of that licence. A copy of the AGPL-3.0 is at gnu.org/licenses/agpl-3.0
 
