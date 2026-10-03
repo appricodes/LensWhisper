@@ -40,8 +40,8 @@ android {
         applicationId = "com.appricodes.lens_whisper"
         minSdk = 26
         targetSdk = 36
-        versionCode = 2
-        versionName = "1.1"
+        versionCode = 3
+        versionName = "1.2"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -122,34 +122,16 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // Barcode scanning (QR codes and 1D product barcodes) - the play-services-mlkit-* variant
-    // for the same reason as the OCR dependencies below: no model weights in the APK, the module
-    // is fetched by Play Services instead (see the com.google.mlkit.vision.DEPENDENCIES manifest
-    // meta-data, which now asks for "barcode" alongside "ocr"). Backs
+    // Barcode scanning (QR codes and 1D product barcodes) - zxing-cpp (Apache-2.0), a bundled
+    // native decoder: no model, no Play Services, ready at install. Backs
     // offline/OfflineBarcodeScanner.kt and BarcodeScanActivity.
-    implementation(libs.barcode.scanning)
+    implementation(libs.zxing.cpp)
 
-    // Text recognition (OCR) - the play-services-mlkit-text-recognition* variant (see
-    // gradle/libs.versions.toml), NOT com.google.mlkit:text-recognition*: no model weights are
-    // bundled into the APK, each script's model instead downloads on demand through Play Services
-    // (see the com.google.mlkit.vision.DEPENDENCIES manifest meta-data and OfflineTextRecognizer's
-    // own doc for the "not ready yet" handling this requires). Same TextRecognition.getClient/
-    // *TextRecognizerOptions API either way - only the Gradle coordinate changes.
-
-    // Latin Script (English, Spanish, French, German, Italian, etc.)
-    implementation(libs.text.recognition)
-
-    // Chinese Script
-    implementation(libs.text.recognition.chinese)
-
-    // Japanese Script
-    implementation(libs.text.recognition.japanese)
-
-    // Korean Script
-    implementation(libs.text.recognition.korean)
-
-    // Devanagari Script (Hindi, Marathi, Nepali, Sanskrit, etc.)
-    implementation(libs.text.recognition.devanagari)
+    // Text recognition (OCR) needs no dependency of its own: PaddleOCR PP-OCRv5 det/rec models
+    // (Apache-2.0) run on the plain LiteRT runtime below, from assets/models/ocr/ — see
+    // offline/PaddleOcr.kt. (ML Kit's play-services-mlkit-text-recognition* used to live here; it
+    // and ML Kit barcode/translate were removed so the app ships no proprietary Google code, which
+    // the AGPL-3.0 licence of this project can't be combined with.)
 
     // (ML Kit Image Labeling and play-services-mlkit-subject-segmentation used to live here,
     // powering OfflineColorDetector's own `detect`. That path was dropped once the
@@ -158,9 +140,6 @@ dependencies {
     // APK: image-labeling alone pulls in vision-internal-vkp, whose native lib
     // (libmlkitcommonpipeline.so) was shipping four times over, once per ABI, unused. Removed
     // 2026-08-27.)
-
-    // MLKit translator
-    implementation(libs.translate)
 
     // (play-services-auth — Google Sign-In — used to live here for the old account system. There
     // is no account system any more (see data/PreferencesManager.kt's note above) and nothing in
@@ -177,7 +156,12 @@ dependencies {
     // PreferencesManager.getVisionBackendOverride's doc) that needed a runtime CPU fallback for
     // the VLM catalog; YOLOv8n is small enough (3.2M params) that CPU-only should be fast enough
     // for a single-shot capture without repeating that failure mode for a second model family.
-    implementation(libs.litert)
+    implementation(libs.litert) {
+        // LiteRT's optional AI-pack model delivery (com.google.ai.edge.litert.deployment, unused
+        // here: every model is a bundled asset or a direct download) pulls in proprietary Play
+        // libraries — play-services-basement/-tasks and Play Core — which an AGPL-3.0 app can't ship.
+        exclude(group = "com.google.android.play", module = "ai-delivery")
+    }
 
     // Forces kotlinx-coroutines-core/-android to 1.11.0+ instead of whatever transitive
     // resolution would otherwise pick (1.9.0, as of writing — see litertlm-android's own POM,

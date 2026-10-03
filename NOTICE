@@ -18,5 +18,19 @@ app/src/main/assets/models/yolov8m_seg_int8.tflite
         from ultralytics import YOLO
         YOLO("yolov8m-seg.pt").export(format="tflite", int8=True, data="coco128-seg.yaml")
 
+app/src/main/assets/models/ocr/det.tflite, rec_*.tflite, dict_*.txt
+    PP-OCRv5 mobile text detection (PP-OCRv5_mobile_det) and recognition (PP-OCRv5_mobile_rec and
+    the latin_/arabic_/cyrillic_/devanagari_/korean_ variants) by PaddlePaddle, licensed under
+    Apache-2.0 (https://github.com/PaddlePaddle/PaddleOCR). Converted from the official ONNX
+    releases (huggingface.co/PaddlePaddle/<model>_onnx): ONNX -> PyTorch with onnx2torch -> LiteRT
+    with litert-torch, as fixed-size signatures sharing one set of weights (detector 960x960,
+    960x736, 736x960, 960x544, 544x960; recognizer 48 high x 320/640/960/1280/1920 wide), then
+    weight-only int8 quantized with ai-edge-quantizer (recipe weight_only_wi8_afp32). Outputs were
+    checked against ONNX Runtime before quantization. dict_*.txt are the models' character_dict
+    lists from their inference.yml.
+
+zxing-cpp (io.github.zxing-cpp:android), barcode decoding, Apache-2.0
+    (https://github.com/zxing-cpp/zxing-cpp).
+
 The on-device vision-language models (Gemma, Qwen2-VL, SmolVLM2) are not part of this repository;
 the app downloads them from Hugging Face at the user's request, each under its own licence.

@@ -46,16 +46,6 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
-        <!-- Text recognition (OCR) now ships unbundled (play-services-mlkit-text-recognition*,
-             see app/build.gradle.kts) - no model weights are packaged in the APK any more. This
-             asks Play Services to fetch the OCR module(s) automatically around install time, so
-             the common case (Read Text/Read Document on an already-set-up device) never hits the
-             "model not ready" path OfflineTextRecognizer/MlkitButtonProvider fall back to for a
-             cold start. See https://developers.google.com/ml-kit/vision/text-recognition/v2/android. -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr,barcode" />
-
         <activity
             android:name=".CameraActivity"
             android:exported="true"

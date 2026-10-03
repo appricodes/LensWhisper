@@ -84,12 +84,8 @@ object OfflinePromptBuilder {
      *
      * [language] is resolved by that same caller, not decided here — this object takes no
      * [com.appricodes.lens_whisper.data.PreferencesManager] dependency of its own. The policy:
-     * the user's own selected language when offline translation is off (nothing downstream will
-     * translate the reply, so the model has to produce the target language itself, same as
-     * before either translation direction existed), or a fixed "English" when translation is on
-     * (so [com.appricodes.lens_whisper.offline.OfflineTranslator.translate]'s assumption that its
-     * input is English is a guarantee, not a hope — it used to be asked for the target language
-     * directly even with translation on, which made that assumption unreliable on small models).
+     * the user's own selected language for a multilingual model, a fixed "English" for an
+     * English-only one (see [com.appricodes.lens_whisper.domain.OfflineModelInfo.multilingual]).
      */
     fun buildSystemInstruction(language: String, persona: String, isMultiFrame: Boolean, maxWords: Int): String {
         var instruction = "You describe images for a blind user. Reply in $language, under $maxWords words, in a $persona style. " +
@@ -103,11 +99,8 @@ object OfflinePromptBuilder {
     /** System instruction for a "custom question" (a custom prompt slot or a voice query). Uses
      *  [DEFAULT_MAX_WORDS] — a custom question is never the brief-narration prompt. [language] is
      *  resolved the same way [buildSystemInstruction]'s is — see its doc. [question] is expected
-     *  to already be in that same language by the time it gets here: with translation on, it was
-     *  already translated to English (see
-     *  [com.appricodes.lens_whisper.offline.OfflineTranslator.translateToEnglish] and its caller
-     *  in `AnalysisSessionController.startVoiceRecognition`) before [language] below ever became
-     *  "English"; with translation off, both stay in the user's own selected language untouched. */
+     *  to already be in that same language: `AnalysisSessionController.startVoiceRecognition`
+     *  recognizes speech as English for an English-only model. */
     fun buildCustomQuestionInstruction(language: String, question: String): String =
         "You answer questions about an image for a blind user. Reply in $language, in at most $DEFAULT_MAX_WORDS words.\n" +
             "Question: \"$question\"\n" +

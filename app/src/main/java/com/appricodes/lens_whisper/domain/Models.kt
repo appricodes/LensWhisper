@@ -23,5 +23,9 @@ data class OfflineModelInfo(
 	val sizeBytes: Long,
 	val downloadUrl: String,
 	val fileName: String,
-	val backend: String
+	val backend: String,
+	/** True when the model understands and answers in languages other than English. An
+	 *  English-only model is always prompted in English, asked to reply in English, and voice
+	 *  questions for it are recognized as English — whatever language the app is set to. */
+	val multilingual: Boolean = false
 )

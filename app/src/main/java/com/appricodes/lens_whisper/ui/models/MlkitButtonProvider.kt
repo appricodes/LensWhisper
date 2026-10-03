@@ -21,7 +21,6 @@ import com.appricodes.lens_whisper.offline.OfflineColorDetector
 import com.appricodes.lens_whisper.offline.OfflineLightDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
 import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
-import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -205,24 +204,6 @@ class MlkitButtonProvider(
         updatePrevious(text)
     }
 
-    /** [speakIfChanged], but for a mode whose text should go through [OfflineTranslator.translate]
-     *  first — every mode here except [Mode.TEXT] (OCR output stays exactly what was read, in
-     *  whatever script it's written in; see captureAndRun's Mode.TEXT branch, which stays on the
-     *  plain [speakIfChanged] above). Text is translated *before* the interrupt, not after — not
-     *  because order matters to the model, but because interrupting first and only then awaiting
-     *  the translation would leave dead air between "cut off whatever was still being said" and
-     *  "the new sentence is finally ready", instead of the two landing back to back. */
-    private suspend fun speakIfChangedTranslated(
-        previous: String?, text: String, prefs: PreferencesManager, updatePrevious: (String) -> Unit
-    ) {
-        if (text != previous) {
-            val spoken = OfflineTranslator.translate(context, text, prefs)
-            VolumeShortcuts.interruptTalkBackSpeech(context)
-            speak(spoken)
-        }
-        updatePrevious(text)
-    }
-
     private suspend fun captureAndRun(mode: Mode, prefs: PreferencesManager) {
         val capture = capturePhoto
         // Refuse to start a second request while one is still in flight, rather than letting two
@@ -236,12 +217,6 @@ class MlkitButtonProvider(
         isBusy = true
         var toneJob: Job? = null
         try {
-            // OCR's model is downloaded on demand now (see OfflineTextRecognizer's own doc) —
-            // check before capturing at all, not after, so a not-ready module doesn't cost the
-            // user a capture (and its acknowledge sound) for an attempt that's going to fail
-            // anyway. isReady() itself owns the "please wait" announcement and kicks off the
-            // download in the background.
-            if (mode == Mode.TEXT && !OfflineTextRecognizer.isReady(context, prefs.ocrLanguage)) return
             // Immediate feedback that the tap registered — binding a cold camera can itself take a
             // second or two before the shutter click fires. Skipped in continuous mode: the camera
             // stays bound for the whole mode there (see isContinuousActive), so there's no such gap
@@ -256,9 +231,10 @@ class MlkitButtonProvider(
                     // Fires the instant the shutter sound plays (see
                     // CameraController.capturePhotoInternal), not after the whole capture — image
                     // readout/decode/scale/file-write shouldn't delay the "still working" cue.
-                    // Only "Object Detection"/"Object and Color Detection" run the slow YOLOv8-seg
-                    // model; the near-instant ML Kit Objects/Text/Colour modes never had this sound.
-                    if (mode == Mode.SEGMENT || mode == Mode.SEGMENT_COLOR) {
+                    // "Object Detection"/"Object and Color Detection" run the slow YOLOv8-seg model
+                    // and Read Text the OCR models; only the near-instant colour modes skip it.
+                    // Not in continuous Read Text, where a tone every few seconds would be noise.
+                    if (mode == Mode.SEGMENT || mode == Mode.SEGMENT_COLOR || (mode == Mode.TEXT && !continuousEnabled)) {
                         toneJob = coroutineScope.launch(Dispatchers.IO) {
                             ProcessingSoundPlayer.loopClockWaitingTone(context)
                         }
@@ -271,41 +247,36 @@ class MlkitButtonProvider(
                 return
             }
             when (mode) {
-                Mode.TEXT -> OfflineTextRecognizer.recognize(bitmap, prefs.ocrLanguage) { text ->
-                    if (continuousEnabled) speakIfChanged(lastTextText, text) { lastTextText = it }
-                    else { speak(text); lastTextText = text }
+                Mode.TEXT -> {
+                    val text = OfflineTextRecognizer.recognizeText(context, bitmap, prefs.ocrLanguage)
+                    toneJob?.cancel()
+                    if (text != null) {
+                        if (continuousEnabled) speakIfChanged(lastTextText, text) { lastTextText = it }
+                        else { speak(text); lastTextText = text }
+                    }
                 }
                 // Single-shot only — SEGMENT/SEGMENT_COLOR's long-press no longer starts continuous
                 // mode (see isContinuousActive's doc), so continuousEnabled is always false by the
                 // time either of these runs; nothing here needs the speakIfChanged dedup path.
-                //
-                // Both translated (OfflineTranslator.translate, gated on the same "Translate
-                // Offline Results" setting as everything else it covers) — unlike OCR, this text
-                // is built entirely from a small, fixed vocabulary (DetectionPhrasing's hedge
-                // words, COCO class names, Palette color names), the same kind of short, simple
-                // sentence this app's on-device translator already handles for VLM responses.
                 Mode.SEGMENT -> {
                     val text = summarizeInstances(context, bitmap, withColors = false)
                     // Stop the tone the instant there's something to say, not after — otherwise a
                     // tone dispatched a moment earlier can land right on top of the announcement.
                     toneJob?.cancel()
-                    speak(OfflineTranslator.translate(context, text, prefs))
+                    speak(text)
                 }
                 Mode.SEGMENT_COLOR -> {
                     val text = summarizeInstances(context, bitmap, withColors = true)
                     toneJob?.cancel()
-                    speak(OfflineTranslator.translate(context, text, prefs))
+                    speak(text)
                 }
                 Mode.SIMPLE_COLOR -> {
                     val colors = withContext(Dispatchers.Default) {
                         OfflineColorDetector.namedDominantColors(centerCrop(bitmap, SIMPLE_COLOR_CROP_SIZE), k = 2)
                     }
                     val text = if (colors.isEmpty()) "Could not detect a color." else colors.joinToString(" and ")
-                    // Same translation reasoning as SEGMENT/SEGMENT_COLOR above. Deduping on the
-                    // raw (untranslated) text, same as before — cheap, and avoids re-translating
-                    // identical English on every poll tick when nothing's actually changed.
-                    if (continuousEnabled) speakIfChangedTranslated(lastSimpleColorText, text, prefs) { lastSimpleColorText = it }
-                    else { speak(OfflineTranslator.translate(context, text, prefs)); lastSimpleColorText = text }
+                    if (continuousEnabled) speakIfChanged(lastSimpleColorText, text) { lastSimpleColorText = it }
+                    else { speak(text); lastSimpleColorText = text }
                 }
                 else -> {}
             }
@@ -396,11 +367,9 @@ class MlkitButtonProvider(
     }
 
     /** "Read Document": same "capture here, read there" shape as [launchSegmentationExplore] —
-     *  see [ReadDocumentActivity]'s doc for what happens once it's open. [prefs] is only needed
-     *  for the OCR-module readiness check below (see [OfflineTextRecognizer.isReady]) —
-     *  [ReadDocumentActivity] re-reads [PreferencesManager.ocrLanguage] itself once it's open, so
-     *  nothing else here needs it. */
-    private fun launchReadDocument(prefs: PreferencesManager) {
+     *  see [ReadDocumentActivity]'s doc for what happens once it's open, including which OCR
+     *  language it reads with. */
+    private fun launchReadDocument() {
         if (isBusy) {
             announceBusy()
             return
@@ -409,9 +378,6 @@ class MlkitButtonProvider(
         isBusy = true
         coroutineScope.launch {
             try {
-                // Same "check before capturing" reasoning as Mode.TEXT in captureAndRun — a
-                // not-ready OCR module shouldn't cost the user a capture for nothing.
-                if (!OfflineTextRecognizer.isReady(context, prefs.ocrLanguage)) return@launch
                 ProcessingSoundPlayer.playCaptureAcknowledge(context)
                 val bitmap = try {
                     // No tone starts here — ReadDocumentActivity owns its own "waiting for the
@@ -469,7 +435,6 @@ class MlkitButtonProvider(
         ProcessingSoundPlayer.playCaptureAcknowledge(context)
         coroutineScope.launch {
             try {
-                if (!OfflineBarcodeScanner.isReady(context)) return@launch
                 val bitmap = try {
                     capture(MAX_CAPTURE_DIMENSION, false, true, true) {}
                 } catch (e: CancellationException) {
@@ -583,7 +548,7 @@ class MlkitButtonProvider(
                     label = "Read Document",
                     contentDescription = "Read a document by touch. Opens a full-screen view — move your finger over a paragraph to hear it read aloud, or tap once for more options.",
                     icon = GridIcon.READ_DOCUMENT,
-                    onClick = { launchReadDocument(ctx.prefs) }
+                    onClick = { launchReadDocument() }
                 ),
                 GridCell(
                     label = "Light Level Meter",

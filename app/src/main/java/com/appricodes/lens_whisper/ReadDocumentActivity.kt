@@ -86,7 +86,7 @@ private const val MAX_CAPTURE_DIMENSION = 2500
 /**
  * "Read Document": captures a photo, then lets the user explore it exactly like
  * [SegmentationExploreActivity] does with objects, except each "object" is a paragraph of
- * recognized text ([OfflineTextRecognizer.recognizeBlocks], ML Kit's `TextBlock` grouping — the
+ * recognized text ([OfflineTextRecognizer.recognizeBlocks], nearby lines grouped together — the
  * closest real equivalent to "paragraph" this OCR has) — moving a finger onto one reads it aloud.
  *
  * Same hover feedback as Explore: [HoverFeedback]'s short hard vibration + a distinct tone on
@@ -153,7 +153,7 @@ private fun ReadDocumentScreen(prefs: PreferencesManager, imageUri: Uri?, onClos
             ProcessingSoundPlayer.loopClockWaitingTone(context)
         }
         val recognized = try {
-            withContext(Dispatchers.Default) { OfflineTextRecognizer.recognizeBlocks(loadedBitmap, prefs.ocrLanguage) }
+            withContext(Dispatchers.Default) { OfflineTextRecognizer.recognizeBlocks(context, loadedBitmap, prefs.ocrLanguage) }
         } finally {
             toneJob.cancel()
         }

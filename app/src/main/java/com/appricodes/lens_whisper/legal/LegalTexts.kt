@@ -219,6 +219,9 @@ Model files listed above are hosted on Hugging Face and are downloaded directly 
 YOLOv8m-seg (Ultralytics) — object and colour detection, and the Explore screens
 Licensed under AGPL-3.0. Unlike the other models on this page, this one is bundled directly inside the app rather than downloaded. See docs.ultralytics.com/help/licensing for the licence itself.
 
+PP-OCRv5 (PaddlePaddle / PaddleOCR) — Read Text and Read Document
+The text detection and recognition models, licensed under the Apache License, Version 2.0, and bundled inside the app. They were converted from PaddlePaddle's official ONNX releases to LiteRT and their weights compressed to 8 bits; otherwise they are unchanged.
+
 LENSWHISPER ITSELF
 LensWhisper is free software, licensed under the GNU Affero General Public License, version 3 (AGPL-3.0). Its complete source code, including the bundled YOLOv8m-seg model, is available at:
 $SOURCE_CODE_URL
@@ -226,7 +229,7 @@ You may use, study, change and share it under the terms of that licence. A copy 
 
 APPLICATION LIBRARIES
 
-This app is built with AndroidX, Jetpack Compose, CameraX, Media3, ML Kit, LiteRT-LM and OkHttp. AndroidX, Jetpack Compose, CameraX, Media3 and OkHttp are licensed under the Apache License, Version 2.0. ML Kit and LiteRT-LM are subject to Google's own terms.
+This app is built with AndroidX, Jetpack Compose, CameraX, Media3, LiteRT, LiteRT-LM, zxing-cpp (barcode reading) and OkHttp, all licensed under the Apache License, Version 2.0.
 
 A copy of the Apache License, Version 2.0 is available at apache.org/licenses/LICENSE-2.0
 """

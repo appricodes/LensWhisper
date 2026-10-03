@@ -1,6 +1,5 @@
 [versions]
 agp = "8.11.2"
-barcodeScanning = "18.3.1"
 cameraxVersion = "1.6.1"
 kotlin = "2.3.21"
 litertlm = "0.16.1"
@@ -17,15 +16,9 @@ media3Ui = "1.10.1"
 okhttp = "5.3.2"
 palette = "1.0.0"
 securityCrypto = "1.1.0"
-textRecognition = "19.0.1"
-textRecognitionChinese = "16.0.1"
-textRecognitionDevanagari = "16.0.1"
-textRecognitionJapanese = "16.0.1"
-textRecognitionKorean = "16.0.1"
-translate = "17.0.3"
+zxingCpp = "3.1.1"
 
 [libraries]
-barcode-scanning = { module = "com.google.android.gms:play-services-mlkit-barcode-scanning", version.ref = "barcodeScanning" }
 androidx-camera-camera2 = { module = "androidx.camera:camera-camera2", version.ref = "cameraxVersion" }
 androidx-camera-core = { module = "androidx.camera:camera-core", version.ref = "cameraxVersion" }
 androidx-camera-lifecycle = { module = "androidx.camera:camera-lifecycle", version.ref = "cameraxVersion" }
@@ -51,14 +44,9 @@ androidx-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-toolin
 androidx-ui-test-manifest = { group = "androidx.compose.ui", name = "ui-test-manifest" }
 androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit4" }
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
+zxing-cpp = { module = "io.github.zxing-cpp:android", version.ref = "zxingCpp" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
 androidx-palette = { module = "androidx.palette:palette-ktx", version.ref = "palette" }
-text-recognition = { module = "com.google.android.gms:play-services-mlkit-text-recognition", version.ref = "textRecognition" }
-text-recognition-chinese = { module = "com.google.android.gms:play-services-mlkit-text-recognition-chinese", version.ref = "textRecognitionChinese" }
-text-recognition-devanagari = { module = "com.google.android.gms:play-services-mlkit-text-recognition-devanagari", version.ref = "textRecognitionDevanagari" }
-text-recognition-japanese = { module = "com.google.android.gms:play-services-mlkit-text-recognition-japanese", version.ref = "textRecognitionJapanese" }
-text-recognition-korean = { module = "com.google.android.gms:play-services-mlkit-text-recognition-korean", version.ref = "textRecognitionKorean" }
-translate = { module = "com.google.mlkit:translate", version.ref = "translate" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

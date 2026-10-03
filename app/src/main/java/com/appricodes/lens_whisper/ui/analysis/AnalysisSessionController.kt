@@ -29,7 +29,6 @@ import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.inference.runSelectedModelAnalysis
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.inference.runSelectedOfflineModelAnalysisStreaming
-import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.service.ModelDownloadService
 import com.appricodes.lens_whisper.service.ModelDownloadState
 import com.appricodes.lens_whisper.ui.components.CameraPermissionDeniedException
@@ -265,24 +264,16 @@ class AnalysisSessionController(
     private val repository by lazy { OfflineModelsRepository(context.applicationContext) }
     private val speechRecognizer by lazy { SpeechRecognizer.createSpeechRecognizer(context) }
 
-    /** True for the on-device VLM catalog (Gemma4/SmolVLM2/Qwen-VL/...) — those models are asked
-     *  to answer in the target language via their system instruction, but small on-device models
-     *  frequently ignore that, so [OfflineTranslator.translate] is applied as a fallback. Not
-     *  MLKit (which never routes through here — see `MlkitButtonProvider`) and not the Local
-     *  Server (which answers in the target language via the same system instruction). */
+    /** True for the on-device VLM catalog (Gemma4/SmolVLM2/Qwen-VL/...). Not MLKit (which never
+     *  routes through here — see `MlkitButtonProvider`) and not the Local Server. */
     private fun isOfflineVlmSelected(): Boolean =
         prefs.selectedModelId != "mlkit" && prefs.selectedModelId != LocalServerFeature.MODEL_ID
 
-    /** Mirrors [isOfflineVlmSelected]'s gating on the way in, the same way [handleResponse]/
-     *  [runStreamingAnalysis] already gate [OfflineTranslator.translate] on the way out: only the
-     *  on-device VLM catalog is ever asked to answer in English (see
-     *  `AnalysisRouter.buildOfflinePrompt`'s `replyLanguage`, on when offline translation is
-     *  enabled — [OfflineTranslator.translateToEnglish] itself checks that same setting and is a
-     *  no-op when it's off), so only its questions ever need translating to English first. The
-     *  Local Server still gets its own system-instruction-driven target-language answer (untouched
-     *  by this), and MLKit never reaches a "custom question" at all. */
-    private suspend fun translateVoiceQueryToEnglish(text: String): String =
-        if (isOfflineVlmSelected()) OfflineTranslator.translateToEnglish(context, text, prefs) else text
+    /** True when the selected on-device model only understands English (see
+     *  [OfflineModelInfo.multilingual]) — its voice questions are then recognized as English
+     *  whatever the app language is, matching the English-only prompt `AnalysisRouter` gives it. */
+    private fun isEnglishOnlyVlmSelected(): Boolean =
+        isOfflineVlmSelected() && repository.loadModels().find { it.id == prefs.selectedModelId }?.multilingual == false
 
     private suspend fun handleResponse(response: String) {
         activeAudioFeedbackJob?.cancel()
@@ -290,9 +281,8 @@ class AnalysisSessionController(
             AccessibilityUtils.announceToTalkBack(context, "Error occurred.")
             dialogState = "Error" to response.removePrefix("ERROR:").trim()
         } else {
-            val spoken = if (isOfflineVlmSelected()) OfflineTranslator.translate(context, response, prefs) else response
-            AccessibilityUtils.announceToTalkBack(context, spoken)
-            if (prefs.showResultsInDialog) dialogState = "AI Description" to spoken
+            AccessibilityUtils.announceToTalkBack(context, response)
+            if (prefs.showResultsInDialog) dialogState = "AI Description" to response
         }
     }
 
@@ -476,7 +466,7 @@ class AnalysisSessionController(
             handleResponse("ERROR: ${e.localizedMessage ?: "Setup failed."}")
             return
         }
-        runStreamingAnalysis(streamingFlow, translate = isOfflineVlmSelected())
+        runStreamingAnalysis(streamingFlow)
     }
 
     /**
@@ -530,7 +520,7 @@ class AnalysisSessionController(
                 return@launchAnalysis
             }
             if (streamingFlow != null) {
-                runStreamingAnalysis(streamingFlow, translate = isOfflineVlmSelected())
+                runStreamingAnalysis(streamingFlow)
             } else {
                 val response = runSelectedModelAnalysis(
                     context = context,
@@ -549,15 +539,12 @@ class AnalysisSessionController(
      * Local Server whenever it offers a streaming call at all (see the two branches in
      * [runAnalysis] that decide which [Flow] gets passed in here, if any). Speaks each complete
      * sentence (ending in `.`/`!`/`?`/newline, or their CJK/Persian equivalents — see
-     * [findSentenceEnd]) via TalkBack as soon as it's been generated — and translated, if
-     * [translate] is true — instead of waiting for and speaking the full response as one block.
-     * [translate] mirrors [isOfflineVlmSelected]'s reasoning: only on-device models need the
-     * client-side translation fallback, since the Local Server already answers in the target language via
-     * its own system prompt. See [runSelectedOfflineModelAnalysisStreaming] /
+     * [findSentenceEnd]) via TalkBack as soon as it's been generated, instead of waiting for and
+     * speaking the full response as one block. See [runSelectedOfflineModelAnalysisStreaming] /
      * `OfflineInferenceEngine.analyzeStreaming` (on-device) and `LocalServerEngine`'s `*Streaming`
      * functions.
      */
-    private suspend fun runStreamingAnalysis(flow: Flow<String>, translate: Boolean) {
+    private suspend fun runStreamingAnalysis(flow: Flow<String>) {
         val fullText = StringBuilder()
         val pending = StringBuilder()
         val wordRepeatTracker = WordRepeatTracker()
@@ -565,8 +552,7 @@ class AnalysisSessionController(
         suspend fun speak(sentence: String) {
             val trimmed = sentence.trim()
             if (trimmed.isEmpty()) return
-            val spoken = if (translate) OfflineTranslator.translate(context, trimmed, prefs) else trimmed
-            AccessibilityUtils.announceToTalkBack(context, spoken)
+            AccessibilityUtils.announceToTalkBack(context, trimmed)
         }
 
         try {
@@ -690,7 +676,7 @@ class AnalysisSessionController(
             return
         }
         onBeforeListen()
-        val localeCode = prefs.speechLocaleCode
+        val localeCode = if (isEnglishOnlyVlmSelected()) "en-US" else prefs.speechLocaleCode
         AccessibilityUtils.announceToTalkBack(context, "Listening... Please speak your question now.")
         isListening = true
 
@@ -733,23 +719,14 @@ class AnalysisSessionController(
                         clearCustomSlot(targetCustomSlot)
                         AccessibilityUtils.announceToTalkBack(context, "No question heard. Custom ${targetCustomSlot + 1} cleared.")
                     } else {
-                        // The slot's title stays in the language the user actually spoke — it's
-                        // what gets read back as this button's own identity. Only the prompt text
-                        // sent to (and replayed against) the model is translated, below.
                         _customPromptTitles[targetCustomSlot] = truncatedTitle(recognizedQuery)
-                        coroutineScope.launch {
-                            val englishQuery = translateVoiceQueryToEnglish(recognizedQuery)
-                            _customPromptTexts[targetCustomSlot] = englishQuery
-                            val config = PromptConfig("custom", _customPromptTitles[targetCustomSlot], englishQuery, 1, 0.5)
-                            runAnalysis(config, config.title, captureFrames)
-                        }
+                        _customPromptTexts[targetCustomSlot] = recognizedQuery
+                        val config = PromptConfig("custom", _customPromptTitles[targetCustomSlot], recognizedQuery, 1, 0.5)
+                        coroutineScope.launch { runAnalysis(config, config.title, captureFrames) }
                     }
                 } else if (!recognizedQuery.isNullOrBlank()) {
-                    coroutineScope.launch {
-                        val englishQuery = translateVoiceQueryToEnglish(recognizedQuery)
-                        val config = PromptConfig("custom", "Voice Query", englishQuery, 1, 0.5)
-                        runAnalysis(config, "Voice Query", captureFrames)
-                    }
+                    val config = PromptConfig("custom", "Voice Query", recognizedQuery, 1, 0.5)
+                    coroutineScope.launch { runAnalysis(config, "Voice Query", captureFrames) }
                 }
             }
             override fun onPartialResults(partialResults: Bundle?) {}

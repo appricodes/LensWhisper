@@ -17,6 +17,7 @@ import java.io.File
  *   displayName  shown in the model picker
  *   family       grouping label (e.g. "PaliGemma 2", "FastVLM")
  *   description  short device/size hint shown under the name
+ *   multilingual true if the model understands and answers in non-English languages (default false)
  *   variants     list of downloadable builds of this model, each with:
  *     hardwareMatch  chipset tokens (e.g. "sm8750", "tensor g5") matched against this device's
  *                    Build.SOC_MODEL/HARDWARE/BOARD/DEVICE; empty list = generic fallback build
@@ -73,7 +74,8 @@ class OfflineModelsRepository(private val context: Context) {
                     sizeBytes = chosen.sizeBytes,
                     downloadUrl = chosen.downloadUrl,
                     fileName = chosen.fileName,
-                    backend = chosen.backend
+                    backend = chosen.backend,
+                    multilingual = obj.optBoolean("multilingual", false)
                 )
             }.sortedBy { it.sizeBytes }
         }.getOrElse { e ->

@@ -10,8 +10,8 @@ photo ever leaves the phone.
 - **Describe** scenes, photos and video frames with an on-device vision-language model
   (Gemma, Qwen2-VL or SmolVLM2 via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
   downloaded from Hugging Face on first use).
-- **Read text and documents** with ML Kit text recognition (Latin, Chinese, Japanese, Korean,
-  Devanagari).
+- **Read text and documents** with bundled PaddleOCR PP-OCRv5 models on LiteRT (Latin, Chinese,
+  Japanese, Korean, Devanagari, Persian, Arabic, Cyrillic).
 - **Detect objects and colours** and **explore a photo by touch**, using a bundled YOLOv8m-seg
   segmentation model.
 - **Scan barcodes**, look products up in an optional offline product database (built from
@@ -45,11 +45,17 @@ A fresh clone builds as-is. Release builds additionally need:
 
 LensWhisper is free software under the **GNU Affero General Public License v3.0** — see
 [LICENSE](LICENSE). [NOTICE](NOTICE) carries the copyright line and details of the bundled
-third-party model:
+third-party models:
 
 - `app/src/main/assets/models/yolov8m_seg_int8.tflite` — YOLOv8m-seg by
   [Ultralytics](https://github.com/ultralytics/ultralytics), AGPL-3.0, exported with
   `YOLO("yolov8m-seg.pt").export(format="tflite", int8=True, data="coco128-seg.yaml")`.
+- `app/src/main/assets/models/ocr/` — PP-OCRv5 mobile text detection and recognition by
+  [PaddlePaddle](https://github.com/PaddlePaddle/PaddleOCR), Apache-2.0, converted from the
+  official ONNX releases to LiteRT (see NOTICE).
+
+The app contains no proprietary Google libraries (no ML Kit or Play Services): barcodes are read
+with [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp) (Apache-2.0).
 
 The downloadable vision-language models are not part of this repository and each comes under its
 own licence (Gemma Terms of Use, Apache-2.0), shown in the app under Legal Information.

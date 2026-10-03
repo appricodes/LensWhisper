@@ -18,10 +18,7 @@ package com.appricodes.lens_whisper.offline
  * [describeDetection] builds the final sentence from exactly three independently-substitutable
  * parts — the confidence word, the color phrase, and the object name — precisely so a future
  * localization pass can retranslate each on its own rather than pattern-matching a finished English
- * sentence. Today that final English sentence is still what actually reaches the user: it flows
- * through the same on-device translation this app already runs every other spoken sentence through
- * (see [com.appricodes.lens_whisper.utils.OfflineTranslator]) rather than a separate per-word
- * lookup, which is the only translation mechanism this app has ever had.
+ * sentence. Today the final English sentence is what reaches the user.
  */
 object DetectionPhrasing {
 

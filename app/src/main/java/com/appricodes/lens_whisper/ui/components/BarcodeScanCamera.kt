@@ -4,7 +4,6 @@ import android.content.Context
 import android.util.Log
 import android.util.Size
 import androidx.camera.core.CameraSelector
-import androidx.camera.core.ExperimentalGetImage
 import androidx.camera.core.ImageAnalysis
 import androidx.camera.core.ImageProxy
 import androidx.camera.core.resolutionselector.AspectRatioStrategy
@@ -125,23 +124,16 @@ class BarcodeScanCamera(private val context: Context) {
         }
     }
 
-    /**
-     * One analyzed frame. Split out of the `setAnalyzer` lambda rather than written inline so the
-     * opt-in for `ImageProxy.getImage` sits on a named declaration — Android Lint's
-     * `UnsafeOptInUsageError` does not follow a Kotlin `@OptIn` into a lambda body.
-     */
-    @androidx.annotation.OptIn(ExperimentalGetImage::class)
+    /** One analyzed frame, throttled to [MIN_SCAN_INTERVAL_MS]. */
     private fun analyze(proxy: ImageProxy, onBarcodes: (List<ScannedBarcode>) -> Unit) {
         val now = System.currentTimeMillis()
-        val mediaImage = proxy.image
-        if (mediaImage == null || now - lastScanAtMs < MIN_SCAN_INTERVAL_MS) {
+        if (now - lastScanAtMs < MIN_SCAN_INTERVAL_MS) {
             proxy.close()
             return
         }
         lastScanAtMs = now
-        val rotation = proxy.imageInfo.rotationDegrees
         val job = scanScope.launch {
-            val found = OfflineBarcodeScanner.scan(mediaImage, rotation)
+            val found = OfflineBarcodeScanner.scan(proxy)
             if (found.isNotEmpty()) withContext(Dispatchers.Main) { onBarcodes(found) }
         }
         // invokeOnCompletion, not a `finally` inside the coroutine: if scanScope was already

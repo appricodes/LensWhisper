@@ -45,7 +45,7 @@ suspend fun runSelectedModelAnalysis(
         return "ERROR: No image available to analyze."
     }
 
-    val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, config, offlineImages.size)
+    val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, model, config, offlineImages.size)
     return OfflineInferenceEngine.analyze(
         context, model, offlineImages, userPrompt, systemInstruction,
         maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)
@@ -54,15 +54,13 @@ suspend fun runSelectedModelAnalysis(
 
 /** Shared by [runSelectedModelAnalysis] and [runSelectedOfflineModelAnalysisStreaming] so the two
  *  can never drift apart on how a prompt gets built for the on-device engine. */
-private fun buildOfflinePrompt(prefs: PreferencesManager, config: PromptConfig, frameCount: Int): Pair<String, String> {
+private fun buildOfflinePrompt(prefs: PreferencesManager, model: OfflineModelInfo, config: PromptConfig, frameCount: Int): Pair<String, String> {
     val isCustomQuestion = config.id == "custom"
     // The one place this policy is decided (see OfflinePromptBuilder.buildSystemInstruction's
-    // doc): with offline translation off, nothing downstream translates the reply, so the model
-    // has to be asked for the user's own selected language directly. With it on, the model is
-    // asked for English only - OfflineTranslator.translate then produces the target language
-    // from that, and AnalysisSessionController.startVoiceRecognition already translates any
-    // voice question to English before config.prompt ever reaches here, so both ends agree.
-    val replyLanguage = if (prefs.offlineTranslationEnabled) "English" else prefs.selectedLanguage
+    // doc): a multilingual model is asked for the user's own selected language directly; an
+    // English-only one always works in English (AnalysisSessionController.startVoiceRecognition
+    // also recognizes voice questions as English for it, so both ends agree).
+    val replyLanguage = if (model.multilingual) prefs.selectedLanguage else "English"
     val systemInstruction = if (isCustomQuestion) {
         OfflinePromptBuilder.buildCustomQuestionInstruction(replyLanguage, config.prompt)
     } else {
@@ -105,7 +103,7 @@ fun runSelectedOfflineModelAnalysisStreaming(
         throw IllegalStateException("No image available to analyze.")
     }
 
-    val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, config, offlineImages.size)
+    val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, model, config, offlineImages.size)
     return OfflineInferenceEngine.analyzeStreaming(
         context, model, offlineImages, userPrompt, systemInstruction,
         maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)

@@ -45,10 +45,9 @@ import com.appricodes.lens_whisper.media.HeadsetKeyCapture
 import com.appricodes.lens_whisper.media.HeadsetShortcuts
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
-import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
+import com.appricodes.lens_whisper.offline.OcrScript
 import com.appricodes.lens_whisper.service.ProductDbDownloadService
 import com.appricodes.lens_whisper.service.ProductDbDownloadState
-import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.ui.components.ExportDataDialog
 import com.appricodes.lens_whisper.ui.components.ImportDataDialog
 import com.appricodes.lens_whisper.ui.components.ProductDbConfirmDialog
@@ -67,7 +66,7 @@ class SettingsActivity : ComponentActivity() {
 		val appSettings = SettingsRepository(this).loadSettingsFromAssets()
 		val availableLanguages = appSettings.languages
 		val standardPersonas = listOf("Neutral", "Family", "Technical", "poetry")
-		val availableOcrLanguages = listOf("Latin (English/EU)", "Chinese", "Japanese", "Korean", "Devanagari")
+		val availableOcrLanguages = OcrScript.entries.map { it.label }
 		headsetKeyCapture = HeadsetKeyCapture(this)
 
 		setContent {
@@ -87,19 +86,6 @@ class SettingsActivity : ComponentActivity() {
 					)
 				}
 			}
-		}
-	}
-
-	override fun onStop() {
-		super.onStop()
-		val prefs = PreferencesManager(this)
-		val langCode = prefs.selectedLanguageCode
-
-		// Backstop for the same call already made right at selection time (see the language
-		// dropdown's onClick below) - cheap and idempotent (downloadModelIfNeeded no-ops once a
-		// model's already present), so there's no harm keeping both.
-		if (!langCode.startsWith("en", ignoreCase = true)) {
-			OfflineTranslator.manageModelsInBackground(langCode)
 		}
 	}
 
@@ -185,7 +171,6 @@ fun SettingsScreen(
 	var selectedPersona by remember { mutableStateOf(sharedPrefs.getString("selected_mode", "Neutral") ?: "Neutral") }
 
 	var showResultsInDialog by remember { mutableStateOf(sharedPrefs.getBoolean("show_results_in_dialog", false)) }
-	var offlineTranslationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("offline_translation_enabled", false)) }
 	var soundEffectsEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("sound_effects_enabled", true)) }
 	var vibrationEnabled by remember { mutableStateOf(sharedPrefs.getBoolean("vibration_enabled", true)) }
 
@@ -446,37 +431,9 @@ fun SettingsScreen(
 							selectedLanguageName = name
 							sharedPrefs.edit().putString("selected_language_code", code).putString("selected_language", name).apply()
 							langDropdownExpanded = false
-							// Start fetching this language's translation model(s) right away rather
-							// than waiting for the screen to close (see onStop below, kept as a
-							// backstop) - selecting a language is as clear a signal as any that the
-							// user wants translation ready for it.
-							if (!code.startsWith("en", ignoreCase = true)) OfflineTranslator.manageModelsInBackground(code)
 						})
 					}
 				}
-			}
-
-			Row(
-				modifier = Modifier
-					.fillMaxWidth()
-					.padding(top = 4.dp)
-					.clickable {
-						val targetState = !offlineTranslationEnabled
-						offlineTranslationEnabled = targetState
-						sharedPrefs.edit().putBoolean("offline_translation_enabled", targetState).apply()
-					}
-					.clearAndSetSemantics {
-						val status = if (offlineTranslationEnabled) "enabled" else "disabled"
-						contentDescription = "Translate offline results to $selectedLanguageName is currently $status. Translates Basic tasks and on-device AI results, except Read Text and Read Document, which always read text exactly as written. Double tap to toggle."
-					},
-				verticalAlignment = Alignment.CenterVertically,
-				horizontalArrangement = Arrangement.SpaceBetween
-			) {
-				Text(text = "Translate Offline Results (Basic tasks + On-Device AI)", fontSize = 16.sp, color = Color.LightGray)
-				Checkbox(checked = offlineTranslationEnabled, onCheckedChange = { targetState ->
-					offlineTranslationEnabled = targetState
-					sharedPrefs.edit().putBoolean("offline_translation_enabled", targetState).apply()
-				})
 			}
 		}
 
@@ -522,10 +479,6 @@ fun SettingsScreen(
 							selectedOcrLanguage = lang
 							sharedPrefs.edit().putString("ocr_language", lang).apply()
 							ocrDropdownExpanded = false
-							// Start fetching this script's OCR module right away, same reasoning as
-							// the narration-language dropdown above - see OfflineTextRecognizer's
-							// own doc for why this is fire-and-forget and safe to call repeatedly.
-							OfflineTextRecognizer.startModuleDownload(context, lang)
 						})
 					}
 				}

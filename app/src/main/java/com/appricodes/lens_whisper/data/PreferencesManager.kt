@@ -190,10 +190,6 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getString("url_history", "") ?: ""
 		set(value) = standardPrefs.edit().putString("url_history", value).apply()
 
-	var offlineTranslationEnabled: Boolean
-		get() = standardPrefs.getBoolean("offline_translation_enabled", false)
-		set(value) = standardPrefs.edit().putBoolean("offline_translation_enabled", value).apply()
-
 	/** Pipe-delimited [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]s the user has
 	 *  dismissed the low-memory warning for, via [MemoryWarningDialog]'s "don't warn me again"
 	 *  checkbox. Per-model (not global) so suppressing a small model's warning never silently

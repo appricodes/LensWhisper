@@ -52,7 +52,6 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
-import com.appricodes.lens_whisper.offline.OfflineTranslator
 import com.appricodes.lens_whisper.service.ModelDownloadService
 import com.appricodes.lens_whisper.service.ModelDownloadState
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
@@ -340,9 +339,8 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             title = { Text("Clear all downloaded models?") },
             text = {
                 Text(
-                    "This deletes every downloaded on-device AI model (freeing ${formatSize(totalFreed)}) and any " +
-                        "downloaded MLKit translation language pack — including ones downloaded automatically for " +
-                        "the \"Translate Offline Results\" setting. You'll need to download them again to use them. " +
+                    "This deletes every downloaded on-device AI model (freeing ${formatSize(totalFreed)}). " +
+                        "You'll need to download them again to use them. " +
                         "This doesn't affect Basic tasks' built-in object/text/color detection, which needs no download."
                 )
             },
@@ -357,7 +355,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                             selectedId = "mlkit"
                         }
                         downloadedModels.forEach { repository.deleteDownload(it) }
-                        OfflineTranslator.deleteAllDownloadedModels()
                         downloadedVersion++
                         isClearingAll = false
                         Toast.makeText(context, "Cleared ${formatSize(totalFreed)} of downloaded models.", Toast.LENGTH_SHORT).show()
@@ -452,6 +449,11 @@ private fun OfflineModelCard(
             if (model.description.isNotBlank()) {
                 Text(text = model.description, fontSize = 15.sp, color = Color.Gray)
             }
+            Text(
+                text = if (model.multilingual) "Languages: understands and answers in many languages, including your selected one."
+                    else "Languages: English only. Questions and answers are always in English.",
+                fontSize = 14.sp
+            )
             Text(
                 text = if (isDownloaded) "Downloaded — ${formatSize(model.sizeBytes)}" else "Download size: ${formatSize(model.sizeBytes)}",
                 fontSize = 14.sp

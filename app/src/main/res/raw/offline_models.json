@@ -2,6 +2,7 @@
   "models": [
     {
       "id": "gemma4_multimodal_2b",
+      "multilingual": true,
       "displayName": "Gemma4 2000M",
       "family": "Gemma 4",
       "description": "Most accurate model in this app. Best choice for reading text, understanding a cluttered scene, and answering your own questions. Largest download and needs a capable phone; on some chipsets it runs on the NPU and is fast, on others it is slow. Supports Explore. Still makes mistakes - check anything that matters.",
@@ -52,6 +53,7 @@
     },
     {
       "id": "smolvlm2_500m",
+      "multilingual": false,
       "displayName": "SmolVLM2 500M",
       "family": "SmolVLM2",
       "description": "Very small and quick, and among the least accurate. Handles short questions and simple captions; gets repetitive and drifts off-topic on longer requests. A reasonable fallback if larger models are too slow on your phone, but expect frequent mistakes.",
@@ -67,6 +69,7 @@
     },
     {
       "id": "smolvlm2_2200m",
+      "multilingual": false,
       "displayName": "SmolVLM2 2200M",
       "family": "SmolVLM2",
       "description": "Middle of the range: clearly more accurate than the 500M version, clearly behind Gemma4. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
@@ -82,6 +85,7 @@
     },
     {
       "id": "qwen_vl_2b",
+      "multilingual": true,
       "displayName": "Qwen-VL 2000M",
       "family": "Qwen-VL",
       "description": "Second most accurate after Gemma4, and often the best of the catalogue at reading text and signs. Moderate download, reasonable speed on a mid-range phone. Supports Explore. Still misreads digits and small print - never rely on it for a dosage, a price, or a date.",
