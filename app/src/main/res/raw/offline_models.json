@@ -52,27 +52,11 @@
       ]
     },
     {
-      "id": "smolvlm2_500m",
-      "multilingual": false,
-      "displayName": "SmolVLM2 500M",
-      "family": "SmolVLM2",
-      "description": "Very small and quick, and among the least accurate. Handles short questions and simple captions; gets repetitive and drifts off-topic on longer requests. A reasonable fallback if larger models are too slow on your phone, but expect frequent mistakes.",
-      "variants": [
-        {
-          "hardwareMatch": [],
-          "sizeBytes": 360822960,
-          "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-500M/resolve/main/SmolVLM2-500M.litertlm",
-          "fileName": "smolvlm2_500m.litertlm",
-          "backend": "GPU"
-        }
-      ]
-    },
-    {
       "id": "smolvlm2_2200m",
       "multilingual": false,
       "displayName": "SmolVLM2 2200M",
       "family": "SmolVLM2",
-      "description": "Middle of the range: clearly more accurate than the 500M version, clearly behind Gemma4. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
+      "description": "The smallest model here: clearly behind Gemma4 and Qwen-VL in accuracy. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
       "variants": [
         {
           "hardwareMatch": [],

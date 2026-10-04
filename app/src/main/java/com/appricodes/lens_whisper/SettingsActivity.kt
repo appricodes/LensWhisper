@@ -183,7 +183,6 @@ fun SettingsScreen(
 	var passwordEditText by remember { mutableStateOf("") }
 	var isScanningForLocalServer by remember { mutableStateOf(false) }
 	val coroutineScope = rememberCoroutineScope()
-	val permissions = com.appricodes.lens_whisper.ui.components.rememberPermissionRequester()
 
 	var langDropdownExpanded by remember { mutableStateOf(false) }
 	var ocrDropdownExpanded by remember { mutableStateOf(false) }

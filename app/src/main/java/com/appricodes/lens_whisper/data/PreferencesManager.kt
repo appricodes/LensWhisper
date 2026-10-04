@@ -190,22 +190,13 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getString("url_history", "") ?: ""
 		set(value) = standardPrefs.edit().putString("url_history", value).apply()
 
-	/** Pipe-delimited [com.appricodes.lens_whisper.domain.OfflineModelInfo.id]s the user has
-	 *  dismissed the low-memory warning for, via [MemoryWarningDialog]'s "don't warn me again"
-	 *  checkbox. Per-model (not global) so suppressing a small model's warning never silently
-	 *  suppresses a much larger model added to the catalog later. */
-	private var suppressedMemoryWarningModelIds: String
-		get() = standardPrefs.getString("suppressed_memory_warning_model_ids", "") ?: ""
-		set(value) = standardPrefs.edit().putString("suppressed_memory_warning_model_ids", value).apply()
-
-	fun isMemoryWarningSuppressed(modelId: String): Boolean =
-		suppressedMemoryWarningModelIds.split("|").filter { it.isNotEmpty() }.contains(modelId)
-
-	fun suppressMemoryWarning(modelId: String) {
-		val ids = suppressedMemoryWarningModelIds.split("|").filter { it.isNotEmpty() }.toMutableSet()
-		ids.add(modelId)
-		suppressedMemoryWarningModelIds = ids.joinToString("|")
-	}
+	/** The id of the on-device model whose load is in progress right now, or null. Written
+	 *  synchronously (commit, not apply) right before a native load starts and cleared when it ends,
+	 *  so if the system kills the app mid-load — what running out of memory looks like — the next
+	 *  launch can tell (see `OfflineInferenceEngine.recoverFromInterruptedLoad`). */
+	var modelLoadInProgress: String?
+		get() = standardPrefs.getString("model_load_in_progress", null)
+		set(value) { standardPrefs.edit().putString("model_load_in_progress", value).commit() }
 
 	/** Which delegate ([com.appricodes.lens_whisper.inference.OfflineInferenceEngine] reads this as
 	 *  "CPU" or absent-meaning-GPU) an on-device model's *vision* encoder should use on *this*

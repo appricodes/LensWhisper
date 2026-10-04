@@ -12,6 +12,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -32,24 +33,41 @@ import com.appricodes.lens_whisper.utils.AccessibilityUtils
  *
  * If [OfflineInferenceEngine.lowMemoryPressure] flips true partway through — a real signal from
  * the OS, not a guess — the dialog's text is upgraded to say so explicitly. If loading fails
- * outright (including the load/inference timeouts in [OfflineInferenceEngine] treating an
- * abnormally long attempt as a probable memory thrash), a dismissible error dialog explains why
- * instead of just a TalkBack announcement, since this can happen well after the user has moved
- * their attention elsewhere.
+ * outright (not enough free memory, a timeout treated as a probable memory thrash, or the app
+ * having been killed mid-load last time), the engine has already switched the app to Basic tasks;
+ * this announces that, shows a dismissible dialog explaining why — it can happen well after the
+ * user has moved their attention elsewhere — and hands the new selection to [onSelectedModelChanged]
+ * so the screen's own model state follows.
+ *
+ * Only a screen that is actually showing reacts: the load state is collected with the lifecycle,
+ * and the screen that shows a failure acknowledges it, so it is shown exactly once.
  *
  * Call once, in composition, from any screen that can trigger a model switch (`CameraActivity`,
- * `MediaDescriberScreen`, `ModelManagementActivity`, `SettingsActivity`).
+ * `MediaDescriberScreen`, `ModelManagementActivity`).
  */
 @Composable
-fun ModelLoadingObserver(context: Context, selectedModelId: String, offlineModels: List<OfflineModelInfo>) {
-    val state by OfflineInferenceEngine.loadState.collectAsState()
+fun ModelLoadingObserver(
+    context: Context,
+    selectedModelId: String,
+    offlineModels: List<OfflineModelInfo>,
+    onSelectedModelChanged: (String) -> Unit
+) {
+    val state by OfflineInferenceEngine.loadState.collectAsStateWithLifecycle()
     val lowMemory by OfflineInferenceEngine.lowMemoryPressure.collectAsState()
     val loading = (state as? OfflineInferenceEngine.LoadState.Loading)?.takeIf { it.modelId == selectedModelId }
-    val failed = (state as? OfflineInferenceEngine.LoadState.Failed)?.takeIf { it.modelId == selectedModelId }
+    val failed = (state as? OfflineInferenceEngine.LoadState.Failed)?.takeIf { it.modelId == selectedModelId || it.switchedToBasic }
 
-    var dismissedFailureForModelId by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(failed?.modelId) {
-        if (failed != null) AccessibilityUtils.announceToTalkBack(context, "Failed to load model. ${failed.message}")
+    var shownFailure by remember { mutableStateOf<OfflineInferenceEngine.LoadState.Failed?>(null) }
+    LaunchedEffect(failed) {
+        val failure = failed ?: return@LaunchedEffect
+        shownFailure = failure
+        OfflineInferenceEngine.acknowledgeFailure(failure)
+        if (failure.switchedToBasic) onSelectedModelChanged("mlkit")
+        val name = offlineModels.find { it.id == failure.modelId }?.displayName ?: "the model"
+        AccessibilityUtils.announceToTalkBack(
+            context,
+            "Couldn't load $name. ${failure.message}" + if (failure.switchedToBasic) " Switched to Basic tasks." else ""
+        )
     }
     // The dialog below is visual — TalkBack doesn't reliably announce a freshly-shown AlertDialog's
     // text on every OEM/TalkBack version on its own, and this app announces every other state
@@ -86,14 +104,16 @@ fun ModelLoadingObserver(context: Context, selectedModelId: String, offlineModel
         )
     }
 
-    if (failed != null && failed.modelId != dismissedFailureForModelId) {
-        val displayName = offlineModels.find { it.id == failed.modelId }?.displayName ?: "the model"
+    shownFailure?.let { failure ->
+        val displayName = offlineModels.find { it.id == failure.modelId }?.displayName ?: "the model"
         AlertDialog(
-            onDismissRequest = { dismissedFailureForModelId = failed.modelId },
+            onDismissRequest = { shownFailure = null },
             title = { Text("Couldn't load $displayName") },
-            text = { Text(failed.message) },
+            text = {
+                Text(failure.message + if (failure.switchedToBasic) "\n\nSwitched to Basic tasks." else "")
+            },
             confirmButton = {
-                Button(onClick = { dismissedFailureForModelId = failed.modelId }) { Text("OK") }
+                Button(onClick = { shownFailure = null }) { Text("OK") }
             }
         )
     }

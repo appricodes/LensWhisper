@@ -5,23 +5,22 @@ import android.content.Context
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 
 /**
- * Flags on-device models that might not run well on this device's memory. Still a heuristic, not
- * a verified figure — a `.litertlm` file's on-disk size isn't its peak runtime RAM (weights + KV
- * cache + activations + the GPU delegate's own buffers, only partly offset by quantization) — but
- * tuned up from an earlier, too-lenient version: a 1.75x-of-total-RAM threshold let a real
- * on-device crash through undetected (a ~2.4GB model on an 8GB-RAM device closed the app during
- * analysis without ever showing this warning). Two independent checks now apply:
+ * Memory checks for the on-device models. Two different questions, deliberately kept apart:
  *
- * 1. [RUNTIME_RAM_MULTIPLIER] against **total** RAM — is this device's memory *class* large
- *    enough for this model at all, regardless of what else happens to be running right now.
- * 2. [AVAILABLE_RAM_MULTIPLIER] against **available** RAM right now — a device that's nominally
- *    fine on paper can still be too full in the moment (background apps, system services). This
- *    does mean the warning can flicker across launches on the same device as available memory
- *    changes — accepted deliberately now: a missed crash is worse than an inconsistent warning.
+ * - [mightNotRun]: a rough, selection-time hint shown as a gentle note in the model lists — never
+ *   a gate. A `.litertlm` file's size isn't its peak runtime RAM, and free memory changes from
+ *   minute to minute, so this only suggests that a model *may* not fit; the user can always try.
+ * - [canLoadNow]: the real decision, made by `OfflineInferenceEngine` right before a load starts —
+ *   after the previous model has been closed — from the memory actually free at that moment.
  */
 object DeviceMemoryDetector {
     private const val RUNTIME_RAM_MULTIPLIER = 3.5
     private const val AVAILABLE_RAM_MULTIPLIER = 2.0
+
+    /** On top of the model file itself, a load needs room for the KV cache, activations and the
+     *  GPU delegate's buffers. A deliberately modest figure: refusing a model that would in fact
+     *  have loaded is its own failure, and the engine still copes with a load that runs out. */
+    const val LOAD_HEADROOM_BYTES = 300L * 1024 * 1024
 
     private fun memoryInfo(context: Context): ActivityManager.MemoryInfo {
         val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
@@ -34,9 +33,17 @@ object DeviceMemoryDetector {
 
     fun availableRamBytes(context: Context): Long = memoryInfo(context).availMem
 
+    /** A hint only — see the class doc. */
     fun mightNotRun(context: Context, model: OfflineModelInfo): Boolean {
         val info = memoryInfo(context)
         return model.sizeBytes * RUNTIME_RAM_MULTIPLIER > info.totalMem ||
             model.sizeBytes * AVAILABLE_RAM_MULTIPLIER > info.availMem
     }
+
+    /** Roughly how much free memory loading [model] needs. */
+    fun bytesNeededToLoad(model: OfflineModelInfo): Long = model.sizeBytes + LOAD_HEADROOM_BYTES
+
+    /** Whether [model] fits in the memory free right now. Call only once nothing else is loaded. */
+    fun canLoadNow(context: Context, model: OfflineModelInfo): Boolean =
+        availableRamBytes(context) >= bytesNeededToLoad(model)
 }

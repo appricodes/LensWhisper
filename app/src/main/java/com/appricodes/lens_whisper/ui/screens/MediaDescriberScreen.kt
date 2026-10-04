@@ -517,7 +517,7 @@ fun MediaDescriberScreen(
             onDecline = { (context as? android.app.Activity)?.finishAndRemoveTask() }
         )
     }
-    ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels)
+    ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels) { selectedModelId = it }
 
     // Proactively warms the selected on-device model as soon as this screen opens (or the
     // selection changes), rather than only lazily loading it the first time a button is pressed —

@@ -634,7 +634,7 @@ private fun CameraScreen(
 
     controller.ResultDialogs()
     controller.ObserveDownloads()
-    ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels)
+    ModelLoadingObserver(context = context, selectedModelId = selectedModelId, offlineModels = offlineModels) { selectedModelId = it }
 
     // Proactively warms the selected on-device model as soon as this screen opens (or the
     // selection changes), rather than only lazily loading it the first time a button is pressed —

@@ -1,9 +1,13 @@
 package com.appricodes.lens_whisper.inference
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.ComponentCallbacks2
 import android.content.Context
 import android.content.res.Configuration
+import android.os.Build
 import android.os.PowerManager
+import android.os.SystemClock
 import android.graphics.Bitmap
 import android.util.Log
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
@@ -26,6 +30,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -46,8 +51,12 @@ import java.io.ByteArrayOutputStream
  * model closes the previous engine and loads the new one on the next query. Loading is slow
  * (up to ~10s normally), so it's cached across calls and only reloaded when the model changes.
  *
- * Memory safety net (see [DeviceMemoryDetector] for the *before* check, applied at selection
- * time): the LiteRT-LM engine itself gives no cancellation or progress API, and a genuinely
+ * Memory safety net: right before a load starts — once the previous model has been closed and
+ * its memory has had a moment to come back — [startLoadLocked] measures free memory and refuses a
+ * model that can't fit ([DeviceMemoryDetector.canLoadNow]). Any load that fails, for that or any
+ * other reason, switches the app back to Basic tasks ([failLoad]); so does a load during which the
+ * system killed the app ([recoverFromInterruptedLoad]). Beyond that, the LiteRT-LM engine itself
+ * gives no cancellation or progress API, and a genuinely
  * out-of-memory device doesn't throw a catchable exception here — it thrashes (heavy swapping)
  * for minutes rather than failing fast, which is indistinguishable from a real hang from the
  * caller's side. Model loading ([runLoad]) and inference are both wrapped with a generous
@@ -94,7 +103,9 @@ object OfflineInferenceEngine {
         data object Idle : LoadState()
         data class Loading(val modelId: String) : LoadState()
         data class Ready(val modelId: String) : LoadState()
-        data class Failed(val modelId: String, val message: String) : LoadState()
+        /** [switchedToBasic]: the failed model was the selected one, and the selection has been
+         *  moved to Basic tasks — so the UI must show this even though it's no longer selected. */
+        data class Failed(val modelId: String, val message: String, val switchedToBasic: Boolean = false) : LoadState()
     }
 
     private val _loadState = MutableStateFlow<LoadState>(LoadState.Idle)
@@ -139,6 +150,15 @@ object OfflineInferenceEngine {
 
     private var slot: Slot = Slot.Empty
     private val mutex = Mutex()
+
+    /** When a model was last closed — see [SETTLE_AFTER_CLOSE_MS]. */
+    @Volatile private var lastClosedAt = 0L
+
+    /** How long after closing a model the next load waits before measuring free memory: the
+     *  engine frees its memory on close, but the system's free-memory figure (and some GPU driver
+     *  allocations) catch up a moment later, and measuring too early would refuse a model that
+     *  fits. */
+    private const val SETTLE_AFTER_CLOSE_MS = 700L
 
     /** How many conversations are running on the [Slot.Loaded] engine right now. Incremented only
      *  under [mutex] (in [acquireEngine]), decremented without it (see [withEngine]) — so while
@@ -231,12 +251,11 @@ object OfflineInferenceEngine {
                         // analysis first, so this is normally instant.
                         activeUsers.value > 0 -> suspend { activeUsers.first { it == 0 } }
                         else -> {
-                            // Close BEFORE the memory check inside startLoadLocked — that check
-                            // reads system-wide free memory, so it has to see memory as it will be
-                            // once the old model is gone.
+                            // Close first, then go round again: the Empty branch below waits for the
+                            // freed memory to show before startLoadLocked measures it, so the check
+                            // sees memory as it is once the old model is really gone.
                             closeLoadedLocked(s)
-                            val loading = startLoadLocked(context, model)
-                            suspend { awaitOwnLoad(loading) }
+                            suspend { }
                         }
                     }
                     is Slot.Loading ->
@@ -255,8 +274,17 @@ object OfflineInferenceEngine {
                             suspend { awaitPreviousLoad(s, model) }
                         }
                     Slot.Empty -> {
-                        val loading = startLoadLocked(context, model)
-                        suspend { awaitOwnLoad(loading) }
+                        val sinceClose = SystemClock.elapsedRealtime() - lastClosedAt
+                        if (sinceClose < SETTLE_AFTER_CLOSE_MS) {
+                            _loadState.value = LoadState.Loading(model.id)
+                            suspend {
+                                Runtime.getRuntime().gc()
+                                delay(SETTLE_AFTER_CLOSE_MS - sinceClose)
+                            }
+                        } else {
+                            val loading = startLoadLocked(context, model)
+                            suspend { awaitOwnLoad(loading) }
+                        }
                     }
                 }
             }
@@ -288,27 +316,90 @@ object OfflineInferenceEngine {
     private fun closeLoadedLocked(loaded: Slot.Loaded) {
         Log.i(TAG, "Closing ${loaded.modelId}")
         loaded.engine.close()
+        lastClosedAt = SystemClock.elapsedRealtime()
         slot = Slot.Empty
         _loadState.value = LoadState.Idle
+    }
+
+    /** Reports [model]'s load as failed and, if it is the selected model, switches the app to
+     *  Basic tasks — a model that couldn't load mustn't stay selected with nothing behind it. By
+     *  the time this is called nothing of it is kept in memory, or (for a native load still
+     *  running past its timeout) it is marked to be closed the moment it returns. */
+    private fun failLoad(context: Context, model: OfflineModelInfo, message: String) {
+        _loadState.value = LoadState.Failed(model.id, message, switchToBasicIfSelected(context, model.id))
+    }
+
+    private fun switchToBasicIfSelected(context: Context, modelId: String): Boolean {
+        val prefs = PreferencesManager(context)
+        if (prefs.selectedModelId != modelId) return false
+        prefs.selectedModelId = "mlkit"
+        Log.i(TAG, "Switched to Basic tasks after $modelId failed to load")
+        return true
+    }
+
+    /** Lets the screen that showed a failure clear it, so the next screen doesn't show it again. */
+    fun acknowledgeFailure(failure: LoadState.Failed) {
+        _loadState.compareAndSet(failure, LoadState.Idle)
+    }
+
+    /**
+     * Call once at app start. If the previous run was killed while a model was loading — what a
+     * load that runs the phone out of memory usually looks like, since that doesn't throw — this
+     * switches to Basic tasks and reports it through [loadState] like any other failed load, so
+     * the app doesn't try the same model again on launch and get killed again.
+     */
+    fun recoverFromInterruptedLoad(context: Context) {
+        val prefs = PreferencesManager(context)
+        val modelId = prefs.modelLoadInProgress ?: return
+        prefs.modelLoadInProgress = null
+        if (!lastExitLooksLikeLoadFailure(context)) return
+        val name = OfflineModelsRepository(context).loadModels().find { it.id == modelId }?.displayName ?: "The model"
+        val switched = switchToBasicIfSelected(context, modelId)
+        _loadState.value = LoadState.Failed(
+            modelId,
+            "$name could not be loaded: the phone closed the app while loading it, most likely because it ran out of memory.",
+            switched
+        )
+    }
+
+    /** Whether the last time the app's process ended was the system (or a crash) rather than the
+     *  user closing it. Below Android 11 there's no way to tell, so assume the worse. */
+    private fun lastExitLooksLikeLoadFailure(context: Context): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) return true
+        val exit = runCatching {
+            context.getSystemService(ActivityManager::class.java)
+                .getHistoricalProcessExitReasons(context.packageName, 0, 1).firstOrNull()
+        }.getOrNull() ?: return true
+        return exit.reason in setOf(
+            ApplicationExitInfo.REASON_LOW_MEMORY,
+            ApplicationExitInfo.REASON_SIGNALED,
+            ApplicationExitInfo.REASON_CRASH,
+            ApplicationExitInfo.REASON_CRASH_NATIVE,
+            ApplicationExitInfo.REASON_ANR,
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE
+        )
     }
 
     /** Must hold [mutex], with [slot] [Slot.Empty]. Starts [model]'s load on [engineScope] and
      *  returns its [Slot.Loading]; the load installs its own result into [slot] when it finishes,
      *  whether or not anyone is still waiting for it. */
     private fun startLoadLocked(context: Context, model: OfflineModelInfo): Slot.Loading {
-        // Hard pre-check, right before actually starting: if free memory is already below the
-        // model's raw file size, it cannot possibly load — fail immediately with a clear message
-        // instead of spending a minute finding that out the hard way. This is deliberately a much
-        // more extreme floor than DeviceMemoryDetector's selection-time heuristic (which only
-        // *warns and lets the user proceed*) — it only trips when things are unambiguously dire.
-        val availableNow = DeviceMemoryDetector.availableRamBytes(context)
-        if (availableNow < model.sizeBytes) {
-            val message = "Not enough free memory to load ${model.displayName} right now (only " +
-                "${availableNow / 1_000_000}MB free). Close other apps or choose a smaller model."
-            _loadState.value = LoadState.Failed(model.id, message)
+        // The feasibility check, right before actually starting and with nothing else loaded (the
+        // Empty branch of acquireEngine has already let a just-closed model's memory come back):
+        // a model that can't fit fails here, at once and with a clear message, instead of after a
+        // minute of thrashing — or by getting the app killed.
+        if (!DeviceMemoryDetector.canLoadNow(context, model)) {
+            val gb = { bytes: Long -> "%.1f".format(bytes / 1_000_000_000.0) }
+            val message = "There isn't enough free memory on this phone to load ${model.displayName} right now: " +
+                "it needs about ${gb(DeviceMemoryDetector.bytesNeededToLoad(model))} GB and " +
+                "${gb(DeviceMemoryDetector.availableRamBytes(context))} GB is free. Closing other apps may help."
+            failLoad(context, model, message)
             throw ModelNotReady(message)
         }
 
+        // Cleared when the load ends either way; still set at the next launch only if the app
+        // was killed mid-load — see recoverFromInterruptedLoad.
+        PreferencesManager(context).modelLoadInProgress = model.id
         val loading = Slot.Loading(model.id)
         slot = loading
         _loadState.value = LoadState.Loading(model.id)
@@ -326,13 +417,14 @@ object OfflineInferenceEngine {
         try {
             loadAndInstall(context, model, loading)
         } finally {
+            PreferencesManager(context).modelLoadInProgress = null
             if (!loading.done.isCompleted) {
                 Log.e(TAG, "Loading ${model.id} ended unexpectedly — clearing its slot")
                 val message = "Loading ${model.displayName} failed unexpectedly."
                 withContext(NonCancellable) {
                     mutex.withLock {
                         if (slot === loading) slot = Slot.Empty
-                        _loadState.compareAndSet(LoadState.Loading(model.id), LoadState.Failed(model.id, message))
+                        if (_loadState.value == LoadState.Loading(model.id)) failLoad(context, model, message)
                     }
                 }
                 loading.outcome.complete(message)
@@ -359,12 +451,13 @@ object OfflineInferenceEngine {
             withTimeoutOrNull(LOAD_TIMEOUT_MS) { nativeLoad.await() }?.let { return it }
 
             Log.w(TAG, "Loading ${model.id} exceeded ${LOAD_TIMEOUT_MS}ms — likely a low-memory thrash, giving up")
-            val message = "Loading ${model.displayName} is taking much longer than usual — your device " +
-                "likely doesn't have enough free memory for this model. Try a smaller model."
+            val message = "Loading ${model.displayName} is taking much longer than usual — this phone " +
+                "most likely doesn't have enough free memory for it right now."
             loading.closeWhenDone = true
-            _loadState.value = LoadState.Failed(model.id, message)
+            failLoad(context, model, message)
             loading.outcome.complete(message)
             runCatching { nativeLoad.await() }.getOrNull()?.close()
+            lastClosedAt = SystemClock.elapsedRealtime()
             throw LoadTimedOut(message)
         }
 
@@ -405,11 +498,14 @@ object OfflineInferenceEngine {
                 _loadState.value = LoadState.Ready(model.id)
                 Log.i(TAG, "Loaded ${model.id}")
             } else {
-                engine?.let { runCatching { it.close() } }
+                engine?.let {
+                    runCatching { it.close() }
+                    lastClosedAt = SystemClock.elapsedRealtime()
+                }
                 slot = Slot.Empty
                 val current = _loadState.value
                 if (failure != null && !loading.outcome.isCompleted) {
-                    _loadState.value = LoadState.Failed(model.id, failure)
+                    failLoad(context, model, "Couldn't load ${model.displayName}: $failure")
                 } else if (current is LoadState.Loading && current.modelId == model.id) {
                     _loadState.value = LoadState.Idle
                 }

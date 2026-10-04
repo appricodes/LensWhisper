@@ -50,7 +50,6 @@ fun ModelPickerPopup(
     // Repository already returns these smallest-first; this popup lists MLKit, then these
     // (small -> large), then Online last — same order as `ModelManagementActivity`.
     val offlineModels = remember { repository.loadModels() }
-    var memoryWarningModel by remember { mutableStateOf<OfflineModelInfo?>(null) }
     var showLocalServerInfo by remember { mutableStateOf(false) }
 
     fun selectModel(id: String) {
@@ -60,13 +59,7 @@ fun ModelPickerPopup(
     }
 
     fun selectOffline(model: OfflineModelInfo) {
-        controller.checkDownloadedOrRedirect(model) {
-            if (DeviceMemoryDetector.mightNotRun(context, model) && !prefs.isMemoryWarningSuppressed(model.id)) {
-                memoryWarningModel = model
-            } else {
-                selectModel(model.id)
-            }
-        }
+        controller.checkDownloadedOrRedirect(model) { selectModel(model.id) }
     }
 
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
@@ -84,7 +77,7 @@ fun ModelPickerPopup(
             val label = buildString {
                 append(model.displayName)
                 if (!isDownloaded) append(" (not downloaded)")
-                if (DeviceMemoryDetector.mightNotRun(context, model)) append(" ⚠ low memory")
+                if (DeviceMemoryDetector.mightNotRun(context, model)) append(", may not fit in memory")
                 if (selectedModelId == model.id) append(" ✓")
             }
             DropdownMenuItem(text = { Text(label) }, onClick = { onDismiss(); selectOffline(model) })
@@ -105,18 +98,6 @@ fun ModelPickerPopup(
         }
         HorizontalDivider()
         DropdownMenuItem(text = { Text("Manage models…") }, onClick = { onDismiss(); onOpenModelManager() })
-    }
-
-    memoryWarningModel?.let { model ->
-        MemoryWarningDialog(
-            model = model,
-            onContinue = { suppress ->
-                if (suppress) prefs.suppressMemoryWarning(model.id)
-                selectModel(model.id)
-                memoryWarningModel = null
-            },
-            onCancel = { memoryWarningModel = null }
-        )
     }
 
     if (showLocalServerInfo) {

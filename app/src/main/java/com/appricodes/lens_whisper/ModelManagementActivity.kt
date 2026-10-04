@@ -1,6 +1,5 @@
 package com.appricodes.lens_whisper
 
-import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
 import android.content.Intent
 import android.os.Bundle
 import android.widget.Toast
@@ -57,7 +56,6 @@ import com.appricodes.lens_whisper.service.ModelDownloadState
 import com.appricodes.lens_whisper.ui.components.DownloadProgressDialog
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.components.LocalServerInfoDialog
-import com.appricodes.lens_whisper.ui.components.MemoryWarningDialog
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -99,7 +97,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     var selectedId by remember { mutableStateOf(prefs.selectedModelId) }
     var downloadedVersion by remember { mutableStateOf(0) }
     var modelPendingDelete by remember { mutableStateOf<OfflineModelInfo?>(null) }
-    var memoryWarningModel by remember { mutableStateOf<OfflineModelInfo?>(null) }
     var showClearAllConfirm by remember { mutableStateOf(false) }
     var isClearingAll by remember { mutableStateOf(false) }
     var showLocalServerInfo by remember { mutableStateOf(false) }
@@ -110,10 +107,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     LaunchedEffect(downloadState) {
         if (downloadState is ModelDownloadState.Completed) downloadedVersion++
     }
-
-    // Notifications are asked for when a download starts — they show its progress and Cancel
-    // button once the app is in the background. The download runs whatever the answer.
-    val permissions = rememberPermissionRequester()
 
     val activeDownload = downloadState as? ModelDownloadState.Downloading
 
@@ -143,14 +136,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         selectedId = model.id
         AccessibilityUtils.announceToTalkBack(context, "${model.displayName} selected.")
         coroutineScope.launch { OfflineInferenceEngine.preload(context, model) }
-    }
-
-    fun requestSelectOffline(model: OfflineModelInfo) {
-        if (DeviceMemoryDetector.mightNotRun(context, model) && !prefs.isMemoryWarningSuppressed(model.id)) {
-            memoryWarningModel = model
-        } else {
-            selectOffline(model)
-        }
     }
 
     Column(
@@ -210,7 +195,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                 downloadingOtherModel = downloadingOtherModel,
                 failureMessage = failure?.message,
                 mightNotRun = remember(model.id) { DeviceMemoryDetector.mightNotRun(context, model) },
-                onSelect = { requestSelectOffline(model) },
+                onSelect = { selectOffline(model) },
                 onDownload = {
                     ModelDownloader.start(context, model)
                 },
@@ -316,18 +301,6 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         )
     }
 
-    memoryWarningModel?.let { model ->
-        MemoryWarningDialog(
-            model = model,
-            onContinue = { suppress ->
-                if (suppress) prefs.suppressMemoryWarning(model.id)
-                selectOffline(model)
-                memoryWarningModel = null
-            },
-            onCancel = { memoryWarningModel = null }
-        )
-    }
-
     if (showClearAllConfirm) {
         val downloadedModels = offlineModels.filter { remember(it.id, downloadedVersion) { repository.isDownloaded(it) } }
         val totalFreed = downloadedModels.sumOf { it.sizeBytes }
@@ -366,7 +339,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         LocalServerInfoDialog(onDismiss = { showLocalServerInfo = false })
     }
 
-    ModelLoadingObserver(context = context, selectedModelId = selectedId, offlineModels = offlineModels)
+    ModelLoadingObserver(context = context, selectedModelId = selectedId, offlineModels = offlineModels) { selectedId = it }
 }
 
 @Composable
@@ -456,10 +429,12 @@ private fun OfflineModelCard(
                 fontSize = 14.sp
             )
             if (mightNotRun) {
+                // A gentle note, not a warning: whether it fits is decided for real when it loads,
+                // and if it doesn't the app says so and goes back to Basic tasks by itself.
                 Text(
-                    text = "⚠ This model may not run well on your device's memory.",
+                    text = "Might not fit in this phone's free memory. If it doesn't, the app will tell you and switch back to Basic tasks.",
                     fontSize = 13.sp,
-                    color = MaterialTheme.colorScheme.error
+                    color = Color.Gray
                 )
             }
             if (failureMessage != null) {

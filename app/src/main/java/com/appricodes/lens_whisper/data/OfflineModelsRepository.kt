@@ -102,7 +102,25 @@ class OfflineModelsRepository(private val context: Context) {
         return legacy || current
     }
 
+    /**
+     * Cleans up after models taken out of the catalog: deletes their files (hundreds of MB each)
+     * and, if one of them was the selected model, falls back to Basic tasks rather than leaving a
+     * selection that points at nothing.
+     */
+    fun retireRemovedModels(prefs: PreferencesManager) {
+        for (fileName in RETIRED_MODEL_FILES) {
+            File(context.filesDir, fileName).delete()
+            modelsDir(context)?.let { File(it, fileName).delete() }
+        }
+        val selected = prefs.selectedModelId
+        if (selected in RETIRED_MODEL_IDS) prefs.selectedModelId = "mlkit"
+    }
+
     companion object {
+        /** SmolVLM2 500M, removed 2026-10-04: too inaccurate to be worth offering. */
+        private val RETIRED_MODEL_IDS = setOf("smolvlm2_500m")
+        private val RETIRED_MODEL_FILES = listOf("smolvlm2_500m.litertlm")
+
         /** Subdirectory of the app's external files directory that model downloads land in — the
          *  only place the system DownloadManager can write for this app. App-private all the same. */
         const val MODELS_DIR = "models"
