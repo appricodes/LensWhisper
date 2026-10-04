@@ -326,7 +326,13 @@ object OfflineInferenceEngine {
      *  the time this is called nothing of it is kept in memory, or (for a native load still
      *  running past its timeout) it is marked to be closed the moment it returns. */
     private fun failLoad(context: Context, model: OfflineModelInfo, message: String) {
-        _loadState.value = LoadState.Failed(model.id, message, switchToBasicIfSelected(context, model.id))
+        val switched = switchToBasicIfSelected(context, model.id)
+        // A second caller failing the same model (selecting one preloads it from both the picker
+        // and the screen) finds the selection already moved, and must not replace the failure that
+        // says so — the screen would never learn of the switch.
+        val current = _loadState.value
+        if (!switched && current is LoadState.Failed && current.modelId == model.id && current.switchedToBasic) return
+        _loadState.value = LoadState.Failed(model.id, message, switched)
     }
 
     private fun switchToBasicIfSelected(context: Context, modelId: String): Boolean {

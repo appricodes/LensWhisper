@@ -8,6 +8,8 @@ import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine.LoadState
 import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
@@ -58,6 +60,21 @@ class ModelLoadFailureDeviceTest {
         assertTrue(failure.switchedToBasic)
         assertEquals("mlkit", prefs.selectedModelId)
         assertNull(prefs.modelLoadInProgress)
+    }
+
+    /** Selecting a model preloads it from two places at once (the picker and the screen's own
+     *  effect). The second refusal must not replace the first's "switched to Basic tasks". */
+    @Test
+    fun twoRefusedPreloadsStillReportTheSwitchToBasic() = runBlocking {
+        val huge = fakeModel("loadtest_huge2", DeviceMemoryDetector.availableRamBytes(context) * 4)
+        prefs.selectedModelId = huge.id
+        listOf(
+            async { OfflineInferenceEngine.preload(context, huge) },
+            async { OfflineInferenceEngine.preload(context, huge) }
+        ).awaitAll()
+        val state = OfflineInferenceEngine.loadState.value
+        assertTrue("$state", state is LoadState.Failed && state.modelId == huge.id && state.switchedToBasic)
+        assertEquals("mlkit", prefs.selectedModelId)
     }
 
     @Test

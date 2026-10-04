@@ -19,6 +19,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.unit.dp
+import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.domain.OfflineModelInfo
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -62,7 +63,9 @@ fun ModelLoadingObserver(
         val failure = failed ?: return@LaunchedEffect
         shownFailure = failure
         OfflineInferenceEngine.acknowledgeFailure(failure)
-        if (failure.switchedToBasic) onSelectedModelChanged("mlkit")
+        // Follow the saved selection, not just the flag: it is what the engine actually changed.
+        val saved = PreferencesManager(context).selectedModelId
+        if (failure.switchedToBasic || saved != selectedModelId) onSelectedModelChanged(saved)
         val name = offlineModels.find { it.id == failure.modelId }?.displayName ?: "the model"
         AccessibilityUtils.announceToTalkBack(
             context,
