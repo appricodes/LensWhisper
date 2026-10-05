@@ -4,6 +4,7 @@ import android.content.Intent
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -35,11 +36,12 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
+import com.appricodes.lens_whisper.ui.analysis.ReportableResponse
 
 /**
  * Top bar shared by [com.appricodes.lens_whisper.CameraActivity] and the Video/Image describer:
- * a model-name button (opens [ModelPickerPopup] for a quick switch) and a More button (opens
- * [MoreMenu]).
+ * a model-name button (opens [ModelPickerPopup] for a quick switch), a Stop/Report slot (see
+ * [ReportResponseDialog]) and a More button (opens [MoreMenu]).
  *
  * [showModelSelector]/[showMoreButton] let [com.appricodes.lens_whisper.SettingsActivity] reuse
  * this bar — switching models or reaching the More menu (which itself leads to Settings) from
@@ -66,6 +68,7 @@ fun ModelTopBar(
     var selectedModelName by remember { mutableStateOf("") }
     var showModelPicker by remember { mutableStateOf(false) }
     var showMoreMenu by remember { mutableStateOf(false) }
+    var reportedResponse by remember { mutableStateOf<ReportableResponse?>(null) }
     // The DisposableEffect(lifecycleOwner) below registers ONE LifecycleEventObserver that then
     // lives for this composable's whole lifetime (its key never changes, so Compose never tears
     // it down and re-runs it) - but selectedModelId is a plain String parameter, not a state
@@ -127,21 +130,38 @@ fun ModelTopBar(
         }
 
         if (showMoreButton) {
-            // Always present (never conditionally added/removed) so the Row's layout never
-            // shifts when a response starts/finishes streaming — invisible and non-interactive
-            // (alpha 0, disabled, no accessibility node) rather than absent, which reserves
-            // exactly the space the real button would take, per explicit request.
-            Button(
-                onClick = { controller.stopAnalysis() },
-                enabled = controller.isAnalyzing,
-                modifier = if (controller.isAnalyzing) {
-                    Modifier.clearAndSetSemantics { contentDescription = "Stop the model's response." }
-                } else {
-                    Modifier.alpha(0f).clearAndSetSemantics { }
+            // Stop (while a response is being generated) and Report (once an on-device model has
+            // answered — Basic tasks has nothing to report) share one slot. Both are always present
+            // (never conditionally added/removed) so the Row's layout never shifts when a response
+            // starts/finishes streaming — the one not in use invisible and non-interactive (alpha 0,
+            // disabled, no accessibility node) rather than absent, which reserves exactly the space
+            // the real button would take, per explicit request.
+            val reportable = controller.lastResponse?.takeIf { !controller.isAnalyzing && selectedModelId != "mlkit" }
+            Box(contentAlignment = Alignment.Center) {
+                Button(
+                    onClick = { controller.stopAnalysis() },
+                    enabled = controller.isAnalyzing,
+                    modifier = if (controller.isAnalyzing) {
+                        Modifier.clearAndSetSemantics { contentDescription = "Stop the model's response." }
+                    } else {
+                        Modifier.alpha(0f).clearAndSetSemantics { }
+                    }
+                ) {
+                    Text("Stop")
                 }
-            ) {
-                Text("Stop")
+                Button(
+                    onClick = { reportedResponse = reportable },
+                    enabled = reportable != null,
+                    modifier = if (reportable != null) {
+                        Modifier.clearAndSetSemantics { contentDescription = "Report this answer." }
+                    } else {
+                        Modifier.alpha(0f).clearAndSetSemantics { }
+                    }
+                ) {
+                    Text("Report")
+                }
             }
+            reportedResponse?.let { ReportResponseDialog(report = it, onDismiss = { reportedResponse = null }) }
             Button(onClick = { showMoreMenu = true }) {
                 Text("More")
             }

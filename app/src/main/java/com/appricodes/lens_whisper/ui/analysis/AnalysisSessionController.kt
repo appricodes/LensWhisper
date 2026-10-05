@@ -64,6 +64,18 @@ data class CapturedBundle(
     val localServerCallStreaming: (() -> Flow<String>)? = null
 )
 
+/** An on-device model's answer as the Report button sends it: exactly what the model was asked,
+ *  what it said, and the first image it was shown (not every video frame — this is only for a
+ *  person to look at, and the phone's memory is precious). */
+data class ReportableResponse(
+    val modelId: String,
+    val modelName: String,
+    val userPrompt: String,
+    val systemInstruction: String,
+    val response: String,
+    val image: Bitmap?
+)
+
 /**
  * Loop detection for [AnalysisSessionController.runStreamingAnalysis]: small on-device models
  * occasionally degenerate into repeating themselves once they run out of anything new to say. The
@@ -254,6 +266,13 @@ class AnalysisSessionController(
     var lastPrompt by mutableStateOf<PromptConfig?>(null)
         private set
 
+    /** The last answer an on-device model gave, for the Report button in
+     *  [com.appricodes.lens_whisper.ui.components.ModelTopBar] — set when it finishes, stops
+     *  repeating itself, or is stopped partway (an offensive answer is exactly what someone stops
+     *  and reports); cleared as the next analysis starts. Never an error message. */
+    var lastResponse by mutableStateOf<ReportableResponse?>(null)
+        private set
+
     /** True while [startVoiceRecognition] is actively listening — lets a volume-key long-press
      *  (see `VolumeKeyGestureHandler`) force-stop it the moment the key is released, unlike an
      *  on-screen mic tap/long-press, which always runs until the recognizer stops itself. */
@@ -411,6 +430,8 @@ class AnalysisSessionController(
         val previous = activeAnalysisJob
         activeAnalysisJob = coroutineScope.launch {
             previous?.cancelAndJoin()
+            // After the join: the cancelled job records its partial answer as it unwinds.
+            lastResponse = null
             isAnalyzing = true
             try {
                 body()
@@ -458,15 +479,18 @@ class AnalysisSessionController(
      */
     suspend fun runAnalysisOnBitmap(config: PromptConfig, bitmap: Bitmap) {
         if (blockedByHeat()) return
+        var report: ReportableResponse? = null
         val streamingFlow = try {
-            runSelectedOfflineModelAnalysisStreaming(context, prefs, config, listOf(bitmap))
+            runSelectedOfflineModelAnalysisStreaming(context, prefs, config, listOf(bitmap)) { model, prompt, system ->
+                report = ReportableResponse(model.id, model.displayName, prompt, system, "", bitmap)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             handleResponse("ERROR: ${e.localizedMessage ?: "Setup failed."}")
             return
         }
-        runStreamingAnalysis(streamingFlow)
+        runStreamingAnalysis(streamingFlow, report)
     }
 
     /**
@@ -505,10 +529,13 @@ class AnalysisSessionController(
             // this whole launchAnalysis body (which has no catch of its own) and crash the
             // coroutine this runs in. It's a real, easily-reached path — a phone legitimately gets
             // hot from sustained on-device inference, so "too hot" is not a rare edge case here.
+            var report: ReportableResponse? = null
             val streamingFlow: Flow<String>? = try {
                 when {
                     isOfflineVlmSelected() ->
-                        runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages)
+                        runSelectedOfflineModelAnalysisStreaming(context, prefs, config, bundle.offlineImages) { model, prompt, system ->
+                            report = ReportableResponse(model.id, model.displayName, prompt, system, "", bundle.offlineImages.firstOrNull())
+                        }
                     prefs.selectedModelId == LocalServerFeature.MODEL_ID ->
                         bundle.localServerCallStreaming?.invoke()
                     else -> null
@@ -520,7 +547,7 @@ class AnalysisSessionController(
                 return@launchAnalysis
             }
             if (streamingFlow != null) {
-                runStreamingAnalysis(streamingFlow)
+                runStreamingAnalysis(streamingFlow, report)
             } else {
                 val response = runSelectedModelAnalysis(
                     context = context,
@@ -543,9 +570,15 @@ class AnalysisSessionController(
      * speaking the full response as one block. See [runSelectedOfflineModelAnalysisStreaming] /
      * `OfflineInferenceEngine.analyzeStreaming` (on-device) and `LocalServerEngine`'s `*Streaming`
      * functions.
+     *
+     * [report] (null for the Local Server) becomes [lastResponse] once there is an answer to report.
      */
-    private suspend fun runStreamingAnalysis(flow: Flow<String>) {
+    private suspend fun runStreamingAnalysis(flow: Flow<String>, report: ReportableResponse?) {
         val fullText = StringBuilder()
+        fun keepForReport() {
+            val text = fullText.toString().trim()
+            if (report != null && text.isNotEmpty()) lastResponse = report.copy(response = text)
+        }
         val pending = StringBuilder()
         val wordRepeatTracker = WordRepeatTracker()
 
@@ -578,14 +611,17 @@ class AnalysisSessionController(
             }
             activeAudioFeedbackJob?.cancel()
             speak(pending.toString()) // whatever's left over (no trailing punctuation) still gets spoken
+            keepForReport()
             if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
         } catch (e: LoopDetected) {
             // Not an error — the model simply had nothing more to add. Whatever was already spoken
             // stands as the final answer; pending (the start of the detected repeat) is deliberately
             // never spoken.
             activeAudioFeedbackJob?.cancel()
+            keepForReport()
             if (prefs.showResultsInDialog) dialogState = "AI Description" to fullText.toString()
         } catch (e: CancellationException) {
+            keepForReport()
             throw e
         } catch (e: Exception) {
             activeAudioFeedbackJob?.cancel()

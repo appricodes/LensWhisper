@@ -76,6 +76,9 @@ import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.rememberAnalysisSessionController
 import com.appricodes.lens_whisper.ui.components.CameraController
 import com.appricodes.lens_whisper.ui.components.ImmersiveBackButton
+import com.appricodes.lens_whisper.ui.components.ImmersiveReportButton
+import com.appricodes.lens_whisper.ui.components.ReportResponseDialog
+import com.appricodes.lens_whisper.ui.analysis.ReportableResponse
 import com.appricodes.lens_whisper.ui.components.ImmersiveFullScreen
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -260,6 +263,7 @@ private fun SegmentationExploreScreen(
     // every pointer-move event.
     var descriptions by remember { mutableStateOf<Map<DetectedInstance, String>>(emptyMap()) }
     var showPopup by remember { mutableStateOf(false) }
+    var reportedResponse by remember { mutableStateOf<ReportableResponse?>(null) }
     var colorReportEnabled by remember { mutableStateOf(false) }
     // describeMode's tap-serialization state — see startDescribe's doc for why this queues rather
     // The coroutine currently running one describeMode tap's isolate+analyze pipeline, if any —
@@ -516,6 +520,12 @@ private fun SegmentationExploreScreen(
         // dialogs (unlike CameraActivity/MediaDescriberScreen, which already call both).
         controller.ObserveDownloads()
         controller.ResultDialogs()
+
+        // describeMode only — the other mode's spoken text is the object detector's, not a model's.
+        // Hidden while the next object is being described, so it never reports a stale answer.
+        val reportable = controller.lastResponse?.takeIf { describeMode && activeDescribeInstance == null }
+        if (reportable != null) ImmersiveReportButton(onClick = { reportedResponse = reportable })
+        reportedResponse?.let { ReportResponseDialog(report = it, onDismiss = { reportedResponse = null }) }
 
         ImmersiveBackButton(onClick = onClose)
     }

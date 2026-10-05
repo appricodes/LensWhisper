@@ -42,7 +42,7 @@ object ProductDbSource {
      * left trying to gunzip a stream that is already plain. See `publish_barcode_db.py`, which says
      * the same thing from the server side.
      */
-    const val DATABASE_URL = "https://wikiponder.com/lense_whisper/products_barcodes.db"
+    const val DATABASE_URL = "https://wikiponder.com/lens_whisper/products_barcodes.db"
 
     /** The name the installed copy is stored under, and the name the database table lives in. */
     const val LOCAL_FILE_NAME = "products_barcodes.db"

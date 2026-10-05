@@ -88,7 +88,9 @@ fun runSelectedOfflineModelAnalysisStreaming(
     context: Context,
     prefs: PreferencesManager,
     config: PromptConfig,
-    offlineImages: List<Bitmap>
+    offlineImages: List<Bitmap>,
+    /** Told exactly what the model is about to be asked — kept for the Report button. */
+    onPromptBuilt: (model: OfflineModelInfo, userPrompt: String, systemInstruction: String) -> Unit = { _, _, _ -> }
 ): Flow<String> {
     // See the matching check in runSelectedModelAnalysis above for why this comes first.
     ThermalGuard.blockingMessageOrNull(context)?.let { throw IllegalStateException(it) }
@@ -104,6 +106,7 @@ fun runSelectedOfflineModelAnalysisStreaming(
     }
 
     val (userPrompt, systemInstruction) = buildOfflinePrompt(prefs, model, config, offlineImages.size)
+    onPromptBuilt(model, userPrompt, systemInstruction)
     return OfflineInferenceEngine.analyzeStreaming(
         context, model, offlineImages, userPrompt, systemInstruction,
         maxImageDimension = OfflineImageSize.maxDimensionFor(prefs.offlineImageSize)

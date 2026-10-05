@@ -5,8 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -72,5 +75,27 @@ fun BoxScope.ImmersiveBackButton(onClick: () -> Unit) {
         contentAlignment = Alignment.Center
     ) {
         Text(text = "←", fontSize = 22.sp, color = Color.White)
+    }
+}
+
+/**
+ * The top-right counterpart to [ImmersiveBackButton]: reports the last answer an on-device model
+ * gave on this screen (see [ReportResponseDialog]). Same look, but labelled in words — "Report"
+ * has no glyph as obvious as a back arrow. Shown only while there is an answer to report.
+ */
+@Composable
+fun BoxScope.ImmersiveReportButton(onClick: () -> Unit) {
+    Box(
+        modifier = Modifier
+            .align(Alignment.TopEnd)
+            .height(48.dp)
+            .clip(RoundedCornerShape(24.dp))
+            .background(Color.Black.copy(alpha = 0.55f))
+            .clickable(onClick = onClick)
+            .clearAndSetSemantics { contentDescription = "Report this answer." }
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.Center
+    ) {
+        Text(text = "Report", fontSize = 16.sp, color = Color.White)
     }
 }

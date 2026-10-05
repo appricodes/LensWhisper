@@ -5,7 +5,7 @@ ready to upload for the Lens Whisper Android app.
 
 The app downloads exactly one file from one fixed URL:
 
-    https://wikiponder.com/lense_whisper/products_barcodes.db
+    https://wikiponder.com/lens_whisper/products_barcodes.db
 
 (see ProductDbSource.DATABASE_URL in the app). There is no catalog and nothing to
 configure app-side, so this script's whole job is to make sure the file you are about
@@ -29,17 +29,17 @@ certain rather than probably. Upload it alongside the database.
 
 Uploading
 ---------
-Upload however you normally reach the host; the target directory /lense_whisper/
+Upload however you normally reach the host; the target directory /lens_whisper/
 already exists and is served.
 
 Whatever the transport, the result must be readable at:
 
-    https://wikiponder.com/lense_whisper/products_barcodes.db
-    https://wikiponder.com/lense_whisper/products_barcodes.db.sha256
+    https://wikiponder.com/lens_whisper/products_barcodes.db
+    https://wikiponder.com/lens_whisper/products_barcodes.db.sha256
 
 Check it landed with:
 
-    curl -sI https://wikiponder.com/lense_whisper/products_barcodes.db
+    curl -sI https://wikiponder.com/lens_whisper/products_barcodes.db
 
 ONE THING THE SERVER MUST GET RIGHT
 -----------------------------------
@@ -210,7 +210,7 @@ def main() -> None:
 
     sample(args.db)
 
-    print("\nUpload these to https://wikiponder.com/lense_whisper/ :")
+    print("\nUpload these to https://wikiponder.com/lens_whisper/ :")
     for name in upload:
         print(f"  {name}")
     if args.gzip:

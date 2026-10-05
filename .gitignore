@@ -59,3 +59,7 @@ play-release-key.json
 # Generated upload bundle for the app's product-database catalog (compressed copies of the
 # .sqlite3 files above plus catalog.json) - regenerate with publish_barcode_db.py
 tools/barcode_db/publish/
+
+# Server-side scripts uploaded by hand to wikiponder.com (contain the developer's private email
+# address, and this repository is published) - see network/ResponseReporter.kt
+/server/
