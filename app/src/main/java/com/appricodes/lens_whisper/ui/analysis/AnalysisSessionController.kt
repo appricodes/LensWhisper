@@ -246,9 +246,10 @@ class AnalysisSessionController(
     var pendingDownloadModel by mutableStateOf<OfflineModelInfo?>(null)
         private set
     private var pendingDownloadAction: (() -> Unit)? = null
-    /** True once the user backs the download dialog into the background ("Continue in
-     *  Background") — [pendingDownloadModel]/[pendingDownloadAction] stay tracked (so
-     *  auto-resume-on-complete still fires) but [ObserveDownloads] stops rendering it. */
+    /** True while the "still downloading" notice stands in for the progress dialog (see
+     *  [checkDownloadedOrRedirect]) — [pendingDownloadModel]/[pendingDownloadAction] stay tracked
+     *  (so auto-resume-on-complete still fires) but [ObserveDownloads] doesn't render the progress
+     *  dialog until "Show Progress". */
     var downloadDialogHidden by mutableStateOf(false)
         private set
     var stillDownloadingModel by mutableStateOf<OfflineModelInfo?>(null)
@@ -334,7 +335,6 @@ class AnalysisSessionController(
         showThermalWarning = false
     }
     fun dismissDownloadPrompt() { pendingDownloadModel = null; pendingDownloadAction = null; downloadDialogHidden = false }
-    fun hideDownloadDialog() { downloadDialogHidden = true }
     fun dismissStillDownloadingDialog() { stillDownloadingModel = null }
 
     /** Starts the repeating "waiting for the model" tone — call once frames are actually ready to
@@ -797,8 +797,8 @@ class AnalysisSessionController(
      * If [model] isn't downloaded yet, opens the download-size prompt instead of running
      * [action], and auto-resumes [action] once that model finishes downloading (observed via
      * [ObserveDownloads]). No-op passthrough for MLKit/Local Server (`model == null`). If [model] is
-     * *already* downloading right now (e.g. the user backed the progress dialog into the
-     * background via "Continue in Background" and then tapped one of that model's buttons),
+     * *already* downloading right now (e.g. the system's download manager resumed it after the app
+     * was closed mid-download, and then one of that model's buttons was tapped),
      * shows a "still downloading, wait or pick another model" notice instead of the download
      * prompt — re-prompting to download something already downloading makes no sense.
      */
@@ -861,8 +861,7 @@ class AnalysisSessionController(
                 DownloadProgressDialog(
                     activeDownload = activeDownload,
                     displayName = model.displayName,
-                    onCancel = { ModelDownloader.cancel(context); dismissDownloadPrompt() },
-                    onContinueInBackground = { hideDownloadDialog() }
+                    onCancel = { ModelDownloader.cancel(context); dismissDownloadPrompt() }
                 )
             }
         }

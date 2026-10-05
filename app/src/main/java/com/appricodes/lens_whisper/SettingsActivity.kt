@@ -215,13 +215,6 @@ fun SettingsScreen(
 	var productDbChecking by remember { mutableStateOf(false) }
 	var productDbPendingDownload by remember { mutableStateOf<ProductDbInfo?>(null) }
 	var productDbPendingRemove by remember { mutableStateOf(false) }
-	// Whether the user has asked to stop watching the download — NOT whether the dialog is up.
-	// The difference matters: the downloader re-emits its progress several times a second, so a
-	// "dialog is visible" flag set from that stream is rewritten to true within a frame of the user
-	// dismissing it, and "Continue in Background" silently does nothing. Visibility is derived
-	// below from "a download is running AND the user has not dismissed it" instead, which no
-	// progress tick can undo.
-	var productDbProgressDismissed by remember { mutableStateOf(false) }
 	val productDbState by ProductDbDownloader.state.collectAsState()
 	val productDbDownloading = productDbState is ProductDbDownloadState.Downloading ||
 		productDbState == ProductDbDownloadState.Finishing
@@ -251,18 +244,15 @@ fun SettingsScreen(
 		when (val state = productDbState) {
 			is ProductDbDownloadState.Downloading, ProductDbDownloadState.Finishing -> Unit
 			ProductDbDownloadState.Completed -> {
-				productDbProgressDismissed = false
 				refreshProductDbStatus()
 				AccessibilityUtils.announceToTalkBack(context, "Product database installed. $productDbSummary.")
 				ProductDbDownloader.acknowledgeState()
 			}
 			is ProductDbDownloadState.Failed -> {
-				productDbProgressDismissed = false
 				AccessibilityUtils.announceToTalkBack(context, "Download failed. ${state.message}")
 				ProductDbDownloader.acknowledgeState()
 			}
 			ProductDbDownloadState.Cancelled -> {
-				productDbProgressDismissed = false
 				AccessibilityUtils.announceToTalkBack(context, "Download cancelled.")
 				ProductDbDownloader.acknowledgeState()
 			}
@@ -956,7 +946,6 @@ fun SettingsScreen(
 			isUpdate = productDbInstalled,
 			onConfirm = {
 				productDbPendingDownload = null
-				productDbProgressDismissed = false
 				ProductDbDownloader.start(context, info)
 			},
 			onCancel = { productDbPendingDownload = null }
@@ -978,7 +967,7 @@ fun SettingsScreen(
 		)
 	}
 
-	if (productDbDownloading && !productDbProgressDismissed) {
+	if (productDbDownloading) {
 		val downloading = productDbState as? ProductDbDownloadState.Downloading
 		ProductDbProgressDialog(
 			bytesDownloaded = downloading?.bytesDownloaded ?: 0L,
@@ -986,8 +975,7 @@ fun SettingsScreen(
 			isFinishing = productDbState == ProductDbDownloadState.Finishing,
 			// No visibility flag to clear: the dialog goes away because the service stops
 			// reporting a download, which is the thing that actually happened.
-			onCancel = { ProductDbDownloader.cancel(context) },
-			onHide = { productDbProgressDismissed = true }
+			onCancel = { ProductDbDownloader.cancel(context) }
 		)
 	}
 }

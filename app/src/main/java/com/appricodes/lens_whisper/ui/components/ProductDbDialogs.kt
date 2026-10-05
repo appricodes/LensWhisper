@@ -12,7 +12,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
@@ -119,20 +118,19 @@ fun ProductDbRemoveDialog(
     )
 }
 
-/** Progress while the database downloads. The user can leave — the system's download manager
- *  carries on with its own notification — so this is a window onto it, not a modal that has to be
- *  kept open. */
+/** Progress while the database downloads. Stays up until the download finishes or is cancelled:
+ *  Back and taps outside it do nothing, and there is deliberately no "Continue in Background"
+ *  button any more. */
 @Composable
 fun ProductDbProgressDialog(
     bytesDownloaded: Long,
     totalBytes: Long,
     isFinishing: Boolean,
-    onCancel: () -> Unit,
-    onHide: () -> Unit
+    onCancel: () -> Unit
 ) {
     val percent = if (totalBytes > 0) ((bytesDownloaded * 100) / totalBytes).toInt().coerceIn(0, 100) else 0
     AlertDialog(
-        onDismissRequest = onHide,
+        onDismissRequest = {},
         title = { Text("Downloading") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -164,17 +162,9 @@ fun ProductDbProgressDialog(
                     )
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
                 }
-                Text(
-                    text = "You can leave this screen — the download carries on in the background.",
-                    fontSize = 14.sp,
-                    color = Color.Gray
-                )
             }
         },
         confirmButton = {
-            TextButton(onClick = onHide) { Text("Continue in Background") }
-        },
-        dismissButton = {
             // Deliberately unavailable while finishing: cancelling half way through the check leaves
             // a partial file that would be rejected anyway, and the wording above has just told the
             // user not to interrupt it.

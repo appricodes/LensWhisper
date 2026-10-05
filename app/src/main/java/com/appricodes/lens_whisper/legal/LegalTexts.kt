@@ -206,10 +206,12 @@ Any change to this policy will appear in an app update.
 
     const val LICENSES = """This app downloads and runs AI models created by third parties. They are not our work and each remains under its own licence. By downloading a model in this app you also accept that model's licence.
 
-GEMMA (Google)
-Gemma models are made available under the Gemma Terms of Use and the Gemma Prohibited Use Policy, not under an open-source licence. Use of the model in this app is subject to those terms.
-Terms: ai.google.dev/gemma/terms
-Prohibited Use Policy: ai.google.dev/gemma/prohibited_use_policy
+GEMMA 4 E2B AND E4B (Google)
+Licensed under the Apache License, Version 2.0.
+Licence: ai.google.dev/gemma/docs/gemma_4_license
+
+INTERNVL3.5 1B AND 2B (OpenGVLab, Shanghai AI Laboratory)
+Licensed under the Apache License, Version 2.0. Their language part is Qwen3 (Alibaba Cloud), also under the Apache License, Version 2.0.
 
 QWEN2-VL 2B (Alibaba Cloud)
 Licensed under the Apache License, Version 2.0.

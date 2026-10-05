@@ -289,15 +289,12 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
         )
     }
 
-    var downloadDialogHiddenHere by remember { mutableStateOf(false) }
-    LaunchedEffect(activeDownload?.modelId) { downloadDialogHiddenHere = false }
-    if (activeDownload != null && !downloadDialogHiddenHere) {
+    if (activeDownload != null) {
         val downloadingModel = offlineModels.find { it.id == activeDownload.modelId }
         DownloadProgressDialog(
             activeDownload = activeDownload,
             displayName = downloadingModel?.displayName ?: "model",
-            onCancel = { ModelDownloader.cancel(context) },
-            onContinueInBackground = { downloadDialogHiddenHere = true }
+            onCancel = { ModelDownloader.cancel(context) }
         )
     }
 

@@ -8,7 +8,7 @@ photo ever leaves the phone.
 ## Features
 
 - **Describe** scenes, photos and video frames with an on-device vision-language model
-  (Gemma, Qwen2-VL or SmolVLM2 via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
+  (Gemma 4, InternVL3.5, Qwen2-VL or SmolVLM2 via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
   downloaded from Hugging Face on first use).
 - **Read text and documents** with bundled PaddleOCR PP-OCRv5 models on LiteRT (Latin, Chinese,
   Japanese, Korean, Devanagari, Persian, Arabic, Cyrillic).
@@ -58,4 +58,4 @@ The app contains no proprietary Google libraries (no ML Kit or Play Services): b
 with [zxing-cpp](https://github.com/zxing-cpp/zxing-cpp) (Apache-2.0).
 
 The downloadable vision-language models are not part of this repository and each comes under its
-own licence (Gemma Terms of Use, Apache-2.0), shown in the app under Legal Information.
+own licence (all currently Apache-2.0), shown in the app under Legal Information.

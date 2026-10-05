@@ -40,23 +40,21 @@ fun DownloadPromptDialog(model: OfflineModelInfo, onConfirm: () -> Unit, onDismi
 /**
  * Blocking download-progress dialog — extracted from the original inline `AlertDialog` in
  * `ModelManagementActivity` so the model picker popup and the download-redirect flow can reuse it
- * without duplicating the progress/cancel wiring. [onContinueInBackground], when supplied, adds a
- * button that hides this dialog without cancelling the download — the system's download manager
- * keeps it running either way (see `ModelDownloader`), this only controls whether the UI blocks on
- * it.
+ * without duplicating the progress/cancel wiring. It stays up until the download finishes or is
+ * cancelled: Back and taps outside it do nothing, and there is deliberately no "Continue in
+ * Background" button any more.
  */
 @Composable
 fun DownloadProgressDialog(
     activeDownload: ModelDownloadState.Downloading,
     displayName: String,
-    onCancel: () -> Unit,
-    onContinueInBackground: (() -> Unit)? = null
+    onCancel: () -> Unit
 ) {
     val progress = if (activeDownload.totalBytes > 0) {
         (activeDownload.bytesDownloaded.toFloat() / activeDownload.totalBytes.toFloat()).coerceIn(0f, 1f)
     } else 0f
     AlertDialog(
-        onDismissRequest = { onContinueInBackground?.invoke() },
+        onDismissRequest = {},
         title = { Text("Downloading $displayName") },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -64,16 +62,14 @@ fun DownloadProgressDialog(
                 LinearProgressIndicator(progress = { progress }, modifier = Modifier.fillMaxWidth())
             }
         },
-        confirmButton = { TextButton(onClick = onCancel) { Text("Cancel Download") } },
-        dismissButton = if (onContinueInBackground != null) {
-            { TextButton(onClick = onContinueInBackground) { Text("Continue in Background") } }
-        } else null
+        confirmButton = { TextButton(onClick = onCancel) { Text("Cancel Download") } }
     )
 }
 
 /**
  * Shown when the user taps a button belonging to a model that's already downloading right now
- * (e.g. they backed the progress dialog into the background, then tapped that model's button) —
+ * (e.g. one the system's download manager resumed after the app was closed mid-download, then
+ * that model's button was tapped) —
  * re-showing the "download now?" prompt for something already downloading would make no sense.
  */
 @Composable

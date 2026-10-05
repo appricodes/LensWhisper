@@ -1,11 +1,75 @@
 {
   "models": [
     {
+      "id": "internvl3_5_1b",
+      "multilingual": true,
+      "displayName": "InternVL3.5 1000M",
+      "family": "InternVL3.5",
+      "description": "The smallest and lightest model here: the one to try on a phone with little free memory. Quick, but less accurate than the larger models, especially with small print. Still makes mistakes - check anything that matters.",
+      "variants": [
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 817517936,
+          "downloadUrl": "https://huggingface.co/litert-community/InternVL3_5-1B/resolve/main/model.litertlm",
+          "fileName": "internvl3_5_1b.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
+      "id": "smolvlm2_2200m",
+      "multilingual": false,
+      "displayName": "SmolVLM2 2200M",
+      "family": "SmolVLM2",
+      "description": "Clearly behind Gemma4, Qwen-VL and InternVL3.5 in accuracy, and only understands English. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
+      "variants": [
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 1511123888,
+          "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-2.2B/resolve/main/SmolVLM2-2.2B.litertlm",
+          "fileName": "smolvlm2_2200m.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
+      "id": "internvl3_5_2b",
+      "multilingual": true,
+      "displayName": "InternVL3.5 2000M",
+      "family": "InternVL3.5",
+      "description": "A newer mid-sized model, good at reading text and documents for its size. Moderate download. Still misreads digits and small print - never rely on it for a dosage, a price, or a date.",
+      "variants": [
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 1613223280,
+          "downloadUrl": "https://huggingface.co/litert-community/InternVL3_5-2B/resolve/main/model.litertlm",
+          "fileName": "internvl3_5_2b.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
+      "id": "qwen_vl_2b",
+      "multilingual": true,
+      "displayName": "Qwen-VL 2000M",
+      "family": "Qwen-VL",
+      "description": "Second most accurate after Gemma4, and often the best of the catalogue at reading text and signs. Moderate download, reasonable speed on a mid-range phone. Supports Explore. Still misreads digits and small print - never rely on it for a dosage, a price, or a date.",
+      "variants": [
+        {
+          "hardwareMatch": [],
+          "sizeBytes": 1783424544,
+          "downloadUrl": "https://huggingface.co/litert-community/Qwen2-VL-2B/resolve/main/Qwen2-VL-2B.litertlm",
+          "fileName": "qwen_vl_2b.litertlm",
+          "backend": "GPU"
+        }
+      ]
+    },
+    {
       "id": "gemma4_multimodal_2b",
       "multilingual": true,
       "displayName": "Gemma4 2000M",
       "family": "Gemma 4",
-      "description": "Most accurate model in this app. Best choice for reading text, understanding a cluttered scene, and answering your own questions. Largest download and needs a capable phone; on some chipsets it runs on the NPU and is fast, on others it is slow. Supports Explore. Still makes mistakes - check anything that matters.",
+      "description": "Very accurate, and good at reading text, understanding a cluttered scene, and answering your own questions. Large download and needs a capable phone; on some chipsets it runs on the NPU and is fast, on others it is slow. Supports Explore. Still makes mistakes - check anything that matters.",
       "variants": [
         {
           "hardwareMatch": ["tensor g5", "gs525", "zumapro"],
@@ -52,33 +116,17 @@
       ]
     },
     {
-      "id": "smolvlm2_2200m",
-      "multilingual": false,
-      "displayName": "SmolVLM2 2200M",
-      "family": "SmolVLM2",
-      "description": "The smallest model here: clearly behind Gemma4 and Qwen-VL in accuracy. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
-      "variants": [
-        {
-          "hardwareMatch": [],
-          "sizeBytes": 1511123888,
-          "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-2.2B/resolve/main/SmolVLM2-2.2B.litertlm",
-          "fileName": "smolvlm2_2200m.litertlm",
-          "backend": "GPU"
-        }
-      ]
-    },
-    {
-      "id": "qwen_vl_2b",
+      "id": "gemma4_multimodal_4b",
       "multilingual": true,
-      "displayName": "Qwen-VL 2000M",
-      "family": "Qwen-VL",
-      "description": "Second most accurate after Gemma4, and often the best of the catalogue at reading text and signs. Moderate download, reasonable speed on a mid-range phone. Supports Explore. Still misreads digits and small print - never rely on it for a dosage, a price, or a date.",
+      "displayName": "Gemma4 4000M",
+      "family": "Gemma 4",
+      "description": "The larger Gemma4: likely the most accurate model here, but the largest download, and it needs about 4 GB of free memory, so on most phones it will not fit. Slower than Gemma4 2000M. Still makes mistakes - check anything that matters.",
       "variants": [
         {
           "hardwareMatch": [],
-          "sizeBytes": 1783424544,
-          "downloadUrl": "https://huggingface.co/litert-community/Qwen2-VL-2B/resolve/main/Qwen2-VL-2B.litertlm",
-          "fileName": "qwen_vl_2b.litertlm",
+          "sizeBytes": 3659530240,
+          "downloadUrl": "https://huggingface.co/litert-community/gemma-4-E4B-it-litert-lm/resolve/main/gemma-4-E4B-it.litertlm",
+          "fileName": "gemma4_multimodal_4b.litertlm",
           "backend": "GPU"
         }
       ]
