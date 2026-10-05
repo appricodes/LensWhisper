@@ -216,9 +216,6 @@ Licensed under the Apache License, Version 2.0. Their language part is Qwen3 (Al
 QWEN2-VL 2B (Alibaba Cloud)
 Licensed under the Apache License, Version 2.0.
 
-SMOLVLM2 (Hugging Face)
-Licensed under the Apache License, Version 2.0.
-
 Model files listed above are hosted on Hugging Face and are downloaded directly by your device.
 
 YOLOv8m-seg (Ultralytics) — object and colour detection, and the Explore screens

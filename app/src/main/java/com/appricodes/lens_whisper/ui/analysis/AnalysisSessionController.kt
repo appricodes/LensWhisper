@@ -274,6 +274,10 @@ class AnalysisSessionController(
     var lastResponse by mutableStateOf<ReportableResponse?>(null)
         private set
 
+    /** A different model is now selected: the last answer was another model's, so the Report
+     *  button goes away rather than reporting it under the new one's screen. */
+    fun clearLastResponse() { lastResponse = null }
+
     /** True while [startVoiceRecognition] is actively listening — lets a volume-key long-press
      *  (see `VolumeKeyGestureHandler`) force-stop it the moment the key is released, unlike an
      *  on-screen mic tap/long-press, which always runs until the recognizer stops itself. */
@@ -284,7 +288,7 @@ class AnalysisSessionController(
     private val repository by lazy { OfflineModelsRepository(context.applicationContext) }
     private val speechRecognizer by lazy { SpeechRecognizer.createSpeechRecognizer(context) }
 
-    /** True for the on-device VLM catalog (Gemma4/SmolVLM2/Qwen-VL/...). Not MLKit (which never
+    /** True for the on-device VLM catalog (Gemma4/InternVL3.5/Qwen-VL/...). Not MLKit (which never
      *  routes through here — see `MlkitButtonProvider`) and not the Local Server. */
     private fun isOfflineVlmSelected(): Boolean =
         prefs.selectedModelId != "mlkit" && prefs.selectedModelId != LocalServerFeature.MODEL_ID

@@ -14,7 +14,7 @@ import java.io.File
  *
  * res/raw/offline_models.json schema — a single object with a "models" array; each entry has:
  *   id           unique, stable string — never reuse/change once shipped (used as the selection key)
- *   displayName  shown in the model picker
+ *   displayName  shown in the model picker, with " (English)" or " (Multilingual)" appended
  *   family       grouping label (e.g. "PaliGemma 2", "FastVLM")
  *   description  short device/size hint shown under the name
  *   multilingual true if the model understands and answers in non-English languages (default false)
@@ -66,16 +66,19 @@ class OfflineModelsRepository(private val context: Context) {
                     ?: variants.firstOrNull { it.hardwareMatch.isEmpty() }
                     ?: variants.firstOrNull()
                     ?: return@mapNotNull null
+                val multilingual = obj.optBoolean("multilingual", false)
                 OfflineModelInfo(
                     id = obj.getString("id"),
-                    displayName = obj.getString("displayName"),
+                    // Every place a model's name is shown or spoken also says which languages it
+                    // works in — an English-only model ignores the app's language setting.
+                    displayName = obj.getString("displayName") + if (multilingual) " (Multilingual)" else " (English)",
                     family = obj.optString("family", ""),
                     description = obj.optString("description", ""),
                     sizeBytes = chosen.sizeBytes,
                     downloadUrl = chosen.downloadUrl,
                     fileName = chosen.fileName,
                     backend = chosen.backend,
-                    multilingual = obj.optBoolean("multilingual", false)
+                    multilingual = multilingual
                 )
             }.sortedBy { it.sizeBytes }
         }.getOrElse { e ->
@@ -117,9 +120,10 @@ class OfflineModelsRepository(private val context: Context) {
     }
 
     companion object {
-        /** SmolVLM2 500M, removed 2026-10-04: too inaccurate to be worth offering. */
-        private val RETIRED_MODEL_IDS = setOf("smolvlm2_500m")
-        private val RETIRED_MODEL_FILES = listOf("smolvlm2_500m.litertlm")
+        /** SmolVLM2 500M, removed 2026-10-04: too inaccurate to be worth offering. SmolVLM2 2200M,
+         *  removed 2026-10-05: InternVL3.5 is smaller and more accurate. */
+        private val RETIRED_MODEL_IDS = setOf("smolvlm2_500m", "smolvlm2_2200m")
+        private val RETIRED_MODEL_FILES = listOf("smolvlm2_500m.litertlm", "smolvlm2_2200m.litertlm")
 
         /** Subdirectory of the app's external files directory that model downloads land in — the
          *  only place the system DownloadManager can write for this app. App-private all the same. */

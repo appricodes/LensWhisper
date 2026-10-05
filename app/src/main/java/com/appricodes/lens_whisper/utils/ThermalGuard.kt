@@ -8,7 +8,7 @@ import android.os.Build
 import android.os.PowerManager
 
 /**
- * Keeps the on-device VLM catalog (Gemma4, SmolVLM2, Qwen-VL, ...) from running while the phone is
+ * Keeps the on-device VLM catalog (Gemma4, InternVL3.5, Qwen-VL, ...) from running while the phone is
  * already thermally stressed — sustained inference is tens of seconds of near-continuous CPU/GPU
  * load, which is exactly the kind of work that makes a hot phone hotter right when the OS is trying
  * to cool it down. [com.appricodes.lens_whisper.inference.AnalysisRouter] checks this before every

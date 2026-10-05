@@ -2,7 +2,7 @@
   "models": [
     {
       "id": "internvl3_5_1b",
-      "multilingual": true,
+      "multilingual": false,
       "displayName": "InternVL3.5 1000M",
       "family": "InternVL3.5",
       "description": "The smallest and lightest model here: the one to try on a phone with little free memory. Quick, but less accurate than the larger models, especially with small print. Still makes mistakes - check anything that matters.",
@@ -17,24 +17,8 @@
       ]
     },
     {
-      "id": "smolvlm2_2200m",
-      "multilingual": false,
-      "displayName": "SmolVLM2 2200M",
-      "family": "SmolVLM2",
-      "description": "Clearly behind Gemma4, Qwen-VL and InternVL3.5 in accuracy, and only understands English. Generation is slow - several seconds per word on a mid-range chipset - so it suits unhurried use rather than quick checks.",
-      "variants": [
-        {
-          "hardwareMatch": [],
-          "sizeBytes": 1511123888,
-          "downloadUrl": "https://huggingface.co/litert-community/SmolVLM2-2.2B/resolve/main/SmolVLM2-2.2B.litertlm",
-          "fileName": "smolvlm2_2200m.litertlm",
-          "backend": "GPU"
-        }
-      ]
-    },
-    {
       "id": "internvl3_5_2b",
-      "multilingual": true,
+      "multilingual": false,
       "displayName": "InternVL3.5 2000M",
       "family": "InternVL3.5",
       "description": "A newer mid-sized model, good at reading text and documents for its size. Moderate download. Still misreads digits and small print - never rely on it for a dosage, a price, or a date.",

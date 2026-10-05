@@ -8,7 +8,7 @@ photo ever leaves the phone.
 ## Features
 
 - **Describe** scenes, photos and video frames with an on-device vision-language model
-  (Gemma 4, InternVL3.5, Qwen2-VL or SmolVLM2 via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
+  (Gemma 4, InternVL3.5 or Qwen2-VL via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
   downloaded from Hugging Face on first use).
 - **Read text and documents** with bundled PaddleOCR PP-OCRv5 models on LiteRT (Latin, Chinese,
   Japanese, Korean, Devanagari, Persian, Arabic, Cyrillic).

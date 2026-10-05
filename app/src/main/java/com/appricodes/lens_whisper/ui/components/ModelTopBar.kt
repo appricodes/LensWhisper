@@ -136,7 +136,18 @@ fun ModelTopBar(
             // starts/finishes streaming — the one not in use invisible and non-interactive (alpha 0,
             // disabled, no accessibility node) rather than absent, which reserves exactly the space
             // the real button would take, per explicit request.
-            val reportable = controller.lastResponse?.takeIf { !controller.isAnalyzing && selectedModelId != "mlkit" }
+            // Switching models — from the picker, Manage models, or a failed load falling back to
+            // Basic tasks — drops the previous model's answer, so Report never comes back for it.
+            var answeredModelId by remember { mutableStateOf(selectedModelId) }
+            LaunchedEffect(selectedModelId) {
+                if (selectedModelId != answeredModelId) {
+                    controller.clearLastResponse()
+                    answeredModelId = selectedModelId
+                }
+            }
+            val reportable = controller.lastResponse?.takeIf {
+                !controller.isAnalyzing && it.modelId == selectedModelId
+            }
             Box(contentAlignment = Alignment.Center) {
                 Button(
                     onClick = { controller.stopAnalysis() },
