@@ -122,7 +122,6 @@ class MlkitButtonProvider(
     // second one while it's still set, rather than letting two requests race each other.
     private var isBusy by mutableStateOf(false)
     private var lastTextText: String? = null
-    private var lastSimpleColorText: String? = null
     // The volume-key/on-screen "Repeat" action, for whichever single-shot mode last ran — set by
     // selectSingleShot right when the user triggers it, and re-invoked
     // (not just re-spoken) by repeatLastAction so a "repeat" genuinely captures a fresh photo, the
@@ -278,8 +277,10 @@ class MlkitButtonProvider(
                         OfflineColorDetector.namedDominantColors(centerCrop(bitmap, SIMPLE_COLOR_CROP_SIZE), k = 2)
                     }
                     val text = if (colors.isEmpty()) "Could not detect a color." else colors.joinToString(" and ")
-                    if (continuousEnabled) speakIfChanged(lastSimpleColorText, text) { lastSimpleColorText = it }
-                    else { speak(text); lastSimpleColorText = text }
+                    // Every reading is said, even the same colour as last time: in continuous mode the
+                    // next one is only taken once this has been heard out (see ObserveContinuousLoop).
+                    if (continuousEnabled) VolumeShortcuts.interruptTalkBackSpeech(context)
+                    speak(text)
                 }
                 else -> {}
             }
