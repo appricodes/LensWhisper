@@ -72,6 +72,7 @@ import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.SpeechOutput
 import com.appricodes.lens_whisper.utils.ImageScaling
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import com.appricodes.lens_whisper.utils.VolumeKeyGestureHandler
@@ -690,6 +691,7 @@ private fun CameraScreen(
  */
 @Composable
 private fun DisclaimerSummaryStrip(onClick: () -> Unit) {
+    val context = LocalContext.current
     Text(
         text = LegalTexts.DISCLAIMER_SUMMARY,
         color = Color(0xFFFFD54F),
@@ -698,7 +700,7 @@ private fun DisclaimerSummaryStrip(onClick: () -> Unit) {
         modifier = Modifier
             .fillMaxWidth()
             .background(Color(0xFF2A2A2A))
-            .clickable(onClick = onClick)
+            .clickable { SpeechOutput.stop(context); onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp)
     )
 }

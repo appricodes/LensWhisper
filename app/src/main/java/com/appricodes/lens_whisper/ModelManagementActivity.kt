@@ -59,6 +59,7 @@ import com.appricodes.lens_whisper.ui.components.LocalServerInfoDialog
 import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.SpeechOutput
 import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
 import com.appricodes.lens_whisper.utils.OfflineImageSize
 import kotlinx.coroutines.launch
@@ -111,6 +112,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     val activeDownload = downloadState as? ModelDownloadState.Downloading
 
     fun selectMlkit() {
+        SpeechOutput.stop(context)
         prefs.selectedModelId = "mlkit"
         selectedId = "mlkit"
         OfflineInferenceEngine.release()
@@ -118,6 +120,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     }
 
     fun selectLocalServer() {
+        SpeechOutput.stop(context)
         prefs.selectedModelId = LocalServerFeature.MODEL_ID
         selectedId = LocalServerFeature.MODEL_ID
         OfflineInferenceEngine.release()
@@ -132,6 +135,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     // below, which shows a blocking "Loading…" alert until it's actually ready to use, instead
     // of that ~10s cost surfacing as unexplained lag the first time a button is tapped.
     fun selectOffline(model: OfflineModelInfo) {
+        SpeechOutput.stop(context)
         prefs.selectedModelId = model.id
         selectedId = model.id
         AccessibilityUtils.announceToTalkBack(context, "${model.displayName} selected.")

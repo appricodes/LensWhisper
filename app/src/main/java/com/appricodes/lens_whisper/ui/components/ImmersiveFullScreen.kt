@@ -26,6 +26,7 @@ import androidx.compose.ui.unit.sp
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import com.appricodes.lens_whisper.utils.SpeechOutput
 
 /**
  * Hides the status bar and navigation/gesture bar for as long as this is in composition — Explore
@@ -64,13 +65,14 @@ fun ImmersiveFullScreen() {
  */
 @Composable
 fun BoxScope.ImmersiveBackButton(onClick: () -> Unit) {
+    val context = LocalView.current.context
     Box(
         modifier = Modifier
             .align(Alignment.BottomEnd)
             .size(48.dp)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.55f))
-            .clickable(onClick = onClick)
+            .clickable { SpeechOutput.stop(context); onClick() }
             .clearAndSetSemantics { contentDescription = "Back" },
         contentAlignment = Alignment.Center
     ) {
@@ -85,13 +87,14 @@ fun BoxScope.ImmersiveBackButton(onClick: () -> Unit) {
  */
 @Composable
 fun BoxScope.ImmersiveReportButton(onClick: () -> Unit) {
+    val context = LocalView.current.context
     Box(
         modifier = Modifier
             .align(Alignment.TopEnd)
             .height(48.dp)
             .clip(RoundedCornerShape(24.dp))
             .background(Color.Black.copy(alpha = 0.55f))
-            .clickable(onClick = onClick)
+            .clickable { SpeechOutput.stop(context); onClick() }
             .clearAndSetSemantics { contentDescription = "Report this answer." }
             .padding(horizontal = 16.dp),
         contentAlignment = Alignment.Center

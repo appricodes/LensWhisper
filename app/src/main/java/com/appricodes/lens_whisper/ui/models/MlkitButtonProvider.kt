@@ -24,6 +24,7 @@ import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.SpeechOutput
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
 import com.appricodes.lens_whisper.utils.VolumeShortcuts
 import kotlinx.coroutines.CancellationException
@@ -156,6 +157,7 @@ class MlkitButtonProvider(
      *  a mode was actually active (so the caller can decide whether Back should also exit). */
     fun stopActiveMode(): Boolean {
         if (activeMode == Mode.NONE) return false
+        SpeechOutput.stop(context)
         if (activeMode == Mode.LIGHT) OfflineLightDetector.stop()
         activeMode = Mode.NONE
         continuousEnabled = false
@@ -177,6 +179,7 @@ class MlkitButtonProvider(
      *  on a freshly captured photo — not just re-speaking the previous result against the old one,
      *  which is stale by the time the user asks to repeat it. */
     fun repeatLastAction() {
+        SpeechOutput.stop(context)
         val action = lastRepeatableAction
         if (action != null) action()
         else AccessibilityUtils.announceToTalkBack(context, "No previous action to repeat.")
@@ -508,6 +511,9 @@ class MlkitButtonProvider(
             if (isContinuousActive) {
                 while (isActive) {
                     captureAndRun(activeMode, prefs)
+                    // Look again only once the last result has been heard out (immediate with
+                    // TalkBack, which doesn't say when it has finished).
+                    SpeechOutput.awaitSilence(context)
                     delay(CONTINUOUS_INTERVAL_MS)
                 }
             }

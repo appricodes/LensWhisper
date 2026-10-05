@@ -40,6 +40,7 @@ import com.appricodes.lens_whisper.ui.components.StillDownloadingDialog
 import com.appricodes.lens_whisper.ui.components.rememberPermissionRequester
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 import com.appricodes.lens_whisper.utils.ProcessingSoundPlayer
+import com.appricodes.lens_whisper.utils.SpeechOutput
 import com.appricodes.lens_whisper.utils.ThermalGuard
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -47,6 +48,8 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
 
 /** What a screen-specific frame source hands back to [AnalysisSessionController.runAnalysis].
@@ -411,6 +414,7 @@ class AnalysisSessionController(
         if (!isAnalyzing) return
         activeAnalysisJob?.cancel()
         stopProcessingChime()
+        SpeechOutput.stop(context)
         AccessibilityUtils.announceToTalkBack(context, "Stopped.")
     }
 
@@ -432,8 +436,15 @@ class AnalysisSessionController(
 
     private fun launchAnalysis(body: suspend () -> Unit) {
         val previous = activeAnalysisJob
+        // Right away, not a frame later: the previous answer may still be playing (its job long
+        // finished), and whatever the caller announces next must follow the stop, not be cut by it.
+        SpeechOutput.stop(context)
+        val previousWasRunning = previous?.isActive == true
         activeAnalysisJob = coroutineScope.launch {
             previous?.cancelAndJoin()
+            // A still-running previous job could queue one more sentence before its cancellation
+            // landed; silence that too.
+            if (previousWasRunning) SpeechOutput.stop(context)
             // After the join: the cancelled job records its partial answer as it unwinds.
             lastResponse = null
             isAnalyzing = true
@@ -482,6 +493,7 @@ class AnalysisSessionController(
      * whatever normal prompt ran last, rather than trying to "repeat" a one-off isolated crop.
      */
     suspend fun runAnalysisOnBitmap(config: PromptConfig, bitmap: Bitmap) {
+        SpeechOutput.stop(context)
         if (blockedByHeat()) return
         var report: ReportableResponse? = null
         val streamingFlow = try {
@@ -589,6 +601,9 @@ class AnalysisSessionController(
         suspend fun speak(sentence: String) {
             val trimmed = sentence.trim()
             if (trimmed.isEmpty()) return
+            // A delta that arrives between Stop/a new prompt and this job's cancellation landing
+            // must not be queued after the stop.
+            currentCoroutineContext().ensureActive()
             AccessibilityUtils.announceToTalkBack(context, trimmed)
         }
 
@@ -706,6 +721,7 @@ class AnalysisSessionController(
         targetCustomSlot: Int? = null,
         captureFrames: suspend (PromptConfig) -> CapturedBundle?
     ) {
+        SpeechOutput.stop(context)
         // The microphone is asked for here, on the first voice question, not at app start.
         if (!permissions.isGranted(Manifest.permission.RECORD_AUDIO)) {
             coroutineScope.launch {

@@ -37,6 +37,7 @@ import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController
 import com.appricodes.lens_whisper.ui.analysis.ReportableResponse
+import com.appricodes.lens_whisper.utils.SpeechOutput
 
 /**
  * Top bar shared by [com.appricodes.lens_whisper.CameraActivity] and the Video/Image describer:
@@ -114,7 +115,7 @@ fun ModelTopBar(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { showModelPicker = true }
+                    .clickable { SpeechOutput.stop(context); showModelPicker = true }
                     .clearAndSetSemantics { contentDescription = "Selected model: $selectedModelName. Double tap to change." }
             )
             ModelPickerPopup(
@@ -123,7 +124,7 @@ fun ModelTopBar(
                 prefs = prefs,
                 controller = controller,
                 selectedModelId = selectedModelId,
-                onModelSelected = { onModelSelected(it); refresh() },
+                onModelSelected = { SpeechOutput.stop(context); onModelSelected(it); refresh() },
                 onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) },
                 showMlkitOption = showMlkitOption
             )
@@ -161,7 +162,7 @@ fun ModelTopBar(
                     Text("Stop")
                 }
                 Button(
-                    onClick = { reportedResponse = reportable },
+                    onClick = { SpeechOutput.stop(context); reportedResponse = reportable },
                     enabled = reportable != null,
                     modifier = if (reportable != null) {
                         Modifier.clearAndSetSemantics { contentDescription = "Report this answer." }
@@ -173,7 +174,7 @@ fun ModelTopBar(
                 }
             }
             reportedResponse?.let { ReportResponseDialog(report = it, onDismiss = { reportedResponse = null }) }
-            Button(onClick = { showMoreMenu = true }) {
+            Button(onClick = { SpeechOutput.stop(context); showMoreMenu = true }) {
                 Text("More")
             }
             MoreMenu(

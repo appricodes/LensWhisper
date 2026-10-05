@@ -55,6 +55,7 @@ import com.appricodes.lens_whisper.ui.components.ProductDbProgressDialog
 import com.appricodes.lens_whisper.ui.components.ProductDbRemoveDialog
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.SpeechOutput
 import kotlinx.coroutines.launch
 
 class SettingsActivity : ComponentActivity() {
@@ -163,6 +164,13 @@ fun SettingsScreen(
 ) {
 	val context = androidx.compose.ui.platform.LocalContext.current
 	val sharedPrefs = remember { context.getSharedPreferences("LensWhisperPrefs", Context.MODE_PRIVATE) }
+
+	var speechEngine by remember { mutableStateOf(prefs.speechEngine) }
+	val speechEngines = remember { SpeechOutput.installedEngines(context) }
+	var speechDropdownExpanded by remember { mutableStateOf(false) }
+	fun speechEngineName(engine: String) =
+		if (engine == SpeechOutput.TALKBACK) "TalkBack (as before)"
+		else speechEngines.find { it.first == engine }?.second ?: engine
 
 	var selectedLanguageCode by remember { mutableStateOf(sharedPrefs.getString("selected_language_code", "en-US") ?: "en-US") }
 	var selectedLanguageName by remember { mutableStateOf(sharedPrefs.getString("selected_language", "English") ?: "English") }
@@ -401,6 +409,50 @@ fun SettingsScreen(
 			expanded = aiNarrationSectionExpanded,
 			onToggle = { aiNarrationSectionExpanded = !aiNarrationSectionExpanded }
 		) {
+		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+			Text(text = "Speech Output", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
+			Box(
+				modifier = Modifier
+					.fillMaxWidth()
+					.background(MaterialTheme.colorScheme.surfaceVariant)
+					.clickable { SpeechOutput.stop(context); speechDropdownExpanded = true }
+					.padding(16.dp)
+					.clearAndSetSemantics { contentDescription = "Results are spoken by ${speechEngineName(speechEngine)}. Double tap to change." },
+				contentAlignment = Alignment.CenterStart
+			) {
+				Text(text = speechEngineName(speechEngine), fontSize = 18.sp)
+				DropdownMenu(expanded = speechDropdownExpanded, onDismissRequest = { speechDropdownExpanded = false }) {
+					(listOf(SpeechOutput.TALKBACK) + speechEngines.map { it.first }).forEach { engine ->
+						DropdownMenuItem(text = { Text(speechEngineName(engine)) }, onClick = {
+							speechDropdownExpanded = false
+							speechEngine = engine
+							prefs.speechEngine = engine
+							// Said by the newly chosen voice — how someone who can't see the screen
+							// knows the choice took effect.
+							SpeechOutput.stop(context)
+							if (engine == SpeechOutput.TALKBACK) SpeechOutput.release()
+							SpeechOutput.speak(context, "Results will now be spoken by ${speechEngineName(engine)}.")
+						})
+					}
+				}
+			}
+			if (speechEngine != SpeechOutput.TALKBACK) {
+				Text(
+					text = "The voice is chosen in the engine's own settings; speech rate, pitch and language in Android's text-to-speech settings.",
+					fontSize = 14.sp,
+					color = Color.Gray
+				)
+				TextButton(onClick = {
+					SpeechOutput.stop(context)
+					SpeechOutput.openEngineSettings(context, speechEngine)
+				}) { Text("Voices: ${speechEngineName(speechEngine)} settings", fontSize = 16.sp) }
+				TextButton(onClick = {
+					SpeechOutput.stop(context)
+					SpeechOutput.openSystemSettings(context)
+				}) { Text("Speech rate, pitch and language", fontSize = 16.sp) }
+			}
+		}
+
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
 			Text(text = "Narration Language Profile", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
 			Box(

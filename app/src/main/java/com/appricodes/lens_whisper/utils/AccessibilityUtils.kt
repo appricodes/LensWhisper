@@ -1,19 +1,12 @@
-﻿package com.appricodes.lens_whisper.utils
+package com.appricodes.lens_whisper.utils
 import android.content.Context
-import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityManager
 object AccessibilityUtils {
+    /** Says [text] — through TalkBack or the text-to-speech engine chosen in Settings; see
+     *  [SpeechOutput]. Kept under its old name so every existing call site follows the setting. */
     fun announceToTalkBack(context: Context, text: String) {
-        val accessibilityManager = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        if (accessibilityManager.isEnabled) {
-            val event = AccessibilityEvent.obtain(AccessibilityEvent.TYPE_ANNOUNCEMENT).apply {
-                className = javaClass.name
-                packageName = context.packageName
-                this.text.add(text)
-            }
-            accessibilityManager.sendAccessibilityEvent(event)
-        }
+        SpeechOutput.speak(context, text)
     }
+
     fun formatTime(milliseconds: Long): String {
         if (milliseconds <= 0) return "0:00"
         val totalSeconds = milliseconds / 1000

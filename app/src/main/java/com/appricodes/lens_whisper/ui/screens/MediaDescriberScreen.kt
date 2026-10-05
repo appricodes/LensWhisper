@@ -57,6 +57,7 @@ import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
+import com.appricodes.lens_whisper.utils.SpeechOutput
 import com.appricodes.lens_whisper.utils.ImageScaling
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -601,6 +602,7 @@ private fun seekGestureModifier(direction: Int, label: String, exoPlayer: ExoPla
         forEachGesture {
             awaitPointerEventScope {
                 awaitPointerEvent(PointerEventPass.Main).changes.firstOrNull { it.changedToDown() } ?: return@awaitPointerEventScope
+                SpeechOutput.stop(context)
                 var continuousScrubJob: Job? = null
                 var isLongPressTriggered = false
                 val longPressTimerJob = coroutineScope.launch {

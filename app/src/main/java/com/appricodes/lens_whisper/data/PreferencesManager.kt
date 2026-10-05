@@ -190,6 +190,12 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getString("url_history", "") ?: ""
 		set(value) = standardPrefs.edit().putString("url_history", value).apply()
 
+	/** Who speaks the app's announcements and results: [com.appricodes.lens_whisper.utils.SpeechOutput.TALKBACK]
+	 *  (TalkBack announcements, the default) or the package name of a text-to-speech engine. */
+	var speechEngine: String
+		get() = standardPrefs.getString("speech_engine", null) ?: com.appricodes.lens_whisper.utils.SpeechOutput.TALKBACK
+		set(value) = standardPrefs.edit().putString("speech_engine", value).apply()
+
 	/** The id of the on-device model whose load is in progress right now, or null. Written
 	 *  synchronously (commit, not apply) right before a native load starts and cleared when it ends,
 	 *  so if the system kills the app mid-load — what running out of memory looks like — the next

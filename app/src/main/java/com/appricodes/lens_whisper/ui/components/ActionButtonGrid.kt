@@ -14,12 +14,14 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.ui.icons.GridIconGlyph
+import com.appricodes.lens_whisper.utils.SpeechOutput
 
 /**
  * One cell in an [ActionButtonGrid] row. Pass `null` in a row's cell list for an empty spacer.
@@ -58,6 +60,7 @@ fun ActionButtonGrid(
     transparent: Boolean = false,
     modifier: Modifier = Modifier
 ) {
+    val context = LocalContext.current
     Column(modifier = modifier.fillMaxSize()) {
         for (row in rows) {
             Row(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -71,9 +74,10 @@ fun ActionButtonGrid(
                     val hasDefaultGesture = cell.enabled && (cell.onClick != null || cell.onLongClick != null)
                     val finalModifier = when {
                         cell.customModifier != null -> cellModifier.then(cell.customModifier)
+                        // Any button silences what the app is saying before doing its own thing.
                         hasDefaultGesture -> cellModifier.combinedClickable(
-                            onClick = { cell.onClick?.invoke() },
-                            onLongClick = cell.onLongClick
+                            onClick = { SpeechOutput.stop(context); cell.onClick?.invoke() },
+                            onLongClick = cell.onLongClick?.let { longClick -> { SpeechOutput.stop(context); longClick() } }
                         )
                         else -> cellModifier
                     }.clearAndSetSemantics { contentDescription = cell.contentDescription }
