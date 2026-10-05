@@ -496,6 +496,7 @@ fun MediaDescriberScreen(
                 onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id },
                 showMoreMenuOpenCameraOption = true,
                 showMoreMenuVolumeKeyToggle = true,
+                onStopRepeatingTask = { mlkitProvider.stopRepeatingTask() },
                 backgroundColor = Color.Black.copy(alpha = 0.55f)
             )
             ActionButtonGrid(rows = provider.rows(ctx) + listOf(bottomRow), transparent = true, modifier = Modifier.weight(1f))

@@ -163,6 +163,16 @@ class MlkitButtonProvider(
         return true
     }
 
+    /** Ends a repeating task — continuous Read Text/Simple Color, or Light Level — if one is
+     *  running, and says so. For buttons that take the user elsewhere (More, the model picker):
+     *  the loop mustn't carry on behind them. Returns whether anything was stopped. */
+    fun stopRepeatingTask(): Boolean {
+        if (!isContinuousActive && !isLightActive) return false
+        stopActiveMode()
+        AccessibilityUtils.announceToTalkBack(context, "Stopped.")
+        return true
+    }
+
     /** Call from the host's onPause handling — continuous polling must not keep running in the background. */
     fun stopContinuous() {
         continuousEnabled = false

@@ -59,6 +59,9 @@ fun ModelTopBar(
     showMlkitOption: Boolean = true,
     showModelSelector: Boolean = true,
     showMoreButton: Boolean = true,
+    /** Ends any repeating task (continuous mode, Light Level) — called by More and the model
+     *  picker, which must not leave a loop running behind them. */
+    onStopRepeatingTask: () -> Unit = {},
     modifier: Modifier = Modifier,
     backgroundColor: Color = Color.Black
 ) {
@@ -115,7 +118,7 @@ fun ModelTopBar(
                 fontWeight = FontWeight.Bold,
                 modifier = Modifier
                     .weight(1f)
-                    .clickable { SpeechOutput.stop(context); showModelPicker = true }
+                    .clickable { SpeechOutput.stop(context); onStopRepeatingTask(); showModelPicker = true }
                     .clearAndSetSemantics { contentDescription = "Selected model: $selectedModelName. Double tap to change." }
             )
             ModelPickerPopup(
@@ -174,7 +177,7 @@ fun ModelTopBar(
                 }
             }
             reportedResponse?.let { ReportResponseDialog(report = it, onDismiss = { reportedResponse = null }) }
-            Button(onClick = { SpeechOutput.stop(context); showMoreMenu = true }) {
+            Button(onClick = { SpeechOutput.stop(context); onStopRepeatingTask(); showMoreMenu = true }) {
                 Text("More")
             }
             MoreMenu(

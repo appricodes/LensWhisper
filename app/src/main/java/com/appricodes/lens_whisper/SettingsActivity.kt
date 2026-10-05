@@ -168,6 +168,8 @@ fun SettingsScreen(
 	var speechEngine by remember { mutableStateOf(prefs.speechEngine) }
 	val speechEngines = remember { SpeechOutput.installedEngines(context) }
 	var speechDropdownExpanded by remember { mutableStateOf(false) }
+	// The language just chosen, while the reminder about the speech engine's language is showing.
+	var languageReminderFor by remember { mutableStateOf<String?>(null) }
 	fun speechEngineName(engine: String) =
 		if (engine == SpeechOutput.TALKBACK) "TalkBack"
 		else speechEngines.find { it.first == engine }?.second ?: engine
@@ -468,14 +470,44 @@ fun SettingsScreen(
 				DropdownMenu(expanded = langDropdownExpanded, onDismissRequest = { langDropdownExpanded = false }) {
 					availableLanguages.entries.sortedBy { it.value }.forEach { (code, name) ->
 						DropdownMenuItem(text = { Text(name) }, onClick = {
+							val changed = code != selectedLanguageCode
 							selectedLanguageCode = code
 							selectedLanguageName = name
 							sharedPrefs.edit().putString("selected_language_code", code).putString("selected_language", name).apply()
 							langDropdownExpanded = false
+							if (changed) languageReminderFor = name
 						})
 					}
 				}
 			}
+		}
+
+		languageReminderFor?.let { language ->
+			// The app writes its answers in this language, but it's the speech engine that reads
+			// them out — and it reads them in whatever language *it* is set to.
+			val speaker = if (speechEngine == SpeechOutput.TALKBACK) "TalkBack's speech engine" else speechEngineName(speechEngine)
+			AlertDialog(
+				onDismissRequest = { languageReminderFor = null },
+				title = { Text("Check the speech language") },
+				text = {
+					Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+						Text(
+							"Answers will now be in $language. To hear them spoken correctly, $speaker must " +
+								"support $language and have it chosen as its language. You can set this from " +
+								"Speech Output in these settings, or right here:"
+						)
+						if (speechEngine != SpeechOutput.TALKBACK) {
+							TextButton(onClick = {
+								SpeechOutput.openEngineSettings(context, speechEngine)
+							}) { Text("Voices: ${speechEngineName(speechEngine)} settings") }
+						}
+						TextButton(onClick = { SpeechOutput.openSystemSettings(context) }) {
+							Text("Speech rate, pitch and language")
+						}
+					}
+				},
+				confirmButton = { TextButton(onClick = { languageReminderFor = null }) { Text("OK") } }
+			)
 		}
 
 		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {

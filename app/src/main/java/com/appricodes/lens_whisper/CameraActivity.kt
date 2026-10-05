@@ -563,7 +563,8 @@ private fun CameraScreen(
             prefs = prefs,
             controller = controller,
             selectedModelId = selectedModelId,
-            onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id }
+            onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id },
+            onStopRepeatingTask = { mlkitProvider.stopRepeatingTask() }
         )
 
         val hasFlash = cameraController.hasFlashUnitForLens()
@@ -598,7 +599,8 @@ private fun CameraScreen(
                 contentDescription = if (!hasFlash) {
                     "Flash. Not available on this camera."
                 } else {
-                    "$flashLabel. Double tap to toggle. The flash fires only while a photo is taken."
+                    if (flashEnabled) "$flashLabel. Double tap to toggle. The flash fires only while a photo is taken."
+                    else "$flashLabel. Double tap to toggle."
                 },
                 icon = if (flashEnabled) GridIcon.FLASH_ON else GridIcon.FLASH_OFF,
                 enabled = hasFlash && !mlkitProvider.isLightActive,

@@ -26,12 +26,12 @@ import kotlin.math.pow
  * [detectAndPlayTone] is called far more often (once per camera frame, ~15-30/sec) than a 200ms
  * note can finish, so it only ever updates [targetNoteIndex]; the actual player
  * ([advanceTowardTarget]) runs one note at a time to completion (via
- * [MediaPlayer.setOnCompletionListener], never overlapping two notes), then steps
- * [currentNoteIndex] one position toward whatever [targetNoteIndex] is *by then* — which may have
- * moved again while the last note was playing. A big brightness jump is therefore heard as a
- * smooth run through the intervening notes, low to high or high to low, one at a time, never as a
- * jump straight to the target. When brightness stops changing, the current note just keeps
- * repeating so the meter still reads as "live" rather than going silent.
+ * [MediaPlayer.setOnCompletionListener], never overlapping two notes — each is only 200ms, and
+ * cutting one short would click), then plays the note for whatever [targetNoteIndex] is *by
+ * then*. Turning toward a light is heard on the very next note, at the new brightness's pitch —
+ * not as a run through every note in between, which used to take up to 20 notes (four seconds)
+ * to arrive. When brightness stops changing, the current note just keeps repeating so the meter
+ * still reads as "live" rather than going silent.
  *
  * [start]/[stop] bracket the whole thing explicitly — [detectAndPlayTone] refuses to (re)activate
  * the chain on its own. Camera frames arrive on a background executor with real latency; one that
@@ -102,12 +102,7 @@ object OfflineLightDetector {
             isPlaying = false
             return
         }
-        val target = targetNoteIndex
-        currentNoteIndex = when {
-            currentNoteIndex < target -> currentNoteIndex + 1
-            currentNoteIndex > target -> currentNoteIndex - 1
-            else -> currentNoteIndex
-        }
+        currentNoteIndex = targetNoteIndex
         isPlaying = true
         val player = playerFor(context, currentNoteIndex)
         player.seekTo(0)
