@@ -18,9 +18,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * Everything the app says goes through here: through TalkBack announcements (the default, and how
- * the app always worked) or, once the user picks one in Settings, straight to a text-to-speech
- * engine ([PreferencesManager.speechEngine]). The engine's own voice and language are whatever the
+ * Everything the app says goes through here: straight to a text-to-speech engine — the phone's
+ * default one until the user picks another in Settings — or, if they choose it, through TalkBack
+ * announcements ([PreferencesManager.speechEngine]). The engine's own voice and language are whatever the
  * user set in that engine's settings — this never calls `setLanguage`.
  *
  * - [speak] queues: a model's answer arrives sentence by sentence and every sentence must be heard.
@@ -95,6 +95,19 @@ object SpeechOutput {
     suspend fun awaitSilence(context: Context) {
         if (PreferencesManager(context).speechEngine == TALKBACK) return
         withTimeoutOrNull(SILENCE_TIMEOUT_MS) { speaking.first { !it } }
+    }
+
+    /** The engine the phone itself uses by default (Android's text-to-speech settings), or the
+     *  first installed one if that isn't set, or null if there is none. */
+    fun systemDefaultEngine(context: Context): String? {
+        val installed = context.packageManager
+            .queryIntentServices(Intent(TextToSpeech.Engine.INTENT_ACTION_TTS_SERVICE), 0)
+            .map { it.serviceInfo.packageName }
+        if (installed.isEmpty()) return null
+        val systemDefault = runCatching {
+            android.provider.Settings.Secure.getString(context.contentResolver, android.provider.Settings.Secure.TTS_DEFAULT_SYNTH)
+        }.getOrNull()
+        return systemDefault?.takeIf { it in installed } ?: installed.first()
     }
 
     /** The installed text-to-speech engines, as (package name, label). */

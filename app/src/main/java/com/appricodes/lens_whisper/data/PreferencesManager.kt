@@ -191,9 +191,14 @@ class PreferencesManager(val context: Context) {
 		set(value) = standardPrefs.edit().putString("url_history", value).apply()
 
 	/** Who speaks the app's announcements and results: [com.appricodes.lens_whisper.utils.SpeechOutput.TALKBACK]
-	 *  (TalkBack announcements, the default) or the package name of a text-to-speech engine. */
+	 *  (TalkBack announcements) or the package name of a text-to-speech engine. Until the user
+	 *  chooses, the phone's own default engine — saved the first time it's looked up, so a later
+	 *  change of the system default doesn't silently change the app's voice; TalkBack only if the
+	 *  phone has no engine at all. */
 	var speechEngine: String
-		get() = standardPrefs.getString("speech_engine", null) ?: com.appricodes.lens_whisper.utils.SpeechOutput.TALKBACK
+		get() = standardPrefs.getString("speech_engine", null)
+			?: com.appricodes.lens_whisper.utils.SpeechOutput.systemDefaultEngine(context)?.also { speechEngine = it }
+			?: com.appricodes.lens_whisper.utils.SpeechOutput.TALKBACK
 		set(value) = standardPrefs.edit().putString("speech_engine", value).apply()
 
 	/** The id of the on-device model whose load is in progress right now, or null. Written

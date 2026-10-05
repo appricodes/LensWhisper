@@ -258,7 +258,7 @@ private fun SegmentationExploreScreen(
     val highResFile = remember(highResImageUri) { highResImageUri?.path?.let { File(it) } }
     var instances by remember { mutableStateOf<List<DetectedInstance>>(emptyList()) }
     // Each instance's full spoken sentence, built via DetectionPhrasing.describeDetection and
-    // computed once right after detection rather than on every hover/touch — Palette color
+    // computed once right after detection rather than on every hover/touch — colour
     // extraction isn't free, and the hover path in particular needs to stay cheap enough to run on
     // every pointer-move event.
     var descriptions by remember { mutableStateOf<Map<DetectedInstance, String>>(emptyMap()) }

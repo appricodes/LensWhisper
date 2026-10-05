@@ -40,8 +40,8 @@ android {
         applicationId = "com.appricodes.lens_whisper"
         minSdk = 26
         targetSdk = 36
-        versionCode = 9
-        versionName = "1.8"
+        versionCode = 10
+        versionName = "1.9"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -100,7 +100,6 @@ dependencies {
     // is, and that token is useless without the server. See data/PreferencesManager.kt.)
 
     // Palette API for dominant color extraction
-    implementation(libs.androidx.palette)
 
     // Video Player
     implementation(libs.androidx.media3.exoplayer)

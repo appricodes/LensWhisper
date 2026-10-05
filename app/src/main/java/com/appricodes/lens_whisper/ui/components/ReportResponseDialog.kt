@@ -73,10 +73,9 @@ fun ReportResponseDialog(report: ReportableResponse, onDismiss: () -> Unit) {
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 Text(
-                    "Tell the developer about an answer from ${report.modelName} that was offensive, harmful " +
-                        "or wrong. This sends the question the model was asked, the model's name, its answer " +
-                        "and your message to the developer by email" +
-                        if (photoAvailable) ", and the photo too if you tick the box below." else "."
+                    "Tell us about an answer from ${report.modelName} that was offensive, harmful or wrong. " +
+                        "This sends us the question the model was asked, the model's name, its answer and your " +
+                        "message" + if (photoAvailable) ", and the photo too if you tick the box below." else "."
                 )
                 OutlinedTextField(
                     value = message,

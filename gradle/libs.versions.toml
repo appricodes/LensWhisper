@@ -14,7 +14,6 @@ composeBom = "2026.05.01"
 media = "1.8.0"
 media3Ui = "1.10.1"
 okhttp = "5.3.2"
-palette = "1.0.0"
 securityCrypto = "1.1.0"
 zxingCpp = "3.1.1"
 
@@ -46,7 +45,6 @@ androidx-ui-test-junit4 = { group = "androidx.compose.ui", name = "ui-test-junit
 androidx-material3 = { group = "androidx.compose.material3", name = "material3" }
 zxing-cpp = { module = "io.github.zxing-cpp:android", version.ref = "zxingCpp" }
 okhttp = { module = "com.squareup.okhttp3:okhttp", version.ref = "okhttp" }
-androidx-palette = { module = "androidx.palette:palette-ktx", version.ref = "palette" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

@@ -296,7 +296,7 @@ class MlkitButtonProvider(
     /**
      * Runs [OfflineSegmentationDetector] on [bitmap] and builds the sentence spoken for "Detect
      * Objects"/"Object and Color Detection". [withColors] adds each instance's top-2 dominant
-     * colors via [DetectedInstance.namedDominantColors] — the same Palette-based naming
+     * colors via [DetectedInstance.namedDominantColors] — the same HSV-based naming
      * [OfflineColorDetector] itself uses internally, just applied to this instance's own mask
      * instead of ML Kit's separate subject-segmentation step. Each instance's
      * own confidence is hedged into its phrasing by [DetectionPhrasing.describeDetection] rather
@@ -465,7 +465,7 @@ class MlkitButtonProvider(
 
     /** "Simple Color Detection"'s crop step: a plain, non-segmentation color reading — a fixed
      *  50x50-pixel square from the captured frame's exact center, named via
-     *  [OfflineColorDetector.namedDominantColors] (the same Palette-based ranking "Identify Objects
+     *  [OfflineColorDetector.namedDominantColors] (the same HSV-based ranking "Identify Objects
      *  and Colors" uses, just over a plain rectangular center crop instead of a detected instance's
      *  own mask). No detector run at all, unlike every other color-aware button on this grid — this
      *  one is deliberately just "what color is the middle of the frame" — see [Mode.SIMPLE_COLOR]'s

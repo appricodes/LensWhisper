@@ -169,7 +169,7 @@ fun SettingsScreen(
 	val speechEngines = remember { SpeechOutput.installedEngines(context) }
 	var speechDropdownExpanded by remember { mutableStateOf(false) }
 	fun speechEngineName(engine: String) =
-		if (engine == SpeechOutput.TALKBACK) "TalkBack (as before)"
+		if (engine == SpeechOutput.TALKBACK) "TalkBack"
 		else speechEngines.find { it.first == engine }?.second ?: engine
 
 	var selectedLanguageCode by remember { mutableStateOf(sharedPrefs.getString("selected_language_code", "en-US") ?: "en-US") }
