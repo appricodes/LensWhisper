@@ -25,7 +25,8 @@ object SegmenterContract {
     val RELEASE_CERT_SHA256: Set<String> = setOf(
         // Builds published on GitHub (signed by the developer's own key).
         "3DF72F3764EF8A0DD5B62D8F13138306DB58336BDAE2664C133A47F334F1F382",
-        // Google Play app signing certificate — added once the app is on Google Play.
+        // Google Play (Play app signing).
+        "B8913D90287F837FE6E8FA6525DDDF6D7953FECFF4A6B16969C8F8251AC49C71",
     )
 
     // ── Options (all optional) ───────────────────────────────────────────────────────────────
