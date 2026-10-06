@@ -20,17 +20,17 @@ import kotlin.math.roundToInt
 
 /**
  * One script the offline OCR can read. [label] is the exact string stored in
- * [com.appricodes.lens_whisper.data.PreferencesManager.ocrLanguage] (and shown in Settings) — the
- * first five are the labels the ML Kit-based recognizer used, kept verbatim so a choice saved
- * before the switch still maps to a model. [model] names the bundled
- * `assets/models/ocr/rec_<model>.tflite` + `dict_<model>.txt` pair.
+ * [com.appricodes.lens_whisper.data.PreferencesManager.ocrLanguage] (and shown in Settings).
+ * [paddleModel] is null for the scripts ML Kit reads (see [OfflineTextRecognizer]); for the rest it
+ * names the bundled `assets/models/ocr/rec_<model>.tflite` + `dict_<model>.txt` pair [PaddleOcr]
+ * uses — ML Kit has no Arabic-script or Cyrillic recognizer.
  */
-enum class OcrScript(val label: String, val model: String, val rightToLeft: Boolean = false) {
-    LATIN("Latin (English/EU)", "latin"),
-    CHINESE("Chinese", "ch"),
-    JAPANESE("Japanese", "ch"),
-    KOREAN("Korean", "korean"),
-    DEVANAGARI("Devanagari", "devanagari"),
+enum class OcrScript(val label: String, val paddleModel: String? = null, val rightToLeft: Boolean = false) {
+    LATIN("Latin (English/EU)"),
+    CHINESE("Chinese"),
+    JAPANESE("Japanese"),
+    KOREAN("Korean"),
+    DEVANAGARI("Devanagari"),
     PERSIAN("Persian", "arabic", rightToLeft = true),
     ARABIC("Arabic", "arabic", rightToLeft = true),
     CYRILLIC("Cyrillic (Russian etc.)", "cyrillic");
@@ -59,7 +59,8 @@ class OcrLine(val quad: FloatArray, val upright: FloatArray, val text: String, v
 }
 
 /**
- * Fully offline OCR: PaddleOCR PP-OCRv5 mobile (Apache-2.0) text detection + per-script
+ * Fully offline OCR for the scripts ML Kit can't read (Arabic script, Cyrillic — see
+ * [OcrScript.paddleModel]): PaddleOCR PP-OCRv5 mobile (Apache-2.0) text detection + per-script
  * recognition, run on LiteRT from bundled models under `assets/models/ocr/`.
  *
  * The models were converted from PaddlePaddle's official ONNX exports (ONNX -> PyTorch via
@@ -113,7 +114,7 @@ object PaddleOcr {
         // getPixels and software-canvas drawing both need a CPU-readable bitmap.
         val bitmap = if (image.config == Bitmap.Config.HARDWARE) image.copy(Bitmap.Config.ARGB_8888, false) else image
         val det = detector ?: open(context, "det.tflite").also { detector = it }
-        val rec = recognizerFor(context, script.model)
+        val rec = recognizerFor(context, requireNotNull(script.paddleModel) { "$script is read by ML Kit, not PaddleOCR" })
         val boxes = detect(det, bitmap)
         val (turns, sampled) = pageTurns(rec, bitmap, boxes)
         val lines = ArrayList<OcrLine>()

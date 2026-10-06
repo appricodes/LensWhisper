@@ -1,36 +1,32 @@
 LensWhisper
-Copyright (C) 2026 Mohammad Amiri Moalla
+Copyright (C) 2026 Mohammad Amiri Moalla. All rights reserved.
 
-This program is free software: you can redistribute it and/or modify it under the terms of the
-GNU Affero General Public License as published by the Free Software Foundation, either version 3
-of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
-even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
-Affero General Public License (the LICENSE file) for more details.
+This is proprietary software. Versions released before 1.12 were published under the GNU Affero
+General Public License v3.0; that does not apply to this or later versions.
 
 
 THIRD-PARTY COMPONENTS
 
-app/src/main/assets/models/yolov8m_seg_int8.tflite
-    YOLOv8m-seg by Ultralytics, licensed under AGPL-3.0 (https://github.com/ultralytics/ultralytics).
-    Exported with Ultralytics' own TFLite exporter, int8-quantized:
-        from ultralytics import YOLO
-        YOLO("yolov8m-seg.pt").export(format="tflite", int8=True, data="coco128-seg.yaml")
+app/src/main/assets/models/yolact_resnet101_550_int8.tflite
+    YOLACT (ResNet-101 FPN, 550x550, COCO) by Daniel Bolya et al., MIT License,
+    Copyright (c) 2019 Daniel Bolya (https://github.com/dbolya/yolact), via Ma-Dan's ONNX-exportable
+    fork (https://github.com/Ma-Dan/yolact, MIT). TensorFlow Lite int8 conversion from
+    PINTO_model_zoo (https://github.com/PINTO0309/PINTO_model_zoo, folder 074_Yolact), MIT License,
+    Copyright (c) 2024 Katsuya Hyodo. Unmodified.
 
-app/src/main/assets/models/ocr/det.tflite, rec_*.tflite, dict_*.txt
-    PP-OCRv5 mobile text detection (PP-OCRv5_mobile_det) and recognition (PP-OCRv5_mobile_rec and
-    the latin_/arabic_/cyrillic_/devanagari_/korean_ variants) by PaddlePaddle, licensed under
-    Apache-2.0 (https://github.com/PaddlePaddle/PaddleOCR). Converted from the official ONNX
-    releases (huggingface.co/PaddlePaddle/<model>_onnx): ONNX -> PyTorch with onnx2torch -> LiteRT
-    with litert-torch, as fixed-size signatures sharing one set of weights (detector 960x960,
-    960x736, 736x960, 960x544, 544x960; recognizer 48 high x 320/640/960/1280/1920 wide), then
-    weight-only int8 quantized with ai-edge-quantizer (recipe weight_only_wi8_afp32). Outputs were
-    checked against ONNX Runtime before quantization. dict_*.txt are the models' character_dict
-    lists from their inference.yml.
+app/src/main/assets/models/ocr/det.tflite, rec_arabic.tflite, rec_cyrillic.tflite, dict_*.txt
+    PP-OCRv5 mobile text detection (PP-OCRv5_mobile_det) and recognition (arabic_ and
+    cyrillic_PP-OCRv5_mobile_rec) by PaddlePaddle, licensed under Apache-2.0
+    (https://github.com/PaddlePaddle/PaddleOCR). Converted from the official ONNX releases
+    (huggingface.co/PaddlePaddle/<model>_onnx): ONNX -> PyTorch with onnx2torch -> LiteRT with
+    litert-torch, as fixed-size signatures sharing one set of weights (detector 960x960, 960x736,
+    736x960, 960x544, 544x960; recognizer 48 high x 320/640/960/1280/1920 wide), then weight-only
+    int8 quantized with ai-edge-quantizer (recipe weight_only_wi8_afp32). Outputs were checked
+    against ONNX Runtime before quantization. dict_*.txt are the models' character_dict lists from
+    their inference.yml.
 
-zxing-cpp (io.github.zxing-cpp:android), barcode decoding, Apache-2.0
-    (https://github.com/zxing-cpp/zxing-cpp).
+Google ML Kit (play-services-mlkit-text-recognition*, -barcode-scanning, -image-labeling)
+    Proprietary, used under the ML Kit Terms of Service (https://developers.google.com/ml-kit/terms).
 
 The on-device vision-language models (Gemma 4, InternVL3.5, Qwen2-VL) are not part of this repository;
 the app downloads them from Hugging Face at the user's request, each under its own licence.

@@ -26,8 +26,6 @@ object LegalTexts {
     const val OPERATOR_ADDRESS = "Schütenhofstraße 21, 47800 Krefeld, Germany"
     const val OPERATOR_EMAIL = "amiri.moalla@wikiponder.com"
 
-    /** Public source repository — required by the AGPL-3.0 the app is released under. */
-    const val SOURCE_CODE_URL = "github.com/appricodes/LensWhisper"
     // No phone number and no VAT ID (USt-IdNr.) - deliberately omitted rather than left blank, per
     // §5 DDG allowing both when not applicable (no VAT registration) or not offered (phone) as long
     // as email alone provides fast, direct contact - see this object's class doc.
@@ -125,7 +123,7 @@ This app may link to external websites over which we have no control. We accept 
 
 COPYRIGHT
 
-The app, its texts and its interface are protected by copyright. The AI models the app downloads and runs are the work of third parties and remain subject to their own licences — see Open-Source Licences in this screen.
+The app, its texts and its interface are protected by copyright. The AI models the app downloads and runs are the work of third parties and remain subject to their own licences — see Third-Party Licences in this screen.
 """
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -166,6 +164,8 @@ WHAT DOES USE THE NETWORK
 
 • Downloading AI models. Model files are fetched from Hugging Face (Hugging Face, Inc., USA) when you choose to download one. Your IP address is necessarily visible to them as part of that request, under their own privacy policy. No other information about you is sent.
 
+• Google ML Kit. Read Text and Read Document (for every script except Persian, Arabic and Cyrillic), Detect Objects and the barcode scanner use Google's ML Kit, supplied through Google Play services on your phone. The recognition itself runs on your device: your photos and what is recognised in them are not sent to Google or to us. Google Play services downloads ML Kit's recognition models from Google, and ML Kit may contact Google from time to time for updates and fixes. ML Kit also sends Google technical information about how these features perform and are used — for example the device model, the Android and app versions, which feature ran and how long it took — which Google uses to maintain and improve ML Kit and to detect misuse, under Google's privacy policy (policies.google.com/privacy) and the ML Kit terms (developers.google.com/ml-kit/terms). The provider is Google Ireland Limited, Gordon House, Barrow Street, Dublin 4, Ireland. Persian, Arabic and Cyrillic text, Identify Objects and Colors and the Explore screens use models bundled inside the app instead and involve no Google service.
+
 • Downloading the optional product database. If you choose to install it in Settings, a database of products is downloaded from our own server (wikiponder.com). This is an ordinary file download: nothing about you, your phone or anything you have scanned is sent. Once it is installed, scanning a product barcode is answered on your own phone, and no barcode is sent anywhere at all. The data itself comes from the Open Food Facts and Open Products Facts projects and is published by them under the Open Database Licence.
 
 • Looking up a product barcode online. This only happens for a barcode the product database on your phone cannot answer — or for every product barcode, if you have not installed it. If you scan such a barcode and agree to it, the barcode number alone is sent to UPCitemdb (upcitemdb.com), a product database operated by a third party in the United States, to find out what the product is. Your IP address is necessarily visible to them as part of that request, under their own privacy policy. No photo, no location and nothing identifying you or your device is sent, and nothing is sent about a QR code — a QR code carries its own content, which the app simply reads. The app asks before the first such lookup and does nothing until you agree; if you decline, scanning still works without a product description. The information that comes back is supplied by that database and is not guaranteed to be correct.
@@ -181,6 +181,7 @@ Choosing to export still takes those notes out of the app's private storage and 
 LEGAL BASES (GDPR)
 
 • Analysing your photos: not covered here at all, because it happens only on your device and involves no processing by us.
+• Google ML Kit's usage information: our legitimate interest, Art. 6(1)(f) GDPR, in providing text, object and barcode recognition that works reliably on your device, which ML Kit only offers on these terms. You can object at any time; in practice you can avoid it by not using the features listed under Google ML Kit above.
 • Looking up a product barcode online: your consent, Art. 6(1)(a) GDPR, given by accepting the notice shown before the first lookup. You may withdraw it at any time by simply not using the barcode scanner, or avoid it entirely by installing the offline product database; withdrawal does not affect lookups already made.
 • Downloading the product database: your consent, Art. 6(1)(a) GDPR, given by accepting the size and source shown before the download starts. It involves no personal data beyond the IP address any download necessarily reveals.
 • Reporting an answer: your consent, Art. 6(1)(a) GDPR, given by pressing Send after the dialog has said what will be sent.
@@ -202,7 +203,7 @@ Any change to this policy will appear in an app update.
     // Third-party licences
     // ─────────────────────────────────────────────────────────────────────────
 
-    const val LICENSES_TITLE = "Open-Source Licences"
+    const val LICENSES_TITLE = "Third-Party Licences"
 
     const val LICENSES = """This app downloads and runs AI models created by third parties. They are not our work and each remains under its own licence. By downloading a model in this app you also accept that model's licence.
 
@@ -218,20 +219,27 @@ Licensed under the Apache License, Version 2.0.
 
 Model files listed above are hosted on Hugging Face and are downloaded directly by your device.
 
-YOLOv8m-seg (Ultralytics) — object and colour detection, and the Explore screens
-Licensed under AGPL-3.0. Unlike the other models on this page, this one is bundled directly inside the app rather than downloaded. See docs.ultralytics.com/help/licensing for the licence itself.
+YOLACT (ResNet-101) — Identify Objects and Colors, and the Explore screens
+Bundled inside the app. YOLACT is by Daniel Bolya, Chong Zhou, Fanyi Xiao and Yong Jae Lee (github.com/dbolya/yolact); the model file is Katsuya Hyodo's (PINTO0309) TensorFlow Lite conversion, from PINTO_model_zoo, of Ma-Dan's export (github.com/Ma-Dan/yolact). Both are licensed under the MIT License:
 
-PP-OCRv5 (PaddlePaddle / PaddleOCR) — Read Text and Read Document
+Copyright (c) 2019 Daniel Bolya
+Copyright (c) 2024 Katsuya Hyodo
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+PP-OCRv5 (PaddlePaddle / PaddleOCR) — Read Text and Read Document in Persian, Arabic and Cyrillic
 The text detection and recognition models, licensed under the Apache License, Version 2.0, and bundled inside the app. They were converted from PaddlePaddle's official ONNX releases to LiteRT and their weights compressed to 8 bits; otherwise they are unchanged.
 
-LENSWHISPER ITSELF
-LensWhisper is free software, licensed under the GNU Affero General Public License, version 3 (AGPL-3.0). Its complete source code, including the bundled YOLOv8m-seg model, is available at:
-$SOURCE_CODE_URL
-You may use, study, change and share it under the terms of that licence. A copy of the AGPL-3.0 is at gnu.org/licenses/agpl-3.0
+GOOGLE ML KIT — Read Text and Read Document in other scripts, Detect Objects, Scan Barcode
+Provided by Google through Google Play services and used under the ML Kit Terms of Service (developers.google.com/ml-kit/terms). It is not open-source software.
 
 APPLICATION LIBRARIES
 
-This app is built with AndroidX, Jetpack Compose, CameraX, Media3, LiteRT, LiteRT-LM, zxing-cpp (barcode reading) and OkHttp, all licensed under the Apache License, Version 2.0.
+This app is built with AndroidX, Jetpack Compose, CameraX, Media3, LiteRT, LiteRT-LM and OkHttp, all licensed under the Apache License, Version 2.0.
 
 A copy of the Apache License, Version 2.0 is available at apache.org/licenses/LICENSE-2.0
 """
@@ -246,7 +254,7 @@ A copy of the Apache License, Version 2.0 is available at apache.org/licenses/LI
 
 The models run entirely on your own device. Nothing you photograph is sent anywhere for analysis.
 
-The models are general-purpose vision-language models made by third parties (see Open-Source Licences). They were not built for, trained on, or validated against the tasks this app puts them to, and their output is not verified by anything. Accuracy varies a great deal between models — you can see a description of each one, including how reliable it is, in Manage Advanced AI Models.
+The models are general-purpose vision-language models made by third parties (see Third-Party Licences). They were not built for, trained on, or validated against the tasks this app puts them to, and their output is not verified by anything. Accuracy varies a great deal between models — you can see a description of each one, including how reliable it is, in Manage Advanced AI Models.
 
 The app deliberately does not attempt to recognise who a person is, to infer anyone's emotions or state of mind, or to categorise anyone by origin, beliefs, health or other personal characteristics. Where a description mentions a person, it describes only what is visibly in the picture.
 """

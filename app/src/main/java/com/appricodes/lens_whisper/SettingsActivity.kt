@@ -46,6 +46,7 @@ import com.appricodes.lens_whisper.media.HeadsetShortcuts
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
 import com.appricodes.lens_whisper.offline.OcrScript
+import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.service.ProductDbDownloader
 import com.appricodes.lens_whisper.service.ProductDbDownloadState
 import com.appricodes.lens_whisper.ui.components.ExportDataDialog
@@ -552,6 +553,9 @@ fun SettingsScreen(
 							selectedOcrLanguage = lang
 							sharedPrefs.edit().putString("ocr_language", lang).apply()
 							ocrDropdownExpanded = false
+							// Fetch this script's ML Kit module now rather than on first use
+							// (a no-op for the bundled PaddleOCR scripts).
+							OfflineTextRecognizer.startModuleDownload(context, lang)
 						})
 					}
 				}

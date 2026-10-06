@@ -1,7 +1,9 @@
 # OCR model conversion
 
 Rebuilds `app/src/main/assets/models/ocr/` (PaddleOCR PP-OCRv5 mobile, Apache-2.0) from
-PaddlePaddle's official ONNX releases. Run on Linux/WSL with Python 3.10+:
+PaddlePaddle's official ONNX releases. The app bundles only the detector and the `arabic` and
+`cyrillic` recognizers — ML Kit reads every other script (see `offline/OfflineTextRecognizer.kt`);
+the other recognizers can still be built the same way. Run on Linux/WSL with Python 3.10+:
 
 ```bash
 pip install torch --index-url https://download.pytorch.org/whl/cpu

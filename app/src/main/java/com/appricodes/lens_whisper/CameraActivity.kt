@@ -410,7 +410,7 @@ private fun CameraScreen(
     /**
      * "Describe TV Image": captures the max-res/720p pair above, detects on the 720p copy, picks
      * the highest-confidence "tv" instance (COCO has no distinct "picture frame"/monitor class to
-     * fall back to — see [com.appricodes.lens_whisper.offline.CocoLabels] — and YOLO-COCO's `tv`
+     * fall back to — see [com.appricodes.lens_whisper.offline.CocoLabels] — and COCO's `tv`
      * class already tends to fire on framed screens/monitors generally), isolates it from the
      * full-resolution original via [SegmentationIsolation], and asks the selected on-device model
      * to describe it in detail. Wrapped in [AnalysisSessionController.runGuarded] by its caller so

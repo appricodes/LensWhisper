@@ -2,11 +2,7 @@ package com.appricodes.lens_whisper.offline
 
 import android.content.Context
 import android.graphics.Bitmap
-import android.graphics.Canvas
 import android.graphics.Color
-import android.graphics.Paint
-import android.graphics.Rect
-import android.graphics.RectF
 import org.tensorflow.lite.DataType
 import org.tensorflow.lite.Interpreter
 import org.tensorflow.lite.Tensor
@@ -14,93 +10,76 @@ import java.io.FileInputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.nio.channels.FileChannel
+import kotlin.math.exp
 import kotlin.math.floor
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sqrt
 
 /**
- * One detected object: its class name, confidence, bounding box (normalized 0..1 in the *original*
- * photo's coordinate space, not the model's letterboxed 640x640 input), and its exact pixel mask —
- * queryable via [containsNormalizedPoint] ("is this point part of it") without ever materializing a
- * full-resolution bitmap mask, and its outline drawable via [maskBoundaryEdgesNormalized] without
- * one either — both work directly off the compact [PROTO_SIZE]-resolution [protoMask].
+ * One detected object: its class name, confidence, bounding box (normalized 0..1 in the original
+ * photo's coordinate space), and its pixel mask — queryable via [containsNormalizedPoint] ("is this
+ * point part of it") and drawable via [maskBoundaryEdgesNormalized], both working directly off the
+ * compact [maskWidth] x [maskHeight] grid [mask], which spans the *whole* original photo (row-major;
+ * cell (x, y) covers normalized x/maskWidth..(x+1)/maskWidth, and the same for y).
+ *
+ * The grid is source-independent on purpose: the bundled YOLACT model produces it directly (its
+ * input is a plain squash-resize, so its proto grid already spans the full photo), and any other
+ * segmentation source only has to resample its own masks into the same shape.
  */
-class DetectedInstance internal constructor(
+class DetectedInstance(
     val label: String,
     val confidence: Float,
     val boxLeft: Float,
     val boxTop: Float,
     val boxRight: Float,
     val boxBottom: Float,
-    private val protoMask: BooleanArray,
-    private val letterbox: LetterboxInfo
+    private val mask: BooleanArray,
+    private val maskWidth: Int,
+    private val maskHeight: Int
 ) {
-    /** True if the point at normalized original-image coordinates ([nx], [ny], each 0..1) falls
-     *  inside this instance's actual mask — not just its bounding box. Re-derives the same
-     *  original-image -> letterboxed-640 -> proto-160 mapping [OfflineSegmentationDetector] used to
-     *  build [protoMask] in the first place, run in reverse. */
-    fun containsNormalizedPoint(nx: Float, ny: Float): Boolean {
-        val origX = nx * letterbox.originalWidth
-        val origY = ny * letterbox.originalHeight
-        val letterboxedX = origX * letterbox.gain + letterbox.padX
-        val letterboxedY = origY * letterbox.gain + letterbox.padY
-        val protoX = floor(letterboxedX / OfflineSegmentationDetector.DOWNSAMPLE).toInt()
-        val protoY = floor(letterboxedY / OfflineSegmentationDetector.DOWNSAMPLE).toInt()
-        val protoSize = OfflineSegmentationDetector.PROTO_SIZE
-        if (protoX < 0 || protoX >= protoSize || protoY < 0 || protoY >= protoSize) return false
-        return protoMask[protoY * protoSize + protoX]
+    init {
+        require(mask.size == maskWidth * maskHeight) { "mask size ${mask.size} != $maskWidth x $maskHeight" }
     }
 
-    /** Maps one proto-grid corner (continuous coordinates, 0..[OfflineSegmentationDetector.PROTO_SIZE]
-     *  on each axis — a cell's own corners are at integer coordinates) back to *original*-image
-     *  normalized (0..1) coordinates — the exact inverse of [containsNormalizedPoint]'s own
-     *  original -> letterboxed -> proto mapping, run on a grid corner instead of a query point. */
-    private fun protoToNormalized(protoX: Float, protoY: Float): Pair<Float, Float> {
-        val letterboxedX = protoX * OfflineSegmentationDetector.DOWNSAMPLE
-        val letterboxedY = protoY * OfflineSegmentationDetector.DOWNSAMPLE
-        val origX = (letterboxedX - letterbox.padX) / letterbox.gain
-        val origY = (letterboxedY - letterbox.padY) / letterbox.gain
-        return (origX / letterbox.originalWidth).coerceIn(0f, 1f) to (origY / letterbox.originalHeight).coerceIn(0f, 1f)
+    private fun isInside(x: Int, y: Int): Boolean {
+        if (x < 0 || x >= maskWidth || y < 0 || y >= maskHeight) return false
+        return mask[y * maskWidth + x]
     }
+
+    /** True if the point at normalized original-image coordinates ([nx], [ny], each 0..1) falls
+     *  inside this instance's actual mask — not just its bounding box. */
+    fun containsNormalizedPoint(nx: Float, ny: Float): Boolean =
+        isInside(floor(nx * maskWidth).toInt(), floor(ny * maskHeight).toInt())
 
     /**
-     * The mask's *exact* outline, in original-image normalized coordinates — every grid-aligned
-     * edge in [protoMask] where an in-mask cell borders an out-of-mask (or off-grid) neighbor, each
-     * one already mapped through [protoToNormalized]. Not a smoothed/interpolated contour (no
-     * marching-squares sub-cell interpolation) and not necessarily one connected loop per blob
-     * (a mask with a hole, or two separate regions sharing one label, produces more than one) —
-     * just the complete, precise set of boundary segments, which is all a caller drawing an outline
-     * actually needs: rendered together they trace the real shape at the mask's own [PROTO_SIZE]
-     * resolution, which is fine-grained enough that the per-cell "blockiness" is not visible at
-     * normal display sizes. Computed on demand rather than at detection time — see the caller
-     * (`SegmentationExploreActivity`), which memoizes this itself since nothing here needs it
-     * more than once per detection.
+     * The mask's exact outline, in original-image normalized coordinates — every grid-aligned edge
+     * where an in-mask cell borders an out-of-mask (or off-grid) neighbor. Not a smoothed contour
+     * and not necessarily one connected loop per blob (a mask with a hole, or two separate regions
+     * sharing one label, produces more than one) — just the complete set of boundary segments, which
+     * rendered together trace the real shape at the mask grid's own resolution. Computed on demand
+     * rather than at detection time — `SegmentationExploreActivity` memoizes it itself.
      */
     fun maskBoundaryEdgesNormalized(): List<Pair<Pair<Float, Float>, Pair<Float, Float>>> {
-        val protoSize = OfflineSegmentationDetector.PROTO_SIZE
-        fun isInside(x: Int, y: Int): Boolean {
-            if (x < 0 || x >= protoSize || y < 0 || y >= protoSize) return false
-            return protoMask[y * protoSize + x]
-        }
+        fun corner(x: Int, y: Int) = x.toFloat() / maskWidth to y.toFloat() / maskHeight
         val edges = mutableListOf<Pair<Pair<Float, Float>, Pair<Float, Float>>>()
-        for (y in 0 until protoSize) {
-            for (x in 0 until protoSize) {
+        for (y in 0 until maskHeight) {
+            for (x in 0 until maskWidth) {
                 if (!isInside(x, y)) continue
-                val xf = x.toFloat(); val yf = y.toFloat()
-                if (!isInside(x, y - 1)) edges.add(protoToNormalized(xf, yf) to protoToNormalized(xf + 1, yf)) // top
-                if (!isInside(x, y + 1)) edges.add(protoToNormalized(xf, yf + 1) to protoToNormalized(xf + 1, yf + 1)) // bottom
-                if (!isInside(x - 1, y)) edges.add(protoToNormalized(xf, yf) to protoToNormalized(xf, yf + 1)) // left
-                if (!isInside(x + 1, y)) edges.add(protoToNormalized(xf + 1, yf) to protoToNormalized(xf + 1, yf + 1)) // right
+                if (!isInside(x, y - 1)) edges.add(corner(x, y) to corner(x + 1, y)) // top
+                if (!isInside(x, y + 1)) edges.add(corner(x, y + 1) to corner(x + 1, y + 1)) // bottom
+                if (!isInside(x - 1, y)) edges.add(corner(x, y) to corner(x, y + 1)) // left
+                if (!isInside(x + 1, y)) edges.add(corner(x + 1, y) to corner(x + 1, y + 1)) // right
             }
         }
         return edges
     }
 
     /**
-     * Crops [sourceBitmap] (the same, full, un-letterboxed photo the detector ran on) to this
-     * instance's mask — pixels outside the mask are made fully transparent — and names its top
-     * [k] dominant colors via [OfflineColorDetector.namedDominantColors], which already expects
-     * exactly that "transparent outside the region of interest" convention.
+     * Crops [sourceBitmap] (the same, full photo the detector ran on) to this instance's mask —
+     * pixels outside the mask are made fully transparent — and names its top [k] dominant colors
+     * via [OfflineColorDetector.namedDominantColors], which already expects exactly that
+     * "transparent outside the region of interest" convention.
      */
     fun namedDominantColors(sourceBitmap: Bitmap, k: Int = 2): List<String> {
         val left = (boxLeft * sourceBitmap.width).toInt().coerceIn(0, sourceBitmap.width - 1)
@@ -126,98 +105,51 @@ class DetectedInstance internal constructor(
     }
 }
 
-/** Maps between the original photo's pixel space and the model's letterboxed 640x640 input —
- *  see [OfflineSegmentationDetector.preprocess]. [gain] and [padX]/[padY] follow the exact same
- *  rounding convention (`round(x - 0.1)`) Ultralytics' own `scale_boxes`/`scale_masks` use, so a
- *  point mapped through this and back lands on the same pixel their reference implementation would
- *  put it on. */
-internal class LetterboxInfo(val originalWidth: Int, val originalHeight: Int, val gain: Float, val padX: Float, val padY: Float)
-
 /**
- * The `com.google.ai.edge.litert:litert` Gradle artifact (see app/build.gradle.kts) still ships its
- * classes under the classic `org.tensorflow.lite.*` package — confirmed by decompiling the actual
- * AAR rather than assumed, since the Maven *coordinate* changing on Google's rebrand did not mean
- * the *package name* did.
+ * Runs the bundled YOLACT model (ResNet101-FPN backbone, 550x550 input, COCO's 80 classes, MIT
+ * licence — see [ASSET_PATH]) and decodes its raw output into [DetectedInstance]s: name,
+ * confidence, box and mask, capped to the top [MAX_DETECTIONS] by confidence.
  *
- * Runs the bundled YOLOv8-seg model (see `assets/models/` — **AGPL-3.0 licensed weights, see
- * [LICENSING NOTE] below**) and decodes its raw output into [DetectedInstance]s: name, confidence,
- * box, and an exactly-queryable mask, capped to the top [MAX_DETECTIONS] by confidence.
+ * The `com.google.ai.edge.litert:litert` artifact still ships its classes under the classic
+ * `org.tensorflow.lite.*` package.
  *
- * ## One bundled file: Medium, int8 only
- * From Ultralytics' own native exporter (`model.export(format="tflite", quantize="int8",
- * data="coco128-seg.yaml")`), NCHW input, *normalized* (0..1) box coordinates — see
- * [ASSET_PATH]. This class used to also bundle a Small variant, switchable in Settings, dropped
- * 2026-09-01 in favor of always using Medium — the "Recommended" choice was already the default, so
- * this removes a real decision from a screen-reader user without changing what most people actually
- * ran. (Nano and Large were dropped earlier the same way, kept only as a local backup outside the
- * app rather than bundled; float16 was dropped as a precision option entirely — it ran at
- * essentially FP32 speed on real ARM hardware (TFLite's float16 "quantization" only compresses
- * *stored* weights; compute still happens at full precision), consistently slower than int8 for no
- * accuracy win large enough to justify it, the same conclusion reached earlier about w8a16 (which
- * was `>4x` slower, for a different, kernel-support reason) — see git history for all of these.)
- *
- * The layout and box-scale axes are still resolved from the loaded model's own reported tensor
- * shape/values ([preprocess]'s `channelFirst` check, [decodeAndNms]'s `boxScale` check) rather than
- * hardcoded, even though there's now only one file to ever load — cheap insurance against a future
- * re-export drifting from what's true today, kept from when this had to hold for two files at once.
- * The dtype side is handled the same way via [TensorReader]: every tensor read/write goes through
- * [Tensor.dataType]/[Tensor.quantizationParams] rather than assuming FLOAT32, even though in
- * practice the file exposes plain FLOAT32 at the input/output boundary (the "int8" quantization is
- * internal to the graph; boundary tensors are dequantized by the exported model itself).
- *
- * Calibrated on 128 real, varied photos — Ultralytics' own `coco128-seg` sample (real COCO
- * train2017 images with segmentation labels, needed because this is a segmentation, not detection,
- * export) — preprocessed implicitly by Ultralytics' own export pipeline, not this class's
- * [preprocess]. An earlier pass through this same export used the *default* calibration set
- * `data="coco8-seg.yaml"` resolves to, which is only 4 images; Ultralytics' own exporter warns
- * "`>300 images recommended for INT8 calibration`" at that size, so this file was re-exported
- * against the larger, still-official 128-image set instead of leaving that warning unaddressed.
- *
- * ## LICENSING NOTE — read before any public release
- * [Ultralytics' own stated position](https://docs.ultralytics.com/help/licensing/) is that
- * AGPL-3.0 covers their trained model weights, not only their code — so shipping these files
- * publicly requires either releasing this whole app under AGPL-3.0 (source available to anyone who
- * gets the APK) or purchasing an Ultralytics Enterprise license. Neither has been done as of this
- * writing. Do not remove this note until one of those is actually true.
+ * ## The model file
+ * `yolact_resnet101_550_int8.tflite` is PINTO0309's PINTO_model_zoo export (folder `074_Yolact`) of
+ * Ma-Dan/yolact, an ONNX-exportable fork of dbolya/yolact. Fully int8, including the boundary
+ * tensors, so every read/write goes through the tensor's own quantization parameters. Tensors:
+ * - input `[1, 550, 550, 3]` NHWC, RGB scaled to 0..1. The ImageNet mean/std normalization is baked
+ *   into the graph (feeding pre-normalized values clips and loses most detections), and BGR input
+ *   measurably loses recall on COCO photos, so it really is RGB.
+ * - loc `[1, 19248, 4]`: raw SSD-style offsets against [priors].
+ * - conf `[1, 19248, 81]`: already softmaxed; class 0 is background.
+ * - mask coefficients `[1, 19248, 32]`: already tanh'd.
+ * - proto `[1, 138, 138, 32]`: the prototype masks, NHWC.
+ * Outputs are told apart by shape, not index, since the converter doesn't guarantee ordering.
  *
  * ## Decode math
- * Every formula below (letterbox gain/pad, box decode, the proto-mask matrix multiply, and the
- * crop-to-box step) is copied from Ultralytics' own `ultralytics/utils/ops.py`
- * (`scale_boxes`/`process_mask`/`crop_mask`) and `ultralytics/utils/nms.py`
- * (`non_max_suppression`'s box/class/mask-coefficient split), not reconstructed from general
- * knowledge of the architecture — this is exactly the class of code where a plausible-looking but
- * subtly wrong formula produces a mask that silently doesn't line up with what's on screen, which
- * is a bad failure mode for a blind user to hit.
- *
- * The model's own box-decode (grid + stride + DFL) is baked into the exported graph — this class
- * only has to run NMS (never baked in for this export; see [decodeAndNms]) and the mask
- * matmul/crop, entirely in Kotlin, on the model's own decoded boxes (pixel-space or normalized,
- * auto-detected — see above).
+ * Mirrors dbolya/yolact: `layers/box_utils.py` `decode` (variances 0.1/0.2), `data/config.py`
+ * `yolact_base_config` priors (see [priors]), and `layers/output_utils.py`'s mask assembly
+ * (`sigmoid(proto @ coeffs)`, cropped to the box, thresholded at 0.5). Input is a plain
+ * squash-resize to 550x550 (YOLACT's `preserve_aspect_ratio` is off), so a normalized coordinate in
+ * the model's input is the same normalized coordinate in the original photo — no letterbox to undo.
+ * Checked against a numpy port of this same decode on COCO photos (bus 0.93, umbrella 0.99, ...);
+ * on coco128 at the 0.20 floor about 92% of detections name a class that really is in the photo.
  */
 object OfflineSegmentationDetector {
 
-    private const val TAG = "OfflineSegmentationDetector"
+    private const val ASSET_PATH = "models/yolact_resnet101_550_int8.tflite"
 
-    /** The one bundled model — Ultralytics' own "m" (Medium) size, int8 only. Used to be one of two
-     *  switchable sizes (`PreferencesManager` used to carry a `segmentationModelSize` preference for
-     *  this); removed 2026-09-01 in favor of always loading Medium — see this object's doc. */
-    private const val ASSET_PATH = "models/yolov8m_seg_int8.tflite"
-
-    private const val MODEL_INPUT_SIZE = 640
-    private const val NUM_CLASSES = 80
+    private const val MODEL_INPUT_SIZE = 550
+    private const val NUM_CLASSES = 80 // excluding YOLACT's background class 0
     private const val NUM_MASK_COEFFS = 32
-    internal const val PROTO_SIZE = 160
-    internal const val DOWNSAMPLE = MODEL_INPUT_SIZE / PROTO_SIZE // 4 — proto grid is 4x downsampled from the 640 input, fixed by the model's own architecture, not configurable.
-    private const val CANDIDATE_FEATURES = 4 + NUM_CLASSES + NUM_MASK_COEFFS // 116
 
-    /** Below this, a detection is discarded before NMS even runs — see
-     *  [DetectionPhrasing.MINIMUM_CONFIDENCE] for why this reads that constant rather than defining
-     *  its own number: everything above it gets spoken, just hedged more the weaker it is, so the
-     *  two need to stay exactly in sync. */
+    /** Below this, a detection is discarded before NMS even runs — reads
+     *  [DetectionPhrasing.MINIMUM_CONFIDENCE] so the two stay in sync. */
     private const val CONFIDENCE_THRESHOLD = DetectionPhrasing.MINIMUM_CONFIDENCE
 
-    /** Standard greedy NMS IoU cutoff, matching Ultralytics' own `predict()` default. */
-    private const val IOU_THRESHOLD = 0.45f
+    /** Per-class NMS IoU cutoff. Lower than YOLACT's own 0.5 default: at 0.5 the same object kept
+     *  coming back as two overlapping instances, which a screen-reader user hears as two objects. */
+    private const val IOU_THRESHOLD = 0.3f
 
     /** Hard cap on how many objects a single photo can surface, applied after NMS, keeping the
      *  [MAX_DETECTIONS] highest-confidence survivors — the user's own explicit limit. */
@@ -226,15 +158,12 @@ object OfflineSegmentationDetector {
     @Volatile private var interpreter: Interpreter? = null
     private val loadLock = Any()
 
-    /** Loads the interpreter once and keeps it — there's only ever one model to load now, so
-     *  unlike [com.appricodes.lens_whisper.inference.OfflineInferenceEngine.preload] (which
-     *  genuinely does switch between different VLMs) this never has to close and reload. */
     private fun ensureInterpreter(context: Context): Interpreter {
         interpreter?.let { return it }
         synchronized(loadLock) {
             interpreter?.let { return it }
-            val model = loadModelFile(context)
-            val created = Interpreter(model)
+            val created = Interpreter(loadModelFile(context))
+            resolveOutputIndices(created)
             interpreter = created
             return created
         }
@@ -250,8 +179,7 @@ object OfflineSegmentationDetector {
 
     /**
      * Runs detection on [bitmap] and returns up to [MAX_DETECTIONS] instances, highest confidence
-     * first. Safe to call from a background thread (the caller — see the MLKit button handlers —
-     * already runs capture+detect off the main thread; this does no thread-switching of its own).
+     * first. Call from a background thread.
      */
     fun detect(context: Context, bitmap: Bitmap): List<DetectedInstance> = synchronized(runLock) {
         // Serialized: a TFLite Interpreter is not thread-safe, and two callers can overlap — e.g. a
@@ -264,322 +192,203 @@ object OfflineSegmentationDetector {
 
     private fun detectLocked(context: Context, bitmap: Bitmap): List<DetectedInstance> {
         val interpreter = ensureInterpreter(context)
-        val letterbox = computeLetterbox(bitmap.width, bitmap.height)
-        val inputBuffer = preprocess(bitmap, letterbox, interpreter.getInputTensor(0))
+        val input = preprocess(bitmap, interpreter.getInputTensor(0))
 
-        val outputMap = allocateOutputs(interpreter)
-        interpreter.runForMultipleInputsOutputs(arrayOf(inputBuffer), outputMap)
+        val outputs = HashMap<Int, Any>()
+        for (i in 0 until interpreter.outputTensorCount) {
+            val tensor = interpreter.getOutputTensor(i)
+            val elements = tensor.shape().fold(1) { acc, d -> acc * d }
+            outputs[i] = ByteBuffer.allocateDirect(tensor.dataType().byteSize() * elements).order(ByteOrder.nativeOrder())
+        }
+        interpreter.runForMultipleInputsOutputs(arrayOf(input), outputs)
 
-        val candidateBuffer = (outputMap[candidateOutputIndex] as ByteBuffer).apply { rewind() }
-        val protoBuffer = (outputMap[protoOutputIndex] as ByteBuffer).apply { rewind() }
-        val candidateReader = TensorReader(candidateBuffer, interpreter.getOutputTensor(candidateOutputIndex))
-        val protoReader = TensorReader(protoBuffer, interpreter.getOutputTensor(protoOutputIndex))
-
-        return decodeAndNms(candidateReader, protoReader, letterbox)
+        fun reader(index: Int) = TensorReader((outputs[index] as ByteBuffer).apply { rewind() }, interpreter.getOutputTensor(index))
+        return decode(reader(locIndex), reader(confIndex), reader(coeffIndex), reader(protoIndex))
     }
 
-    /**
-     * Reads a tensor's buffer as plain floats regardless of whether the underlying tensor is
-     * FLOAT32 (read directly) or a quantized INT8/UINT8 tensor (dequantized via its own
-     * scale/zero-point — `real = scale * (raw - zeroPoint)`, the standard TFLite formula). Every
-     * decode formula below reads through this rather than `ByteBuffer.asFloatBuffer()` directly,
-     * so the same decode code works for both bundled model variants — see this object's doc.
-     */
+    /** Reads a tensor's buffer as plain floats whether it's FLOAT32 or quantized INT8/UINT8
+     *  (`real = scale * (raw - zeroPoint)`). */
     private class TensorReader(buffer: ByteBuffer, tensor: Tensor) {
         private val dataType = tensor.dataType()
-        private val quant = tensor.quantizationParams()
+        private val scale = tensor.quantizationParams().scale
+        private val zeroPoint = tensor.quantizationParams().zeroPoint
         private val floatBuffer = if (dataType == DataType.FLOAT32) buffer.asFloatBuffer() else null
         private val byteBuffer = if (dataType != DataType.FLOAT32) buffer else null
 
         fun get(index: Int): Float = when (dataType) {
             DataType.FLOAT32 -> floatBuffer!!.get(index)
-            DataType.INT8 -> quant.scale * (byteBuffer!!.get(index).toInt() - quant.zeroPoint)
-            // A raw INT8 byte read as Kotlin's signed Byte is already the correct -128..127 value;
-            // UINT8's byte-pattern needs "and 0xFF" first so e.g. a stored 200 reads as 200, not -56.
-            DataType.UINT8 -> quant.scale * ((byteBuffer!!.get(index).toInt() and 0xFF) - quant.zeroPoint)
+            DataType.INT8 -> scale * (byteBuffer!!.get(index).toInt() - zeroPoint)
+            DataType.UINT8 -> scale * ((byteBuffer!!.get(index).toInt() and 0xFF) - zeroPoint)
             else -> error("Unsupported tensor dtype for detection output: $dataType")
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Preprocessing: letterbox resize to 640x640, matching Ultralytics' own LetterBox transform
-    // (aspect-preserving resize + centered mid-gray padding), since the model was trained and
-    // exported expecting exactly that, not a plain stretch-to-square resize.
-    // ─────────────────────────────────────────────────────────────────────
-
-    private fun computeLetterbox(width: Int, height: Int): LetterboxInfo {
-        val gain = min(MODEL_INPUT_SIZE.toFloat() / width, MODEL_INPUT_SIZE.toFloat() / height)
-        val scaledWidth = Math.round(width * gain)
-        val scaledHeight = Math.round(height * gain)
-        // The "-0.1" bias matches Ultralytics' own rounding exactly (scale_boxes/scale_masks) —
-        // without it, a photo whose padding lands exactly on a .5 pixel boundary can round the
-        // opposite way here than it does inside the reference implementation this was copied from,
-        // drifting every mask/box by one pixel at the edge.
-        val padX = Math.round((MODEL_INPUT_SIZE - scaledWidth) / 2f - 0.1f).toFloat()
-        val padY = Math.round((MODEL_INPUT_SIZE - scaledHeight) / 2f - 0.1f).toFloat()
-        return LetterboxInfo(width, height, gain, padX, padY)
-    }
-
-    /**
-     * Builds the model's input tensor. Two independent per-model choices are resolved from the
-     * input tensor's own reported shape/dtype rather than assumed, since the two bundled models
-     * were produced by different converters that disagree on both:
-     * - **Pixel layout**: the onnx2tf-produced float16 build is NHWC (`[1,640,640,3]`, TF's native
-     *   layout); the Ultralytics-native int8 build is NCHW (`[1,3,640,640]`, PyTorch's native
-     *   layout, preserved as-is by that converter instead of being transposed). Writing NHWC pixel
-     *   data into an NCHW input (or vice versa) doesn't fail loudly — it just silently feeds every
-     *   channel the wrong plane, which is a much worse failure than a crash.
-     * - **Value encoding**: FLOAT32 (both bundled models, as it happens — the int8 build's
-     *   "int8 weights + int8 activations" quantization is internal only; its own input/output
-     *   tensors are plain dequantized float32) vs INT8/UINT8 for a hypothetical future export that
-     *   keeps the boundary quantized, handled for completeness even though neither shipped file
-     *   currently exercises it.
-     */
-    private fun preprocess(bitmap: Bitmap, letterbox: LetterboxInfo, inputTensor: Tensor): ByteBuffer {
-        val scaledWidth = Math.round(bitmap.width * letterbox.gain)
-        val scaledHeight = Math.round(bitmap.height * letterbox.gain)
-
-        val letterboxed = Bitmap.createBitmap(MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(letterboxed)
-        canvas.drawColor(Color.rgb(114, 114, 114)) // Ultralytics' own fixed letterbox pad color.
-        val destRect = Rect(
-            letterbox.padX.toInt(), letterbox.padY.toInt(),
-            letterbox.padX.toInt() + scaledWidth, letterbox.padY.toInt() + scaledHeight
-        )
-        canvas.drawBitmap(bitmap, null, destRect, Paint(Paint.FILTER_BITMAP_FLAG))
+    /** Squash-resizes [bitmap] to 550x550 and writes RGB 0..1, quantized per [inputTensor]'s own
+     *  dtype/params, in NHWC order. */
+    private fun preprocess(bitmap: Bitmap, inputTensor: Tensor): ByteBuffer {
+        val resized = Bitmap.createScaledBitmap(bitmap, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE, true)
+        val pixels = IntArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE)
+        resized.getPixels(pixels, 0, MODEL_INPUT_SIZE, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
+        if (resized !== bitmap) resized.recycle()
 
         val dataType = inputTensor.dataType()
         val quant = inputTensor.quantizationParams()
-        // NCHW iff the channel dimension (3) is right after batch, matching this class's other
-        // shape-based layout checks (resolveOutputIndices) rather than a hardcoded assumption.
-        val channelFirst = inputTensor.shape().getOrNull(1) == 3
-
-        val buffer = ByteBuffer.allocateDirect(dataType.byteSize() * MODEL_INPUT_SIZE * MODEL_INPUT_SIZE * 3).order(ByteOrder.nativeOrder())
-        val pixels = IntArray(MODEL_INPUT_SIZE * MODEL_INPUT_SIZE)
-        letterboxed.getPixels(pixels, 0, MODEL_INPUT_SIZE, 0, 0, MODEL_INPUT_SIZE, MODEL_INPUT_SIZE)
-
-        fun putChannel(normalized: Float) {
+        val buffer = ByteBuffer.allocateDirect(dataType.byteSize() * pixels.size * 3).order(ByteOrder.nativeOrder())
+        fun put(value: Float) {
             when (dataType) {
-                DataType.FLOAT32 -> buffer.putFloat(normalized)
-                DataType.INT8 -> buffer.put(Math.round(normalized / quant.scale + quant.zeroPoint).coerceIn(-128, 127).toByte())
-                DataType.UINT8 -> buffer.put(Math.round(normalized / quant.scale + quant.zeroPoint).coerceIn(0, 255).toByte())
+                DataType.FLOAT32 -> buffer.putFloat(value)
+                DataType.INT8 -> buffer.put(Math.round(value / quant.scale + quant.zeroPoint).coerceIn(-128, 127).toByte())
+                DataType.UINT8 -> buffer.put(Math.round(value / quant.scale + quant.zeroPoint).coerceIn(0, 255).toByte())
                 else -> error("Unsupported tensor dtype for detection input: $dataType")
             }
         }
-
-        if (channelFirst) {
-            // NCHW: every red value for the whole image, then every green value, then every blue.
-            for (channel in 0..2) {
-                for (pixel in pixels) {
-                    val v = when (channel) { 0 -> Color.red(pixel); 1 -> Color.green(pixel); else -> Color.blue(pixel) }
-                    putChannel(v / 255f)
-                }
-            }
-        } else {
-            // NHWC: red, green, blue interleaved per pixel.
-            for (pixel in pixels) {
-                putChannel(Color.red(pixel) / 255f)
-                putChannel(Color.green(pixel) / 255f)
-                putChannel(Color.blue(pixel) / 255f)
-            }
+        for (pixel in pixels) {
+            put(Color.red(pixel) / 255f)
+            put(Color.green(pixel) / 255f)
+            put(Color.blue(pixel) / 255f)
         }
         buffer.rewind()
         return buffer
     }
 
     // ─────────────────────────────────────────────────────────────────────
-    // Output tensor bookkeeping — resolved by shape, not hardcoded index, since the converter
-    // that produced this .tflite doesn't guarantee output ordering matches the PyTorch export's.
+    // Output tensors, told apart by shape.
     // ─────────────────────────────────────────────────────────────────────
 
-    private var candidateOutputIndex = -1
-    private var protoOutputIndex = -1
-    private var candidateAnchorCount = 0
-    private var candidateChannelFirstResolved = true
-    private var protoChannelFirstResolved = true
+    private var locIndex = -1
+    private var confIndex = -1
+    private var coeffIndex = -1
+    private var protoIndex = -1
+    private var protoSize = 0
 
-    private fun allocateOutputs(interpreter: Interpreter): MutableMap<Int, Any> {
-        if (candidateOutputIndex == -1) resolveOutputIndices(interpreter)
-        val map = mutableMapOf<Int, Any>()
-        for (i in 0 until interpreter.outputTensorCount) {
-            val tensor = interpreter.getOutputTensor(i)
-            val elementCount = tensor.shape().fold(1) { acc, d -> acc * d }
-            // Byte width comes from the tensor's own dtype (4 for FLOAT32, 1 for INT8/UINT8) —
-            // hardcoding 4 here silently under-allocates for the int8 build's outputs.
-            map[i] = ByteBuffer.allocateDirect(tensor.dataType().byteSize() * elementCount).order(ByteOrder.nativeOrder())
-        }
-        return map
-    }
-
-    /**
-     * Identifies which output tensor is candidate-detections ([CANDIDATE_FEATURES]=116 somewhere
-     * in its shape) vs. prototype-masks ([NUM_MASK_COEFFS]=32 and [PROTO_SIZE]=160 twice) by shape,
-     * not by a hardcoded output index, since a converter isn't guaranteed to preserve the PyTorch
-     * export's ordering. The channel-first/-last question for each (does the "channels" dimension
-     * come right after batch — [1, 116, 8400]/[1, 32, 160, 160] — or last —
-     * [1, 8400, 116]/[1, 160, 160, 32]) is resolved the same way, from the shape's own dimension
-     * positions, which is exact for both output tensors here — 116, 8400, 32 and 160 are all
-     * distinct values, so there's no realistic shape collision to disambiguate further.
-     */
     private fun resolveOutputIndices(interpreter: Interpreter) {
         for (i in 0 until interpreter.outputTensorCount) {
             val shape = interpreter.getOutputTensor(i).shape()
-            if (shape.any { it == CANDIDATE_FEATURES }) {
-                candidateOutputIndex = i
-                candidateAnchorCount = shape.first { it != 1 && it != CANDIDATE_FEATURES }
-                candidateChannelFirstResolved = shape.getOrNull(1) == CANDIDATE_FEATURES
-            } else {
-                protoOutputIndex = i
-                protoChannelFirstResolved = shape.getOrNull(1) == NUM_MASK_COEFFS
+            when {
+                shape.size == 4 -> { protoIndex = i; protoSize = shape[1] }
+                shape.last() == 4 -> locIndex = i
+                shape.last() == NUM_CLASSES + 1 -> confIndex = i
+                shape.last() == NUM_MASK_COEFFS -> coeffIndex = i
             }
         }
-        check(candidateOutputIndex != -1 && protoOutputIndex != -1) {
-            "Could not identify the loaded segmentation model's output tensors by shape — has the exported model changed?"
+        check(locIndex != -1 && confIndex != -1 && coeffIndex != -1 && protoIndex != -1) {
+            "Could not identify the segmentation model's output tensors by shape — has the model changed?"
+        }
+        check(interpreter.getOutputTensor(locIndex).shape()[1] == priors.size / 4) {
+            "Segmentation model's anchor count doesn't match the prior table"
         }
     }
 
-    // ─────────────────────────────────────────────────────────────────────
-    // Decode: candidate extraction, confidence threshold, per-class NMS, mask crop — every formula
-    // here is traced to Ultralytics' own ops.py/nms.py, see this object's doc.
-    // ─────────────────────────────────────────────────────────────────────
+    /**
+     * yolact_base_config's priors, as `[cx, cy, w, h]` per anchor, normalized 0..1, in the model's
+     * own output order: FPN levels P3..P7 (69, 35, 18, 9, 5 cells per side, pixel scales 24, 48, 96,
+     * 192, 384), row-major cells, then aspect ratios 1, 1/2, 2 — 3 x (69² + 35² + 18² + 9² + 5²) =
+     * 19248. With that config's `use_pixel_scales`, `w = scale * sqrt(ar) / 550`, and
+     * `use_square_anchors` (a bug in the original training, kept for weight compatibility) makes
+     * `h = w`, so the aspect ratio only ever changes an anchor's size, never its shape.
+     */
+    private val priors: FloatArray by lazy {
+        val convSizes = intArrayOf(69, 35, 18, 9, 5)
+        val scales = floatArrayOf(24f, 48f, 96f, 192f, 384f)
+        val aspectRatios = floatArrayOf(1f, 0.5f, 2f)
+        val out = FloatArray(4 * aspectRatios.size * convSizes.sumOf { it * it })
+        var k = 0
+        for (level in convSizes.indices) {
+            val conv = convSizes[level]
+            for (j in 0 until conv) for (i in 0 until conv) {
+                val cx = (i + 0.5f) / conv
+                val cy = (j + 0.5f) / conv
+                for (ar in aspectRatios) {
+                    val w = scales[level] * sqrt(ar) / MODEL_INPUT_SIZE
+                    out[k++] = cx; out[k++] = cy; out[k++] = w; out[k++] = w
+                }
+            }
+        }
+        out
+    }
 
     private class Candidate(
-        val classId: Int, val confidence: Float,
-        var x1: Float, var y1: Float, var x2: Float, var y2: Float,
-        val maskCoeffs: FloatArray
+        val anchor: Int, val classId: Int, val confidence: Float,
+        val x1: Float, val y1: Float, val x2: Float, val y2: Float
     )
 
-    private fun decodeAndNms(candidateReader: TensorReader, protoReader: TensorReader, letterbox: LetterboxInfo): List<DetectedInstance> {
-        val n = candidateAnchorCount
+    private fun decode(loc: TensorReader, conf: TensorReader, coeffs: TensorReader, proto: TensorReader): List<DetectedInstance> {
+        val anchorCount = priors.size / 4
         val candidates = ArrayList<Candidate>()
-
-        // Resolved from the tensor's own reported shape — see resolveOutputIndices' doc.
-        val channelFirst = candidateChannelFirstResolved
-
-        fun feature(a: Int, f: Int): Float = if (channelFirst) candidateReader.get(f * n + a) else candidateReader.get(a * CANDIDATE_FEATURES + f)
-
-        // Box scale: the onnx2tf-produced float16 build's box-decode head outputs pixel-space
-        // coordinates (0..640, matching the model's own input size) with the grid/stride/DFL decode
-        // baked in; the Ultralytics-native int8 build's head instead outputs *normalized* 0..1
-        // coordinates for the same architecture — confirmed empirically (global box-channel max was
-        // 0.99, never remotely close to 640) rather than assumed, since two different converters
-        // disagreeing on this is exactly the kind of thing that silently produces wildly-wrong
-        // (large negative, off-canvas) boxes if assumed rather than checked. A generous 2.0 cutoff
-        // — real boxes are never that large in either convention — separates the two cases without
-        // hardcoding per-file logic that would break the moment either model gets re-exported.
-        var maxBoxValue = 0f
-        for (a in 0 until n) {
-            for (f in 0..3) maxBoxValue = max(maxBoxValue, kotlin.math.abs(feature(a, f)))
-        }
-        val boxScale = if (maxBoxValue <= 2f) MODEL_INPUT_SIZE.toFloat() else 1f
-
-        for (a in 0 until n) {
+        for (a in 0 until anchorCount) {
             var bestClass = -1
             var bestScore = -1f
-            for (c in 0 until NUM_CLASSES) {
-                val score = feature(a, 4 + c)
-                if (score > bestScore) { bestScore = score; bestClass = c }
+            val row = a * (NUM_CLASSES + 1)
+            for (c in 1..NUM_CLASSES) {
+                val score = conf.get(row + c)
+                if (score > bestScore) { bestScore = score; bestClass = c - 1 }
             }
             if (bestScore < CONFIDENCE_THRESHOLD) continue
 
-            val cx = feature(a, 0) * boxScale
-            val cy = feature(a, 1) * boxScale
-            val w = feature(a, 2) * boxScale
-            val h = feature(a, 3) * boxScale
-            val maskCoeffs = FloatArray(NUM_MASK_COEFFS) { feature(a, 4 + NUM_CLASSES + it) }
-            candidates.add(
-                Candidate(
-                    classId = bestClass, confidence = bestScore,
-                    x1 = cx - w / 2f, y1 = cy - h / 2f, x2 = cx + w / 2f, y2 = cy + h / 2f,
-                    maskCoeffs = maskCoeffs
-                )
-            )
+            val p = a * 4
+            val cx = priors[p] + loc.get(p) * 0.1f * priors[p + 2]
+            val cy = priors[p + 1] + loc.get(p + 1) * 0.1f * priors[p + 3]
+            val w = priors[p + 2] * exp(loc.get(p + 2) * 0.2f)
+            val h = priors[p + 3] * exp(loc.get(p + 3) * 0.2f)
+            candidates.add(Candidate(a, bestClass, bestScore, cx - w / 2f, cy - h / 2f, cx + w / 2f, cy + h / 2f))
         }
 
-        val kept = classAwareNms(candidates)
+        return classAwareNms(candidates)
             .sortedByDescending { it.confidence }
             .take(MAX_DETECTIONS)
-
-        return kept.map { candidate -> buildInstance(candidate, protoReader, protoChannelFirstResolved, letterbox) }
+            .map { buildInstance(it, coeffs, proto) }
     }
 
     private fun classAwareNms(candidates: List<Candidate>): List<Candidate> {
-        val byClass = candidates.groupBy { it.classId }
         val survivors = ArrayList<Candidate>()
-        for ((_, group) in byClass) {
+        for ((_, group) in candidates.groupBy { it.classId }) {
             val sorted = group.sortedByDescending { it.confidence }.toMutableList()
-            val picked = ArrayList<Candidate>()
             while (sorted.isNotEmpty()) {
                 val best = sorted.removeAt(0)
-                picked.add(best)
+                survivors.add(best)
                 sorted.removeAll { iou(best, it) > IOU_THRESHOLD }
             }
-            survivors.addAll(picked)
         }
         return survivors
     }
 
     private fun iou(a: Candidate, b: Candidate): Float {
-        val interLeft = max(a.x1, b.x1); val interTop = max(a.y1, b.y1)
-        val interRight = min(a.x2, b.x2); val interBottom = min(a.y2, b.y2)
-        val interArea = max(0f, interRight - interLeft) * max(0f, interBottom - interTop)
+        val interArea = max(0f, min(a.x2, b.x2) - max(a.x1, b.x1)) * max(0f, min(a.y2, b.y2) - max(a.y1, b.y1))
         val areaA = max(0f, a.x2 - a.x1) * max(0f, a.y2 - a.y1)
         val areaB = max(0f, b.x2 - b.x1) * max(0f, b.y2 - b.y1)
         val union = areaA + areaB - interArea
         return if (union <= 0f) 0f else interArea / union
     }
 
-    private fun buildInstance(
-        candidate: Candidate,
-        protoReader: TensorReader,
-        protoChannelFirst: Boolean,
-        letterbox: LetterboxInfo
-    ): DetectedInstance {
-        // Box: scale to proto (160) resolution to crop in the same space the mask matmul produces,
-        // exactly matching process_mask(upsample=false)'s ratio step (width_ratio = mw/shape[1]).
-        val protoScale = PROTO_SIZE.toFloat() / MODEL_INPUT_SIZE.toFloat()
-        val boxProtoLeft = candidate.x1 * protoScale
-        val boxProtoTop = candidate.y1 * protoScale
-        val boxProtoRight = candidate.x2 * protoScale
-        val boxProtoBottom = candidate.y2 * protoScale
-
-        val mask = BooleanArray(PROTO_SIZE * PROTO_SIZE)
-        for (py in 0 until PROTO_SIZE) {
-            // crop_mask's half-open interval: row/col included iff >= start AND < end.
-            if (py < boxProtoTop || py >= boxProtoBottom) continue
-            for (px in 0 until PROTO_SIZE) {
-                if (px < boxProtoLeft || px >= boxProtoRight) continue
+    private fun buildInstance(candidate: Candidate, coeffs: TensorReader, proto: TensorReader): DetectedInstance {
+        val size = protoSize
+        val coeff = FloatArray(NUM_MASK_COEFFS) { coeffs.get(candidate.anchor * NUM_MASK_COEFFS + it) }
+        val left = candidate.x1 * size
+        val top = candidate.y1 * size
+        val right = candidate.x2 * size
+        val bottom = candidate.y2 * size
+        val mask = BooleanArray(size * size)
+        for (py in 0 until size) {
+            if (py < top || py >= bottom) continue
+            for (px in 0 until size) {
+                if (px < left || px >= right) continue
                 var logit = 0f
-                for (c in 0 until NUM_MASK_COEFFS) {
-                    val protoValue = if (protoChannelFirst) {
-                        protoReader.get(c * PROTO_SIZE * PROTO_SIZE + py * PROTO_SIZE + px)
-                    } else {
-                        protoReader.get((py * PROTO_SIZE + px) * NUM_MASK_COEFFS + c)
-                    }
-                    logit += candidate.maskCoeffs[c] * protoValue
-                }
-                // gt 0.0 on the raw logit is exactly process_mask's masks.gt_(0.0) — equivalent to
-                // sigmoid(logit) > 0.5 without spending a sigmoid call per pixel.
-                mask[py * PROTO_SIZE + px] = logit > 0f
+                val base = (py * size + px) * NUM_MASK_COEFFS
+                for (c in 0 until NUM_MASK_COEFFS) logit += coeff[c] * proto.get(base + c)
+                // logit > 0 is sigmoid(logit) > 0.5 without the sigmoid.
+                mask[py * size + px] = logit > 0f
             }
         }
-
-        // Box: undo the letterbox to land back in the *original* photo's normalized coordinates —
-        // the exact inverse of scale_boxes' letterboxed->original mapping (subtract pad, divide by
-        // gain), since here the box already IS in letterboxed-640 space and needs no further step
-        // beyond normalizing.
-        fun toOriginalNormalizedX(letterboxedX: Float) = ((letterboxedX - letterbox.padX) / letterbox.gain / letterbox.originalWidth).coerceIn(0f, 1f)
-        fun toOriginalNormalizedY(letterboxedY: Float) = ((letterboxedY - letterbox.padY) / letterbox.gain / letterbox.originalHeight).coerceIn(0f, 1f)
-
         return DetectedInstance(
             label = CocoLabels.NAMES.getOrElse(candidate.classId) { "object" },
             confidence = candidate.confidence,
-            boxLeft = toOriginalNormalizedX(candidate.x1),
-            boxTop = toOriginalNormalizedY(candidate.y1),
-            boxRight = toOriginalNormalizedX(candidate.x2),
-            boxBottom = toOriginalNormalizedY(candidate.y2),
-            protoMask = mask,
-            letterbox = letterbox
+            boxLeft = candidate.x1.coerceIn(0f, 1f),
+            boxTop = candidate.y1.coerceIn(0f, 1f),
+            boxRight = candidate.x2.coerceIn(0f, 1f),
+            boxBottom = candidate.y2.coerceIn(0f, 1f),
+            mask = mask,
+            maskWidth = size,
+            maskHeight = size
         )
     }
 }

@@ -782,7 +782,7 @@ private fun HoverExploreLayer(
     }
 
     // The mask's exact boundary is expensive-ish to trace (a full pass over each instance's
-    // 160x160 proto grid) but never changes for a given instance, so it's computed once per
+    // 138x138 mask grid) but never changes for a given instance, so it's computed once per
     // detection (keyed on `instances`, which only ever changes when a new photo replaces the old
     // one) rather than on every recomposition/hover-move.
     val maskOutlines = remember(instances) { instances.associateWith { it.maskBoundaryEdgesNormalized() } }

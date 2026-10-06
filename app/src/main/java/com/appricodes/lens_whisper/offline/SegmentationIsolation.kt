@@ -50,7 +50,7 @@ object SegmentationIsolation {
      * [com.appricodes.lens_whisper.utils.ImageScaling.scaleToMax], never a separately captured
      * frame, or normalized mask coordinates silently stop lining up between the two). The mask is
      * grown by [dilatePixels] (measured in [lowResBitmap]'s own pixels) before cropping, so the
-     * proto-mask's coarse (160x160-grid) edge doesn't clip a sliver of the real object — then the
+     * mask grid's coarse (138x138) edge doesn't clip a sliver of the real object — then the
      * smallest rectangle containing the grown mask is decoded from [highResFile] at full detail,
      * with every pixel outside the mask painted opaque white. Returns null if the file can't be
      * decoded (corrupt/missing cache file) rather than throwing, so a caller can fall back to a
@@ -71,7 +71,7 @@ object SegmentationIsolation {
 
         // The instance's own box, padded by the dilation radius and clamped to the frame — nothing
         // outside this region can ever be part of the mask (buildInstance's crop_mask step already
-        // confines protoMask to the box), so restricting all the work below to this region is exact,
+        // confines the mask to the box), so restricting all the work below to this region is exact,
         // not an approximation.
         val left = ((instance.boxLeft * lw).toInt() - dilatePixels).coerceIn(0, lw - 1)
         val top = ((instance.boxTop * lh).toInt() - dilatePixels).coerceIn(0, lh - 1)

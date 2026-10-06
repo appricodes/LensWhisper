@@ -40,8 +40,8 @@ android {
         applicationId = "com.appricodes.lens_whisper"
         minSdk = 26
         targetSdk = 36
-        versionCode = 12
-        versionName = "1.11"
+        versionCode = 13
+        versionName = "1.12"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -121,24 +121,26 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // Barcode scanning (QR codes and 1D product barcodes) - zxing-cpp (Apache-2.0), a bundled
-    // native decoder: no model, no Play Services, ready at install. Backs
-    // offline/OfflineBarcodeScanner.kt and BarcodeScanActivity.
-    implementation(libs.zxing.cpp)
+    // ML Kit, all as the play-services-mlkit-* (unbundled) variants: no model weights in the APK,
+    // Play Services downloads each module instead (see the com.google.mlkit.vision.DEPENDENCIES
+    // manifest meta-data, and each wrapper's isReady() for the "not downloaded yet" case).
 
-    // Text recognition (OCR) needs no dependency of its own: PaddleOCR PP-OCRv5 det/rec models
-    // (Apache-2.0) run on the plain LiteRT runtime below, from assets/models/ocr/ — see
-    // offline/PaddleOcr.kt. (ML Kit's play-services-mlkit-text-recognition* used to live here; it
-    // and ML Kit barcode/translate were removed so the app ships no proprietary Google code, which
-    // the AGPL-3.0 licence of this project can't be combined with.)
+    // Barcode scanning (QR codes and 1D product barcodes). Backs offline/OfflineBarcodeScanner.kt
+    // and BarcodeScanActivity.
+    implementation(libs.barcode.scanning)
 
-    // (ML Kit Image Labeling and play-services-mlkit-subject-segmentation used to live here,
-    // powering OfflineColorDetector's own `detect`. That path was dropped once the
-    // segmentation-based Detect Objects/Object and Color Detection buttons took over its slot —
-    // see MlkitButtonProvider's doc — leaving these two as the single biggest dead weight in the
-    // APK: image-labeling alone pulls in vision-internal-vkp, whose native lib
-    // (libmlkitcommonpipeline.so) was shipping four times over, once per ABI, unused. Removed
-    // 2026-08-27.)
+    // Image labeling (Detect Objects) — offline/OfflineImageLabeler.kt.
+    implementation(libs.image.labeling)
+
+    // Text recognition (OCR) for Latin, Chinese, Japanese, Korean and Devanagari —
+    // offline/OfflineTextRecognizer.kt. Persian, Arabic and Cyrillic, which ML Kit has no
+    // recognizer for, use the bundled PaddleOCR models instead (offline/PaddleOcr.kt, on the plain
+    // LiteRT runtime below).
+    implementation(libs.text.recognition)
+    implementation(libs.text.recognition.chinese)
+    implementation(libs.text.recognition.japanese)
+    implementation(libs.text.recognition.korean)
+    implementation(libs.text.recognition.devanagari)
 
     // (play-services-auth — Google Sign-In — used to live here for the old account system. There
     // is no account system any more (see data/PreferencesManager.kt's note above) and nothing in
@@ -148,17 +150,15 @@ dependencies {
     implementation(libs.litertlm.android)
 
     // Plain LiteRT (the classic Interpreter API — NOT litertlm-android above, which is a
-    // separate, LLM-specific runtime that can't load an ordinary CNN). Runs the bundled
-    // YOLOv8n-seg object-and-mask detector — see offline/OfflineSegmentationDetector.kt.
+    // separate, LLM-specific runtime that can't load an ordinary CNN). Runs the bundled YOLACT
+    // object-and-mask detector (offline/OfflineSegmentationDetector.kt) and the PaddleOCR models.
     // CPU-only deliberately: no GPU delegate is added. This exact codebase has already hit one
     // GPU-vision-delegate compatibility failure on real hardware (Exynos 2100/Mali, see
     // PreferencesManager.getVisionBackendOverride's doc) that needed a runtime CPU fallback for
-    // the VLM catalog; YOLOv8n is small enough (3.2M params) that CPU-only should be fast enough
-    // for a single-shot capture without repeating that failure mode for a second model family.
+    // the VLM catalog, and these models only ever run single-shot.
     implementation(libs.litert) {
         // LiteRT's optional AI-pack model delivery (com.google.ai.edge.litert.deployment, unused
-        // here: every model is a bundled asset or a direct download) pulls in proprietary Play
-        // libraries — play-services-basement/-tasks and Play Core — which an AGPL-3.0 app can't ship.
+        // here: every model is a bundled asset or a direct download) pulls in Play Core for nothing.
         exclude(group = "com.google.android.play", module = "ai-delivery")
     }
 
