@@ -21,8 +21,11 @@ import kotlinx.coroutines.withContext
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
+import kotlin.math.atan2
+import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
+import kotlin.math.sin
 
 /** One paragraph-equivalent unit of recognized text — ML Kit's `TextBlock`, or for PaddleOCR a
  *  group of nearby lines (see [OfflineTextRecognizer.groupIntoBlocks]) — and what Read Document
@@ -54,6 +57,10 @@ class TextBlockResult(
 object OfflineTextRecognizer {
 
     private const val TAG = "OfflineTextRecognizer"
+
+    /** See [groupIntoBlocks]. */
+    private const val PADDLE_MAX_GAP = 0.8f
+    private const val ML_KIT_MAX_GAP = 1.3f
 
     // Guards [recognizeText] against overlapping continuous-mode captures.
     private val isProcessing = AtomicBoolean(false)
@@ -155,18 +162,10 @@ object OfflineTextRecognizer {
     suspend fun recognizeBlocks(context: Context, bitmap: Bitmap, language: String): List<TextBlockResult> = try {
         val script = OcrScript.fromLabel(language)
         if (usesMlKit(script)) {
-            mlKitText(bitmap, script).textBlocks.mapNotNull { block ->
-                val box = block.boundingBox ?: return@mapNotNull null
-                val text = block.text.trim()
-                if (text.isEmpty()) return@mapNotNull null
-                TextBlockResult(
-                    text = text,
-                    boxLeft = (box.left.toFloat() / bitmap.width).coerceIn(0f, 1f),
-                    boxTop = (box.top.toFloat() / bitmap.height).coerceIn(0f, 1f),
-                    boxRight = (box.right.toFloat() / bitmap.width).coerceIn(0f, 1f),
-                    boxBottom = (box.bottom.toFloat() / bitmap.height).coerceIn(0f, 1f)
-                )
-            }
+            // Not ML Kit's own TextBlocks: those often hold a single line each, which made every
+            // line of a paragraph its own hover area. Its lines go through the same paragraph
+            // grouping as PaddleOCR's instead.
+            groupIntoBlocks(mlKitLines(mlKitText(bitmap, script)), script.rightToLeft, bitmap.width, bitmap.height, ML_KIT_MAX_GAP)
         } else {
             val lines = withContext(Dispatchers.Default) { PaddleOcr.recognize(context, bitmap, script) }
             groupIntoBlocks(lines, script.rightToLeft, bitmap.width, bitmap.height)
@@ -175,6 +174,30 @@ object OfflineTextRecognizer {
         if (e is kotlinx.coroutines.CancellationException) throw e
         Log.e(TAG, "Text recognition failed", e)
         emptyList()
+    }
+
+    /**
+     * ML Kit's lines as [OcrLine]s. Their corner points follow the text, so on a tilted or
+     * sideways page the upright frame [groupIntoBlocks] needs is found by turning every point back
+     * by the page's angle — the median direction of the lines' top edges.
+     */
+    private fun mlKitLines(text: Text): List<OcrLine> {
+        val lines = text.textBlocks.flatMap { it.lines }.mapNotNull { line ->
+            val corners = line.cornerPoints?.takeIf { it.size == 4 }
+                ?: line.boundingBox?.let { b -> arrayOf(android.graphics.Point(b.left, b.top), android.graphics.Point(b.right, b.top), android.graphics.Point(b.right, b.bottom), android.graphics.Point(b.left, b.bottom)) }
+                ?: return@mapNotNull null
+            val content = line.text.trim()
+            if (content.isEmpty()) null
+            else FloatArray(8) { i -> if (i % 2 == 0) corners[i / 2].x.toFloat() else corners[i / 2].y.toFloat() } to content
+        }
+        if (lines.isEmpty()) return emptyList()
+        val angle = lines.map { (q, _) -> atan2(q[3] - q[1], q[2] - q[0]) }.sorted()[lines.size / 2]
+        val c = cos(-angle)
+        val s = sin(-angle)
+        return lines.map { (quad, content) ->
+            val upright = FloatArray(8) { i -> if (i % 2 == 0) quad[i] * c - quad[i + 1] * s else quad[i - 1] * s + quad[i] * c }
+            OcrLine(quad, upright, content, 1f)
+        }
     }
 
     /** A row of lines that sit side by side (PaddleOCR often splits one printed line at wide gaps,
@@ -211,8 +234,11 @@ object OfflineTextRecognizer {
     }
 
     /** Paragraph-ish blocks: consecutive rows that overlap horizontally and sit within about a line
-     *  height of each other belong together — the closest stand-in for ML Kit's `TextBlock`. */
-    internal fun groupIntoBlocks(lines: List<OcrLine>, rightToLeft: Boolean, imageWidth: Int, imageHeight: Int): List<TextBlockResult> {
+     *  height of each other belong together. [maxGap] is that limit in line heights: 0.8 for
+     *  PaddleOCR, whose boxes are padded; ML Kit's are tight around the glyphs, so the ordinary gap
+     *  between two lines of one paragraph measures about a full line height, while paragraphs are
+     *  three or more apart — 1.3 for those. */
+    internal fun groupIntoBlocks(lines: List<OcrLine>, rightToLeft: Boolean, imageWidth: Int, imageHeight: Int, maxGap: Float = PADDLE_MAX_GAP): List<TextBlockResult> {
         val blocks = ArrayList<MutableList<Row>>()
         for (row in rows(lines, rightToLeft)) {
             val rowHeight = row.textHeight
@@ -221,7 +247,7 @@ object OfflineTextRecognizer {
                 val lastHeight = last.textHeight
                 val gap = row.top - last.bottom
                 val overlap = min(row.right, b.maxOf { it.right }) - max(row.left, b.minOf { it.left })
-                gap < 0.8f * max(rowHeight, lastHeight) && overlap > 0 &&
+                gap < maxGap * max(rowHeight, lastHeight) && overlap > 0 &&
                     rowHeight < 1.6f * lastHeight && lastHeight < 1.6f * rowHeight
             }
             if (block != null) block += row else blocks += mutableListOf(row)

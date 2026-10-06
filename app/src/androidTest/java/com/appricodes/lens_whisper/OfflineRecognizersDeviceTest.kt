@@ -96,13 +96,17 @@ class OfflineRecognizersDeviceTest {
     @Test
     fun documentBlocks() = runBlocking {
         awaitModule("Latin OCR") { OfflineTextRecognizer.isReady(appContext, OcrScript.LATIN.label) }
-        val blocks = OfflineTextRecognizer.recognizeBlocks(appContext, image("synth_en.jpg"), OcrScript.LATIN.label)
-        blocks.forEach { Log.i(TAG, "BLOCK [%.2f,%.2f-%.2f,%.2f] %s".format(it.boxLeft, it.boxTop, it.boxRight, it.boxBottom, it.text.replace('\n', '|'))) }
-        // The two columns must not run together into one paragraph.
-        val leftColumn = blocks.first { "Store in a cool, dry place." in it.text }
-        val rightColumn = blocks.first { "Take one tablet twice a day" in it.text }
-        assertTrue(leftColumn.text, "Take one tablet" !in leftColumn.text)
-        assertTrue(leftColumn.boxRight < rightColumn.boxLeft)
+        // Upright and turned a quarter: ML Kit's lines follow the text, so the paragraphs must
+        // come out the same either way.
+        for (degrees in listOf(0, 90)) {
+            val blocks = OfflineTextRecognizer.recognizeBlocks(appContext, rotated(image("synth_en.jpg"), degrees), OcrScript.LATIN.label)
+            blocks.forEach { Log.i(TAG, "BLOCK rot$degrees [%.2f,%.2f-%.2f,%.2f] %s".format(it.boxLeft, it.boxTop, it.boxRight, it.boxBottom, it.text.replace('\n', '|'))) }
+            // A paragraph is one block, not one block per line, and the two columns stay apart.
+            val leftColumn = blocks.single { "Store in a cool, dry place." in it.text }
+            assertTrue(leftColumn.text, "Keep out of reach of children." in leftColumn.text && "Take one tablet" !in leftColumn.text)
+            val rightColumn = blocks.single { "Take one tablet twice a day" in it.text }
+            assertTrue(rightColumn.text, rightColumn.text.indexOf("Take one tablet") < rightColumn.text.indexOf("Maximum 4 tablets"))
+        }
     }
 
     @Test
@@ -124,7 +128,7 @@ class OfflineRecognizersDeviceTest {
     fun segmentation() {
         val bitmap = image("coco_umbrella_person.jpg")
         val start = SystemClock.elapsedRealtime()
-        val found = OfflineSegmentationDetector.detect(appContext, bitmap)
+        val found = OfflineSegmentationDetector.detect(appContext, bitmap, useCompanion = false)
         Log.i(TAG, "YOLACT in ${SystemClock.elapsedRealtime() - start} ms: " + found.joinToString { "%s %.2f".format(it.label, it.confidence) })
         val umbrella = found.first { it.label == "umbrella" }
         assertTrue(umbrella.confidence > 0.8f)
@@ -145,7 +149,9 @@ class OfflineRecognizersDeviceTest {
         awaitModule("Image labeling") { OfflineImageLabeler.isReady(appContext) }
         val labels = OfflineImageLabeler.label(image("coco_umbrella_person.jpg"))
         Log.i(TAG, "Labels: " + labels.joinToString { "%s %.2f".format(it.text, it.confidence) })
-        assertTrue(labels.isNotEmpty())
+        assertTrue(labels.any { it.text == "Umbrella" })
+        // Abstract labels (feelings, occasions, activities) are filtered out.
+        assertTrue(labels.none { it.text in setOf("Fun", "Leisure", "Vacation", "Smile", "Event") })
     }
 
     private companion object {

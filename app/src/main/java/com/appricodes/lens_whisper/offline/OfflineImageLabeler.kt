@@ -32,6 +32,31 @@ object OfflineImageLabeler {
      *  useful to listen to. */
     private const val MAX_LABELS = 10
 
+    /**
+     * Base-model labels that aren't things you could point at — feelings, occasions, holidays,
+     * activities, sports, genres and styles ("Fun", "Leisure", "Vacation", "Smile", "Event"...).
+     * For a button called Detect Objects they're noise, so they're dropped. Matched against the
+     * model's own English label text (developers.google.com/ml-kit/vision/image-labeling/label-map).
+     */
+    private val NOT_OBJECTS = setOf(
+        // Feelings, qualities, concepts
+        "Fun", "Leisure", "Love", "Cool", "Smile", "Laugh", "Interaction", "Balance", "Community",
+        "Fiction", "Pattern", "Monochrome", "Infrastructure", "Product", "Aviation", "Aerospace engineering",
+        // Occasions, holidays, events
+        "Event", "Party", "Vacation", "Christmas", "Hanukkah", "Thanksgiving", "Marriage", "Graduation",
+        "Prom", "Carnival", "Concert", "Competition", "Presentation", "Picnic", "Class", "News", "Selfie",
+        "Lunch", "Supper",
+        // Activities and sports
+        "Sitting", "Standing", "Eating", "Sleep", "Dance", "Running", "Bathing", "Steaming", "Construction",
+        "Camping", "Caving", "Backpacking", "Safari", "Rafting", "Cycling", "Racing", "Race", "Marathon",
+        "Rowing", "Swimming", "Surfing", "Windsurfing", "Wakeboarding", "Waterskiing", "Snorkeling",
+        "Scuba diving", "Tubing", "Skiing", "Snowboarding", "Sledding", "Fishing", "Bullfighting", "Rodeo",
+        "Archery", "Badminton", "Curling", "Gymnastics", "Soccer", "Rugby", "Softball", "Polo", "Sports",
+        "Knitting", "Quilting", "Crochet", "Needlework",
+        // Genres, styles, people-types
+        "Pop music", "Song", "Musical", "Comics", "Cuisine", "Team", "Dude", "Mufti"
+    )
+
     @Volatile
     private var client: ImageLabeler? = null
 
@@ -73,13 +98,14 @@ object OfflineImageLabeler {
         return available
     }
 
-    /** Labels for [bitmap], strongest first, at most [MAX_LABELS]. Throws if ML Kit fails. */
+    /** Labels for [bitmap] that name things ([NOT_OBJECTS] dropped), strongest first, at most
+     *  [MAX_LABELS]. Throws if ML Kit fails. */
     suspend fun label(bitmap: Bitmap): List<ImageLabel> {
         val labels = suspendCancellableCoroutine { cont ->
             labeler().process(InputImage.fromBitmap(bitmap, 0))
                 .addOnSuccessListener { if (cont.isActive) cont.resume(it) }
                 .addOnFailureListener { e -> if (cont.isActive) cont.resumeWithException(e) }
         }
-        return labels.sortedByDescending { it.confidence }.take(MAX_LABELS)
+        return labels.filter { it.text !in NOT_OBJECTS }.sortedByDescending { it.confidence }.take(MAX_LABELS)
     }
 }
