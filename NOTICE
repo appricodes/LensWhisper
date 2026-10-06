@@ -25,6 +25,12 @@ app/src/main/assets/models/ocr/det.tflite, rec_arabic.tflite, rec_cyrillic.tflit
     against ONNX Runtime before quantization. dict_*.txt are the models' character_dict lists from
     their inference.yml.
 
+app/src/main/aidl/com/appricodes/lens_whisper/segmenter/ISegmenterService.aidl,
+app/src/main/java/com/appricodes/lens_whisper/segmenter/client/
+    The API of the optional companion app LensWhisper Object Explorer, copied from its repository
+    (https://github.com/appricodes/LensWhisper-Segmenter, api/), Apache-2.0. The companion itself
+    (AGPL-3.0, bundling YOLOv8m-seg) is a separate app; LensWhisper only talks to it over that API.
+
 Google ML Kit (play-services-mlkit-text-recognition*, -barcode-scanning, -image-labeling)
     Proprietary, used under the ML Kit Terms of Service (https://developers.google.com/ml-kit/terms).
 

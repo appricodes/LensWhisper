@@ -14,6 +14,7 @@ import com.appricodes.lens_whisper.BarcodeScanActivity
 import com.appricodes.lens_whisper.ReadDocumentActivity
 import com.appricodes.lens_whisper.SegmentationExploreActivity
 import com.appricodes.lens_whisper.data.PreferencesManager
+import com.appricodes.lens_whisper.offline.CompanionSegmenter
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineBarcodeScanner
@@ -568,13 +569,14 @@ class MlkitButtonProvider(
                     label = "Identify Objects and Colors",
                     contentDescription = "Detect objects and each one's main colors.",
                     icon = GridIcon.IDENTIFY_OBJECTS_COLORS,
-                    onClick = { selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) }
+                    // The first segmentation task offers the companion app instead of running.
+                    onClick = { if (!CompanionSegmenter.suggestOnce(context)) selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Explore Photo by Touch",
                     contentDescription = "Explore by touch. Detects objects and their colors, then opens a full-screen view — move your finger over the picture to hear what's under it, or tap once for more options.",
                     icon = GridIcon.EXPLORE,
-                    onClick = { launchSegmentationExplore() }
+                    onClick = { if (!CompanionSegmenter.suggestOnce(context)) launchSegmentationExplore() }
                 ),
                 GridCell(
                     label = "Read Text",

@@ -179,13 +179,15 @@ object OfflineSegmentationDetector {
 
     /**
      * Runs detection on [bitmap] and returns up to [MAX_DETECTIONS] instances, highest confidence
-     * first. Call from a background thread.
+     * first — through the companion app when it's installed and genuine (see [CompanionSegmenter]),
+     * otherwise with the bundled YOLACT. Call from a background thread.
      */
-    fun detect(context: Context, bitmap: Bitmap): List<DetectedInstance> = synchronized(runLock) {
+    fun detect(context: Context, bitmap: Bitmap): List<DetectedInstance> {
+        CompanionSegmenter.detect(context, bitmap)?.let { return it }
         // Serialized: a TFLite Interpreter is not thread-safe, and two callers can overlap — e.g. a
         // Basic Tasks Detect Objects still running when the user switches model and presses
         // Describe TV Image. Cancelling a coroutine doesn't stop a detect already in progress.
-        detectLocked(context, bitmap)
+        return synchronized(runLock) { detectLocked(context, bitmap) }
     }
 
     private val runLock = Any()

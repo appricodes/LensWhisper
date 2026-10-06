@@ -37,6 +37,8 @@
 
     <!-- Lets SpeechOutput list the installed text-to-speech engines (Android 11+ package visibility). -->
     <queries>
+        <!-- The optional companion segmenter (see offline/CompanionSegmenter.kt). -->
+        <package android:name="com.appricodes.lens_whisper.segmenter" />
         <intent>
             <action android:name="android.intent.action.TTS_SERVICE" />
         </intent>

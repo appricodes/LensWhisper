@@ -24,6 +24,7 @@ import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
 import com.appricodes.lens_whisper.network.LocalServerFeature
+import com.appricodes.lens_whisper.offline.CompanionSegmenter
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 
 /**
@@ -110,6 +111,10 @@ fun MoreMenu(
         DropdownMenuItem(text = { Text("Manage Advanced AI Models") }, onClick = {
             onDismiss()
             context.startActivity(Intent(context, ModelManagementActivity::class.java))
+        })
+        DropdownMenuItem(text = { Text("Enhance Object Detection") }, onClick = {
+            onDismiss()
+            (context as? android.app.Activity)?.let { CompanionSegmenter.showDialog(it) }
         })
         DropdownMenuItem(text = { Text("Settings") }, onClick = {
             onDismiss()
