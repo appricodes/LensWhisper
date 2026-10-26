@@ -12,14 +12,14 @@ package com.appricodes.lens_whisper.legal
  * the German original has to say. If this is ever translated it should be by someone who reads the
  * result as legal text, and each translation should be added here explicitly.
  *
- * [OPERATOR_NAME] and the rest of the [IMPRESSUM] placeholders MUST be filled in before any public
- * release — §5 DDG (the former §5 TMG) makes a complete imprint mandatory for a commercial app
- * distributed in Germany, and an incomplete one is itself an actionable defect.
+ * [OPERATOR_NAME], [OPERATOR_ADDRESS] and [OPERATOR_EMAIL] feed the [IMPRESSUM] and must stay
+ * complete — §5 DDG (the former §5 TMG) makes a full imprint mandatory for an app distributed in
+ * Germany, and an incomplete one is itself an actionable defect.
  */
 object LegalTexts {
 
     // ─────────────────────────────────────────────────────────────────────────
-    // Imprint placeholders — FILL THESE IN BEFORE RELEASE
+    // Imprint details (§5 DDG)
     // ─────────────────────────────────────────────────────────────────────────
 
     const val OPERATOR_NAME = "Mohammad Amiri Moalla"
