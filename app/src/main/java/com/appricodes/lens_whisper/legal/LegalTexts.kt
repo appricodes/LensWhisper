@@ -121,9 +121,9 @@ LIABILITY FOR LINKS
 
 This app may link to external websites over which we have no control. We accept no responsibility for their content. The respective provider or operator of a linked page is always responsible for its content.
 
-COPYRIGHT
+COPYRIGHT AND LICENCE
 
-The app, its texts and its interface are protected by copyright. The AI models the app downloads and runs are the work of third parties and remain subject to their own licences — see Third-Party Licences in this screen.
+LensWhisper is free software, licensed under the GNU Affero General Public License v3.0 or later. Its complete source code is available at github.com/appricodes/LensWhisper. The AI models the app downloads and runs are the work of third parties and remain subject to their own licences — see Third-Party Licences in this screen.
 """
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -219,17 +219,8 @@ Licensed under the Apache License, Version 2.0.
 
 Model files listed above are hosted on Hugging Face and are downloaded directly by your device.
 
-YOLACT (ResNet-101) — Identify Objects and Colors, and the Explore screens
-Bundled inside the app. YOLACT is by Daniel Bolya, Chong Zhou, Fanyi Xiao and Yong Jae Lee (github.com/dbolya/yolact); the model file is Katsuya Hyodo's (PINTO0309) TensorFlow Lite conversion, from PINTO_model_zoo, of Ma-Dan's export (github.com/Ma-Dan/yolact). Both are licensed under the MIT License:
-
-Copyright (c) 2019 Daniel Bolya
-Copyright (c) 2024 Katsuya Hyodo
-
-Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated documentation files (the "Software"), to deal in the Software without restriction, including without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+YOLOv8m-seg (Ultralytics) — Identify Objects and Colors, and the Explore screens
+Bundled inside the app. YOLOv8 is by Ultralytics (github.com/ultralytics/ultralytics) and licensed under the GNU Affero General Public License v3.0 (gnu.org/licenses/agpl-3.0). The model file was exported with Ultralytics' own TensorFlow Lite exporter and quantized to 8 bits; otherwise it is unchanged.
 
 PP-OCRv5 (PaddlePaddle / PaddleOCR) — Read Text and Read Document in Persian, Arabic and Cyrillic
 The text detection and recognition models, licensed under the Apache License, Version 2.0, and bundled inside the app. They were converted from PaddlePaddle's official ONNX releases to LiteRT and their weights compressed to 8 bits; otherwise they are unchanged.

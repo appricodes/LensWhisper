@@ -13,7 +13,7 @@ photo ever leaves the phone.
 - **Read text and documents** with Google ML Kit (Latin, Chinese, Japanese, Korean, Devanagari)
   or bundled PaddleOCR PP-OCRv5 models on LiteRT (Persian, Arabic, Cyrillic).
 - **Detect objects** with ML Kit Image Labeling; **identify objects and colours** and **explore a
-  photo by touch** with a bundled YOLACT (ResNet-101) segmentation model.
+  photo by touch** with a bundled YOLOv8m-seg segmentation model.
 - **Scan barcodes** with ML Kit.
 - Look products up in an optional offline product database (built from
   Open Food Facts / Open Products Facts), and attach voice or text notes to each barcode.
@@ -44,11 +44,12 @@ A fresh clone builds as-is. Release builds additionally need:
 
 ## Licence
 
-Proprietary — all rights reserved. [NOTICE](NOTICE) lists the bundled third-party components:
+GNU Affero General Public License v3.0 or later — see [LICENSE](LICENSE). [NOTICE](NOTICE) lists
+the bundled third-party components:
 
-- `app/src/main/assets/models/yolact_resnet101_550_int8.tflite` — YOLACT by
-  [Daniel Bolya et al.](https://github.com/dbolya/yolact), MIT, TFLite conversion from
-  [PINTO_model_zoo](https://github.com/PINTO0309/PINTO_model_zoo) (MIT).
+- `app/src/main/assets/models/yolov8m_seg_int8.tflite` — YOLOv8m-seg by
+  [Ultralytics](https://github.com/ultralytics/ultralytics), AGPL-3.0, exported with Ultralytics'
+  own TFLite exporter (int8).
 - `app/src/main/assets/models/ocr/` — PP-OCRv5 mobile text detection and Arabic/Cyrillic
   recognition by [PaddlePaddle](https://github.com/PaddlePaddle/PaddleOCR), Apache-2.0, converted
   from the official ONNX releases to LiteRT (see NOTICE and `tools/ocr_models/`).

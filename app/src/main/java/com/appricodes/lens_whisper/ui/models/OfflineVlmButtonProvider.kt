@@ -1,6 +1,5 @@
 package com.appricodes.lens_whisper.ui.models
 
-import com.appricodes.lens_whisper.offline.CompanionSegmenter
 import com.appricodes.lens_whisper.domain.PromptConfig
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.icons.GridIcon
@@ -66,8 +65,7 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                     },
                     icon = GridIcon.DESCRIBE_TV,
                     enabled = ctx.onDescribeTv != null,
-                    // The first segmentation task offers the companion app instead of running.
-                    onClick = { if (!CompanionSegmenter.suggestOnce(ctx.prefs.context)) ctx.onDescribeTv?.invoke() }
+onClick = { ctx.onDescribeTv?.invoke() }
                 )
             ),
             listOf(
@@ -82,7 +80,7 @@ object OfflineVlmButtonProvider : ModelButtonProvider {
                     },
                     icon = GridIcon.EXPLORE,
                     enabled = ctx.onExploreAndDescribe != null,
-                    onClick = { if (!CompanionSegmenter.suggestOnce(ctx.prefs.context)) ctx.onExploreAndDescribe?.invoke() }
+                    onClick = { ctx.onExploreAndDescribe?.invoke() }
                 ),
                 // No on-screen Repeat here — the volume-key long-press (ctx.onRepeat, wired in
                 // CameraActivity/MediaDescriberScreen) already covers it; a dedicated button was

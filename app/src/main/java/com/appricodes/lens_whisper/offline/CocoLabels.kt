@@ -2,8 +2,8 @@ package com.appricodes.lens_whisper.offline
 
 /**
  * The standard 80-class COCO label set, in the exact index order every COCO-trained detector
- * (including the bundled YOLACT — see [OfflineSegmentationDetector], which skips its background
- * class 0) uses for its class-score output. This order is a de facto standard across the whole object-detection ecosystem and has
+ * (including the bundled YOLOv8-seg — see [OfflineSegmentationDetector]) uses for its class-score
+ * output. This order is a de facto standard across the whole object-detection ecosystem and has
  * been stable since YOLOv3; it is not something the model file itself encodes, so it has to be
  * kept in the app as a plain array indexed by class id.
  */

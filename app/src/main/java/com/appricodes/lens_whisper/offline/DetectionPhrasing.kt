@@ -27,7 +27,7 @@ object DetectionPhrasing {
      *  used to be (0.35) because the user explicitly wants weaker detections surfaced too, now that
      *  [Tier.MEDIUM_LOW]'s hedge word makes clear they're weaker rather than presenting them with
      *  the same confidence as a strong hit. 0.20 is still a real floor, not "show everything": on
-     *  coco128 with the bundled YOLACT, about 92% of detections at or above it name a class that is
+     *  coco128 with a YOLO-family model, about 92% of detections at or above it name a class that is
      *  really in the photo, falling to about 84% at 0.15 and 81% at 0.10. */
     const val MINIMUM_CONFIDENCE = 0.20f
 

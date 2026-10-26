@@ -14,7 +14,6 @@ import com.appricodes.lens_whisper.BarcodeScanActivity
 import com.appricodes.lens_whisper.ReadDocumentActivity
 import com.appricodes.lens_whisper.SegmentationExploreActivity
 import com.appricodes.lens_whisper.data.PreferencesManager
-import com.appricodes.lens_whisper.offline.CompanionSegmenter
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineBarcodeScanner
@@ -49,7 +48,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * "Basic Models"' button set (the on-screen label; [PreferencesManager.selectedModelId] is still
  * the literal string `"mlkit"` — see [ModelManagementActivity] for why the visible name changed):
  * Detect Objects (ML Kit Image Labeling, see [OfflineImageLabeler]), Identify Objects and
- * Colors/Explore (backed by the bundled YOLACT segmentation detector, see
+ * Colors/Explore (backed by the bundled YOLOv8m-seg segmentation detector, see
  * [OfflineSegmentationDetector]), Read Text/Read Document (ML Kit or PaddleOCR, see
  * [OfflineTextRecognizer]), Scan Barcode (ML Kit), Light Level and Simple Color.
  * Unlike the prompt-based [OfflineVlmButtonProvider]/[LocalServerButtonProvider], these buttons
@@ -569,14 +568,13 @@ class MlkitButtonProvider(
                     label = "Identify Objects and Colors",
                     contentDescription = "Detect objects and each one's main colors.",
                     icon = GridIcon.IDENTIFY_OBJECTS_COLORS,
-                    // The first segmentation task offers the companion app instead of running.
-                    onClick = { if (!CompanionSegmenter.suggestOnce(context)) selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) }
+                    onClick = { selectSingleShot(Mode.SEGMENT_COLOR, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Explore Photo by Touch",
                     contentDescription = "Explore by touch. Detects objects and their colors, then opens a full-screen view — move your finger over the picture to hear what's under it, or tap once for more options.",
                     icon = GridIcon.EXPLORE,
-                    onClick = { if (!CompanionSegmenter.suggestOnce(context)) launchSegmentationExplore() }
+                    onClick = { launchSegmentationExplore() }
                 ),
                 GridCell(
                     label = "Read Text",

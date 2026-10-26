@@ -1,18 +1,25 @@
 LensWhisper
-Copyright (C) 2026 Mohammad Amiri Moalla. All rights reserved.
+Copyright (C) 2026 Mohammad Amiri Moalla
 
-This is proprietary software. Versions released before 1.12 were published under the GNU Affero
-General Public License v3.0; that does not apply to this or later versions.
+This program is free software: you can redistribute it and/or modify it under the terms of the
+GNU Affero General Public License as published by the Free Software Foundation, either version 3
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY; without
+even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+Affero General Public License (the LICENSE file) for more details.
+
+Versions 1.12 to 1.13 were distributed as proprietary software; this version and later are
+AGPL-3.0-or-later again, because the bundled segmentation model is AGPL-3.0.
 
 
 THIRD-PARTY COMPONENTS
 
-app/src/main/assets/models/yolact_resnet101_550_int8.tflite
-    YOLACT (ResNet-101 FPN, 550x550, COCO) by Daniel Bolya et al., MIT License,
-    Copyright (c) 2019 Daniel Bolya (https://github.com/dbolya/yolact), via Ma-Dan's ONNX-exportable
-    fork (https://github.com/Ma-Dan/yolact, MIT). TensorFlow Lite int8 conversion from
-    PINTO_model_zoo (https://github.com/PINTO0309/PINTO_model_zoo, folder 074_Yolact), MIT License,
-    Copyright (c) 2024 Katsuya Hyodo. Unmodified.
+app/src/main/assets/models/yolov8m_seg_int8.tflite
+    YOLOv8m-seg by Ultralytics, licensed under AGPL-3.0 (https://github.com/ultralytics/ultralytics).
+    Exported with Ultralytics' own TFLite exporter, int8-quantized:
+        from ultralytics import YOLO
+        YOLO("yolov8m-seg.pt").export(format="tflite", int8=True, data="coco128-seg.yaml")
 
 app/src/main/assets/models/ocr/det.tflite, rec_arabic.tflite, rec_cyrillic.tflite, dict_*.txt
     PP-OCRv5 mobile text detection (PP-OCRv5_mobile_det) and recognition (arabic_ and
@@ -24,12 +31,6 @@ app/src/main/assets/models/ocr/det.tflite, rec_arabic.tflite, rec_cyrillic.tflit
     int8 quantized with ai-edge-quantizer (recipe weight_only_wi8_afp32). Outputs were checked
     against ONNX Runtime before quantization. dict_*.txt are the models' character_dict lists from
     their inference.yml.
-
-app/src/main/aidl/com/appricodes/lens_whisper/segmenter/ISegmenterService.aidl,
-app/src/main/java/com/appricodes/lens_whisper/segmenter/client/
-    The API of the optional companion app LensWhisper Object Explorer, copied from its repository
-    (https://github.com/appricodes/LensWhisper-Segmenter, api/), Apache-2.0. The companion itself
-    (AGPL-3.0, bundling YOLOv8m-seg) is a separate app; LensWhisper only talks to it over that API.
 
 Google ML Kit (play-services-mlkit-text-recognition*, -barcode-scanning, -image-labeling)
     Proprietary, used under the ML Kit Terms of Service (https://developers.google.com/ml-kit/terms).

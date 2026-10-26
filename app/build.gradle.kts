@@ -75,7 +75,6 @@ android {
     }
     buildFeatures {
         compose = true
-        aidl = true
         buildConfig = true
     }
 }
@@ -151,7 +150,7 @@ dependencies {
     implementation(libs.litertlm.android)
 
     // Plain LiteRT (the classic Interpreter API — NOT litertlm-android above, which is a
-    // separate, LLM-specific runtime that can't load an ordinary CNN). Runs the bundled YOLACT
+    // separate, LLM-specific runtime that can't load an ordinary CNN). Runs the bundled YOLOv8m-seg
     // object-and-mask detector (offline/OfflineSegmentationDetector.kt) and the PaddleOCR models.
     // CPU-only deliberately: no GPU delegate is added. This exact codebase has already hit one
     // GPU-vision-delegate compatibility failure on real hardware (Exynos 2100/Mali, see

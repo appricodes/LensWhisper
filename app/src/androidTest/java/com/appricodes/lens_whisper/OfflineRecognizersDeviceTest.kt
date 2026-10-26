@@ -128,8 +128,8 @@ class OfflineRecognizersDeviceTest {
     fun segmentation() {
         val bitmap = image("coco_umbrella_person.jpg")
         val start = SystemClock.elapsedRealtime()
-        val found = OfflineSegmentationDetector.detect(appContext, bitmap, useCompanion = false)
-        Log.i(TAG, "YOLACT in ${SystemClock.elapsedRealtime() - start} ms: " + found.joinToString { "%s %.2f".format(it.label, it.confidence) })
+        val found = OfflineSegmentationDetector.detect(appContext, bitmap)
+        Log.i(TAG, "Segmentation in ${SystemClock.elapsedRealtime() - start} ms: " + found.joinToString { "%s %.2f".format(it.label, it.confidence) })
         val umbrella = found.first { it.label == "umbrella" }
         assertTrue(umbrella.confidence > 0.8f)
         assertTrue(found.any { it.label == "person" && it.confidence > 0.6f })

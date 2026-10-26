@@ -98,11 +98,6 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("flash_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("flash_enabled", value).apply()
 
-	/** Set once the "Enhance object detection" suggestion has been shown (see offline/CompanionSegmenter.kt). */
-	var companionSuggestionShown: Boolean
-		get() = standardPrefs.getBoolean("companion_suggestion_shown", false)
-		set(value) = standardPrefs.edit().putBoolean("companion_suggestion_shown", value).apply()
-
 	var volumeShortcutsEnabled: Boolean
 		get() = standardPrefs.getBoolean("volume_shortcuts_enabled", false)
 		set(value) = standardPrefs.edit().putBoolean("volume_shortcuts_enabled", value).apply()
