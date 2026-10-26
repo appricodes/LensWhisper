@@ -23,6 +23,7 @@ import com.appricodes.lens_whisper.SettingsActivity
 import com.appricodes.lens_whisper.data.OfflineModelsRepository
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.inference.OfflineInferenceEngine
+import com.appricodes.lens_whisper.legal.LegalTexts
 import com.appricodes.lens_whisper.network.LocalServerFeature
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
 
@@ -122,6 +123,14 @@ fun MoreMenu(
         DropdownMenuItem(text = { Text("Legal Information") }, onClick = {
             onDismiss()
             context.startActivity(Intent(context, LegalActivity::class.java))
+        })
+        DropdownMenuItem(text = { Text("Source Code on GitHub") }, onClick = {
+            onDismiss()
+            try {
+                context.startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse("https://${LegalTexts.SOURCE_CODE_URL}")))
+            } catch (e: android.content.ActivityNotFoundException) {
+                AccessibilityUtils.announceToTalkBack(context, "No browser found. The source code is at ${LegalTexts.SOURCE_CODE_URL}")
+            }
         })
         if (LocalServerFeature.ENABLED && selectedModelId == LocalServerFeature.MODEL_ID) {
             DropdownMenuItem(text = { Text("About Local Server") }, onClick = {
