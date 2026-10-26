@@ -41,9 +41,6 @@ class PreferencesManager(val context: Context) {
 			return if (rawCode.startsWith("fa", ignoreCase = true) || selectedLanguage.equals("Persian", ignoreCase = true)) "fa-IR" else rawCode
 		}
 
-	var ocrLanguage: String
-		get() = standardPrefs.getString("ocr_language", "Latin (English/EU)") ?: "Latin (English/EU)"
-		set(value) = standardPrefs.edit().putString("ocr_language", value).apply()
 
 	/** The narration persona, e.g. "Neutral" or "Technical" - see assets/settings.json.
 	 *

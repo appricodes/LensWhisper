@@ -69,9 +69,9 @@ private fun HelpScreen(onClose: () -> Unit) {
             fontSize = 18.sp
         )
         Text(
-            text = "Read Text reads any text in view, and Light Level plays a tone matching the "
-                + "brightness in front of the camera. Tap a button for one reading, or hold it for "
-                + "continuous updates.",
+            text = "Light Level plays a tone matching the "
+                + "brightness in front of the camera. Tap the button to start it, and tap again "
+                + "to stop.",
             fontSize = 18.sp
         )
         Text(

@@ -45,8 +45,6 @@ import com.appricodes.lens_whisper.media.HeadsetKeyCapture
 import com.appricodes.lens_whisper.media.HeadsetShortcuts
 import com.appricodes.lens_whisper.network.LocalServerAuth
 import com.appricodes.lens_whisper.network.LocalServerDiscovery
-import com.appricodes.lens_whisper.offline.OcrScript
-import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.service.ProductDbDownloader
 import com.appricodes.lens_whisper.service.ProductDbDownloadState
 import com.appricodes.lens_whisper.ui.components.ExportDataDialog
@@ -68,7 +66,6 @@ class SettingsActivity : ComponentActivity() {
 		val appSettings = SettingsRepository(this).loadSettingsFromAssets()
 		val availableLanguages = appSettings.languages
 		val standardPersonas = listOf("Neutral", "Family", "Technical", "poetry")
-		val availableOcrLanguages = OcrScript.entries.map { it.label }
 		headsetKeyCapture = HeadsetKeyCapture(this)
 
 		setContent {
@@ -81,7 +78,6 @@ class SettingsActivity : ComponentActivity() {
 						prefs = prefs,
 						availableLanguages = availableLanguages,
 						availablePersonas = standardPersonas,
-						availableOcrLanguages = availableOcrLanguages,
 						onBack = { finish() },
 						onStartHeadsetCapture = { onCaptured -> headsetKeyCapture.start(onCaptured) },
 						onStopHeadsetCapture = { headsetKeyCapture.stop() }
@@ -158,7 +154,6 @@ fun SettingsScreen(
 	prefs: PreferencesManager,
 	availableLanguages: Map<String, String>,
 	availablePersonas: List<String>,
-	availableOcrLanguages: List<String>,
 	onBack: () -> Unit,
 	onStartHeadsetCapture: ((Int) -> Unit) -> Unit,
 	onStopHeadsetCapture: () -> Unit
@@ -178,7 +173,6 @@ fun SettingsScreen(
 	var selectedLanguageCode by remember { mutableStateOf(sharedPrefs.getString("selected_language_code", "en-US") ?: "en-US") }
 	var selectedLanguageName by remember { mutableStateOf(sharedPrefs.getString("selected_language", "English") ?: "English") }
 
-	var selectedOcrLanguage by remember { mutableStateOf(sharedPrefs.getString("ocr_language", "Latin (English/EU)") ?: "Latin (English/EU)") }
 	var selectedPersona by remember { mutableStateOf(sharedPrefs.getString("selected_mode", "Neutral") ?: "Neutral") }
 
 	var showResultsInDialog by remember { mutableStateOf(sharedPrefs.getBoolean("show_results_in_dialog", false)) }
@@ -196,7 +190,6 @@ fun SettingsScreen(
 	val coroutineScope = rememberCoroutineScope()
 
 	var langDropdownExpanded by remember { mutableStateOf(false) }
-	var ocrDropdownExpanded by remember { mutableStateOf(false) }
 	var personaDropdownExpanded by remember { mutableStateOf(false) }
 
 	var reasoningEffort by remember { mutableStateOf(prefs.reasoningEffort) }
@@ -529,33 +522,6 @@ fun SettingsScreen(
 							selectedPersona = personaMode
 							sharedPrefs.edit().putString("selected_mode", personaMode).apply()
 							personaDropdownExpanded = false
-						})
-					}
-				}
-			}
-		}
-
-		Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-			Text(text = "Offline OCR Language", fontSize = 18.sp, color = Color.Gray, modifier = Modifier.semantics { heading() })
-			Box(
-				modifier = Modifier
-					.fillMaxWidth()
-					.background(MaterialTheme.colorScheme.surfaceVariant)
-					.clickable { ocrDropdownExpanded = true }
-					.padding(16.dp)
-					.clearAndSetSemantics { contentDescription = "Active Offline OCR language is $selectedOcrLanguage. Double tap to cycle selections." },
-				contentAlignment = Alignment.CenterStart
-			) {
-				Text(text = selectedOcrLanguage, fontSize = 18.sp)
-				DropdownMenu(expanded = ocrDropdownExpanded, onDismissRequest = { ocrDropdownExpanded = false }) {
-					availableOcrLanguages.forEach { lang ->
-						DropdownMenuItem(text = { Text(lang) }, onClick = {
-							selectedOcrLanguage = lang
-							sharedPrefs.edit().putString("ocr_language", lang).apply()
-							ocrDropdownExpanded = false
-							// Fetch this script's ML Kit module now rather than on first use
-							// (a no-op for the bundled PaddleOCR scripts).
-							OfflineTextRecognizer.startModuleDownload(context, lang)
 						})
 					}
 				}

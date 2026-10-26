@@ -2,7 +2,7 @@
 
 An Android app that describes the world to blind and low-vision users — entirely on the phone.
 Point the camera (or open a photo or video) and LensWhisper speaks a description through TalkBack:
-scenes, text, documents, objects and colours, barcodes, light level. The AI runs on-device; no
+scenes, objects and colours, barcodes, light level. The AI runs on-device; no
 photo ever leaves the phone.
 
 ## Features
@@ -10,11 +10,9 @@ photo ever leaves the phone.
 - **Describe** scenes, photos and video frames with an on-device vision-language model
   (Gemma 4, InternVL3.5 or Qwen2-VL via [LiteRT-LM](https://github.com/google-ai-edge/LiteRT-LM),
   downloaded from Hugging Face on first use).
-- **Read text and documents** with Google ML Kit (Latin, Chinese, Japanese, Korean, Devanagari)
-  or bundled PaddleOCR PP-OCRv5 models on LiteRT (Persian, Arabic, Cyrillic).
-- **Detect objects** with ML Kit Image Labeling; **identify objects and colours** and **explore a
-  photo by touch** with a bundled YOLOv8m-seg segmentation model.
-- **Scan barcodes** with ML Kit.
+- **Detect objects, identify objects and colours** and **explore a photo by touch** with a bundled
+  YOLOv8m-seg segmentation model.
+- **Scan barcodes** with zxing-cpp.
 - Look products up in an optional offline product database (built from
   Open Food Facts / Open Products Facts), and attach voice or text notes to each barcode.
 - Built for TalkBack throughout: every result is announced, every control is labelled.
@@ -50,10 +48,6 @@ the bundled third-party components:
 - `app/src/main/assets/models/yolov8m_seg_int8.tflite` — YOLOv8m-seg by
   [Ultralytics](https://github.com/ultralytics/ultralytics), AGPL-3.0, exported with Ultralytics'
   own TFLite exporter (int8).
-- `app/src/main/assets/models/ocr/` — PP-OCRv5 mobile text detection and Arabic/Cyrillic
-  recognition by [PaddlePaddle](https://github.com/PaddlePaddle/PaddleOCR), Apache-2.0, converted
-  from the official ONNX releases to LiteRT (see NOTICE and `tools/ocr_models/`).
-- Google ML Kit (Play Services, unbundled), under the ML Kit Terms of Service.
 
 The downloadable vision-language models are not part of this repository and each comes under its
 own licence (all currently Apache-2.0), shown in the app under Legal Information.

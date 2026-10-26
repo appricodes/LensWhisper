@@ -58,14 +58,6 @@
         <uses-native-library android:name="libOpenCL.so" android:required="false" />
         <uses-native-library android:name="libvndksupport.so" android:required="false" />
 
-        <!-- ML Kit ships unbundled (play-services-mlkit-*, see app/build.gradle.kts): this asks
-             Play Services to fetch the Latin OCR, barcode and image-labeling modules around install
-             time, so the common case never hits the "not ready yet" path. Other OCR scripts are
-             requested when chosen in Settings. -->
-        <meta-data
-            android:name="com.google.mlkit.vision.DEPENDENCIES"
-            android:value="ocr,barcode,ica" />
-
         <activity
             android:name=".CameraActivity"
             android:exported="true"
@@ -103,12 +95,6 @@
             android:name=".SegmentationExploreActivity"
             android:exported="false"
             android:label="Explore"
-            android:theme="@style/Theme.LensWhisper" />
-
-        <activity
-            android:name=".ReadDocumentActivity"
-            android:exported="false"
-            android:label="Read Document"
             android:theme="@style/Theme.LensWhisper" />
 
         <activity

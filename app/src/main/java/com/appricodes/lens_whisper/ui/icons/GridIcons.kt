@@ -20,12 +20,9 @@ import androidx.compose.ui.graphics.drawscope.Stroke
  * though one names objects and the other asks a VLM to describe them. TalkBack's
  * contentDescription already disambiguates precisely for anyone who needs it - see
  * [GridIconGlyph]'s own doc for why sighted-only precision beyond that isn't the goal here.
- * [READ_TEXT] used to be one of these too (shared with the VLM catalog's "Read Texts" prompt) -
- * that button was removed 2026-09-01, so this glyph is Basic Tasks' Read Text alone now; kept
- * distinct from [READ_DOCUMENT] regardless, since the two still mean different things there.
  */
 enum class GridIcon {
-    DETECT_OBJECTS, IDENTIFY_OBJECTS_COLORS, EXPLORE, READ_TEXT, READ_DOCUMENT,
+    DETECT_OBJECTS, IDENTIFY_OBJECTS_COLORS, EXPLORE,
     LIGHT_METER, SIMPLE_COLOR, SCAN_BARCODE,
     BRIEF_NARRATION, DETAILED_SCENE, PEOPLE_OUTFIT, DESCRIBE_TV, OBJECTS, CUSTOM_PROMPT,
     VOLUME_KEYS, SWITCH_CAMERA, FLASH_ON, FLASH_OFF, MICROPHONE,
@@ -129,14 +126,6 @@ private fun DrawScope.rippleGlyph(tint: Color, strokeWidth: Float) {
     }
 }
 
-/** The 3 (or, for the shorter last line, 2.7) horizontal rules shared by every "read this text"
- *  glyph - see [GridIcon.READ_TEXT]'s own doc. */
-private fun DrawScope.textLines(tint: Color, strokeWidth: Float, left: Float, right: Float, shortRight: Float, topY: Float, gap: Float) {
-    strokeLine(tint, strokeWidth, left, topY, right, topY)
-    strokeLine(tint, strokeWidth, left, topY + gap, right, topY + gap)
-    strokeLine(tint, strokeWidth, left, topY + gap * 2, shortRight, topY + gap * 2)
-}
-
 /** [GridIcon.SCAN_BARCODE]: the bars of a 1D barcode inside the same four-corner viewfinder frame
  *  the detector glyphs use ([viewfinderCorners]) — "point the camera at this and it will be read"
  *  is exactly the shared idea, and the bars are what distinguishes it from them. Bar x-positions
@@ -169,18 +158,6 @@ private fun DrawScope.drawGridIcon(icon: GridIcon, tint: Color) {
         }
 
         GridIcon.EXPLORE -> rippleGlyph(tint, strokeWidth)
-
-        GridIcon.READ_TEXT -> textLines(tint, strokeWidth, left = 5f, right = 19f, shortRight = 13f, topY = 7f, gap = 5f)
-
-        GridIcon.READ_DOCUMENT -> {
-            // Page outline with a folded top-right corner, straight lines only.
-            strokePolyline(
-                tint, stroke,
-                6f, 3f, 15f, 3f, 15f, 7f, 19f, 7f, 19f, 21f, 6f, 21f, 6f, 3f
-            )
-            strokeLine(tint, strokeWidth, 15f, 3f, 19f, 7f)
-            textLines(tint, strokeWidth, left = 8.5f, right = 16.5f, shortRight = 13f, topY = 11.5f, gap = 3.5f)
-        }
 
         GridIcon.LIGHT_METER -> {
             drawCircle(tint, radius = len(4.2f), center = pt(12f, 12f), style = stroke)

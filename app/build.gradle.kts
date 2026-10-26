@@ -121,26 +121,10 @@ dependencies {
     implementation(libs.androidx.ui.tooling.preview)
     implementation(libs.androidx.material3)
 
-    // ML Kit, all as the play-services-mlkit-* (unbundled) variants: no model weights in the APK,
-    // Play Services downloads each module instead (see the com.google.mlkit.vision.DEPENDENCIES
-    // manifest meta-data, and each wrapper's isReady() for the "not downloaded yet" case).
-
-    // Barcode scanning (QR codes and 1D product barcodes). Backs offline/OfflineBarcodeScanner.kt
-    // and BarcodeScanActivity.
-    implementation(libs.barcode.scanning)
-
-    // Image labeling (Detect Objects) — offline/OfflineImageLabeler.kt.
-    implementation(libs.image.labeling)
-
-    // Text recognition (OCR) for Latin, Chinese, Japanese, Korean and Devanagari —
-    // offline/OfflineTextRecognizer.kt. Persian, Arabic and Cyrillic, which ML Kit has no
-    // recognizer for, use the bundled PaddleOCR models instead (offline/PaddleOcr.kt, on the plain
-    // LiteRT runtime below).
-    implementation(libs.text.recognition)
-    implementation(libs.text.recognition.chinese)
-    implementation(libs.text.recognition.japanese)
-    implementation(libs.text.recognition.korean)
-    implementation(libs.text.recognition.devanagari)
+    // Barcode scanning (QR codes and 1D product barcodes) - zxing-cpp (Apache-2.0), a bundled
+    // native decoder: no model, no Play Services, ready at install. Backs
+    // offline/OfflineBarcodeScanner.kt and BarcodeScanActivity.
+    implementation(libs.zxing.cpp)
 
     // (play-services-auth — Google Sign-In — used to live here for the old account system. There
     // is no account system any more (see data/PreferencesManager.kt's note above) and nothing in
@@ -151,7 +135,7 @@ dependencies {
 
     // Plain LiteRT (the classic Interpreter API — NOT litertlm-android above, which is a
     // separate, LLM-specific runtime that can't load an ordinary CNN). Runs the bundled YOLOv8m-seg
-    // object-and-mask detector (offline/OfflineSegmentationDetector.kt) and the PaddleOCR models.
+    // object-and-mask detector (offline/OfflineSegmentationDetector.kt).
     // CPU-only deliberately: no GPU delegate is added. This exact codebase has already hit one
     // GPU-vision-delegate compatibility failure on real hardware (Exynos 2100/Mali, see
     // PreferencesManager.getVisionBackendOverride's doc) that needed a runtime CPU fallback for

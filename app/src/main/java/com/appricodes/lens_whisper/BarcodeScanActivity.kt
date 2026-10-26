@@ -160,11 +160,6 @@ private fun BarcodeScanScreen(
     var isRecording by remember { mutableStateOf(false) }
     var isPlaying by remember { mutableStateOf(false) }
     var statusLine by remember { mutableStateOf("Scanning. Point the camera at the barcode.") }
-    // True when the barcode module isn't installed yet. The scan effect can't retry on its own —
-    // none of its keys change while the download runs — so this puts a Try Again button on screen
-    // and [scanAttempt] is what actually re-triggers the effect.
-    var scannerNotReady by remember { mutableStateOf(false) }
-    var scanAttempt by remember { mutableStateOf(0) }
 
     // True only between ON_RESUME and ON_PAUSE. Two things on this screen would otherwise keep
     // running after the user navigates away: the periodic "still scanning" tone (a LaunchedEffect
@@ -317,7 +312,7 @@ private fun BarcodeScanScreen(
     // Binds the camera exactly while the screen is in its scanning phase, and unbinds on every
     // other transition (result, lookup, leaving the screen) — the camera is never held open a
     // moment longer than the scan itself, matching CameraController's own contract elsewhere.
-    LaunchedEffect(phase, cameraPermissionGranted, scanAttempt) {
+    LaunchedEffect(phase, cameraPermissionGranted) {
         if (phase != ScanPhase.SCANNING) {
             camera.stop()
             return@LaunchedEffect
@@ -326,15 +321,6 @@ private fun BarcodeScanScreen(
             cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
             return@LaunchedEffect
         }
-        // isReady also kicks off the module download when it is missing, so a Try Again a few
-        // seconds later has something to succeed against.
-        if (!OfflineBarcodeScanner.isReady(context)) {
-            scannerNotReady = true
-            statusLine = "The barcode reader is still downloading. Double tap Try Again in a moment."
-            announce(statusLine)
-            return@LaunchedEffect
-        }
-        scannerNotReady = false
         announce("Scanning for a barcode. Point the camera at it. Press back to stop.")
         try {
             camera.start(lifecycleOwner, torch = prefs.flashEnabled) { found -> onBarcodesFound(found) }
@@ -368,7 +354,6 @@ private fun BarcodeScanScreen(
             when (event) {
                 Lifecycle.Event.ON_RESUME -> {
                     isForeground = true
-                    if (scannerNotReady) scanAttempt++
                 }
                 Lifecycle.Event.ON_PAUSE -> {
                     isForeground = false
@@ -521,13 +506,6 @@ private fun BarcodeScanScreen(
         when (phase) {
             ScanPhase.SCANNING -> {
                 InfoCard(title = "Status", body = statusLine)
-                if (scannerNotReady) {
-                    ActionButton(
-                        label = "Try Again",
-                        description = "Try again to start the barcode reader.",
-                        onClick = { scanAttempt++ }
-                    )
-                }
                 Button(
                     onClick = onClose,
                     modifier = Modifier

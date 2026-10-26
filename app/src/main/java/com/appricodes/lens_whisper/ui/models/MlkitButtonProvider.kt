@@ -11,17 +11,14 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.appricodes.lens_whisper.BarcodeScanActivity
-import com.appricodes.lens_whisper.ReadDocumentActivity
 import com.appricodes.lens_whisper.SegmentationExploreActivity
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.offline.DetectedInstance
 import com.appricodes.lens_whisper.offline.DetectionPhrasing
 import com.appricodes.lens_whisper.offline.OfflineBarcodeScanner
 import com.appricodes.lens_whisper.offline.OfflineColorDetector
-import com.appricodes.lens_whisper.offline.OfflineImageLabeler
 import com.appricodes.lens_whisper.offline.OfflineLightDetector
 import com.appricodes.lens_whisper.offline.OfflineSegmentationDetector
-import com.appricodes.lens_whisper.offline.OfflineTextRecognizer
 import com.appricodes.lens_whisper.ui.components.GridCell
 import com.appricodes.lens_whisper.ui.icons.GridIcon
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -47,17 +44,15 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
 /**
  * "Basic Models"' button set (the on-screen label; [PreferencesManager.selectedModelId] is still
  * the literal string `"mlkit"` — see [ModelManagementActivity] for why the visible name changed):
- * Detect Objects (ML Kit Image Labeling, see [OfflineImageLabeler]), Identify Objects and
- * Colors/Explore (backed by the bundled YOLOv8m-seg segmentation detector, see
- * [OfflineSegmentationDetector]), Read Text/Read Document (ML Kit or PaddleOCR, see
- * [OfflineTextRecognizer]), Scan Barcode (ML Kit), Light Level and Simple Color.
+ * Detect Objects/Object and Color Detection/Explore (all three backed by the bundled YOLOv8-seg
+ * detector, see [OfflineSegmentationDetector]) plus Scan Barcode, Light Level and Simple Color.
  * Unlike the prompt-based [OfflineVlmButtonProvider]/[LocalServerButtonProvider], these buttons
  * capture-and-detect directly (tap = single shot, long-press = continuous polling, where
  * supported) rather than routing through
  * [com.appricodes.lens_whisper.inference.runSelectedModelAnalysis] — so this class owns its own
  * small bit of session state (active mode, continuous flag, last-spoken text per mode, [isBusy])
  * instead of going through the shared
- * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController]. The plain ML Kit
+ * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController]. The old ML Kit
  * object/color detectors this grid used to expose directly (`OfflineObjectDetector`, and
  * [OfflineColorDetector]'s own `detect`, which used ML Kit Subject Segmentation + Image Labeling)
  * were dropped once the segmentation-based Detect Objects/Object and Color Detection buttons took
@@ -76,8 +71,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * readout/decode/scale/file-write). On a file-based host (MediaDescriberScreen) there is no
  * physical shutter, so `onShutter` there just fires as early as possible instead — see that
  * screen's own capture lambda. Its `highRes` parameter asks for a sharper capture (1080p vs. the
- * usual 720p) — only Read Text and Read Document pass true, since OCR needs enough resolution for
- * small glyphs to stay legible, where every other mode here only needs enough detail for
+ * usual 720p) — no mode here currently passes true, since every one only needs enough detail for
  * object/scene description; a file-based host has no separate higher-fidelity source to request,
  * so it's free to ignore this flag and just use the file/frame's own resolution throughout. Its
  * `allowFlash` parameter is how [captureAndRun] suppresses the flash after the first frame of a
@@ -86,7 +80,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * just ignores it. Its `correctOrientation` parameter is CameraActivity's live-sensor cue to apply
  * (or skip) the physical-rotation fix described on
  * [com.appricodes.lens_whisper.ui.components.CameraController.withCaptureSession] — every mode here
- * passes true except [launchSegmentationExplore] and [launchReadDocument], whose captures are sent
+ * passes true except [launchSegmentationExplore], whose capture is sent
  * to the model exactly as taken; a file-based host has no live sensor to correct from and just
  * ignores it.
  *
@@ -98,7 +92,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * case: it reads [hasLiveCamera] not to disable itself but to pick between two genuinely different
  * behaviours — a continuous live scan on a camera host, a one-shot detect against the current
  * file/frame otherwise; see [launchBarcodeScan]. Every other button here (Detect Objects, Identify
- * Objects and Colors, Explore Photo by Touch, Read Text, Read Document) needs nothing
+ * Objects and Colors, Explore Photo by Touch) needs nothing
  * camera-specific beyond [capturePhoto] itself, so they work unchanged against whichever bitmap a
  * file-based host's own `capturePhoto` hands back.
  */
@@ -109,11 +103,11 @@ class MlkitButtonProvider(
     private val hasLiveCamera: Boolean = true
 ) : ModelButtonProvider {
 
-    private enum class Mode { NONE, TEXT, LIGHT, LABEL, SEGMENT_COLOR, SIMPLE_COLOR }
+    private enum class Mode { NONE, LIGHT, SEGMENT, SEGMENT_COLOR, SIMPLE_COLOR }
 
     private var activeMode by mutableStateOf(Mode.NONE)
     private var continuousEnabled by mutableStateOf(false)
-    // True once a continuous run (Read Text/Simple Color long-press) has fired the flash for its
+    // True once a continuous run (Simple Color long-press) has fired the flash for its
     // first frame — every frame after that passes allowFlash = false regardless of
     // PreferencesManager.flashEnabled, per explicit product decision: flashing every couple of
     // seconds for as long as continuous mode runs is disruptive/dazzling in a way a single-shot
@@ -124,12 +118,11 @@ class MlkitButtonProvider(
     // failed) — every entry point that can trigger a capture checks this first and refuses a
     // second one while it's still set, rather than letting two requests race each other.
     private var isBusy by mutableStateOf(false)
-    private var lastTextText: String? = null
     // The volume-key/on-screen "Repeat" action, for whichever single-shot mode last ran — set by
     // selectSingleShot right when the user triggers it, and re-invoked
     // (not just re-spoken) by repeatLastAction so a "repeat" genuinely captures a fresh photo, the
     // same as every other mode's own capture, rather than re-describing a stale one. Left untouched
-    // by selectContinuous/toggleLight/launchSegmentationExplore/launchReadDocument — a continuous
+    // by selectContinuous/toggleLight/launchSegmentationExplore— a continuous
     // poll, a toggle, and the two screens that navigate away aren't "repeat" candidates.
     private var lastRepeatableAction: (() -> Unit)? = null
 
@@ -149,11 +142,11 @@ class MlkitButtonProvider(
      *  duration of a mode the user explicitly started. Explore is excluded — it leaves this screen
      *  for a new activity, and "keep re-opening a full-screen view every few seconds" isn't a mode
      *  that makes sense for it. Detect Objects/Identify Objects and Colors are excluded too — the
-     *  segmentation detector is heavy enough that polling it every few seconds isn't a good
-     *  experience, so their long-press doesn't start continuous mode at all (see [rows]; only a
-     *  single-shot capture exists for [Mode.LABEL]/[Mode.SEGMENT_COLOR]). */
+     *  underlying YOLOv8-seg detector is heavy enough that polling it every few seconds isn't a good
+     *  experience, so their long-press no longer starts continuous mode at all (see [rows]; only a
+     *  single-shot capture remains for [Mode.SEGMENT]/[Mode.SEGMENT_COLOR]). */
     val isContinuousActive: Boolean
-        get() = continuousEnabled && (activeMode == Mode.TEXT || activeMode == Mode.SIMPLE_COLOR)
+        get() = continuousEnabled && activeMode == Mode.SIMPLE_COLOR
 
     /** Call from the host's back-press/stop handling to leave any active mode. Returns true if
      *  a mode was actually active (so the caller can decide whether Back should also exit). */
@@ -166,7 +159,7 @@ class MlkitButtonProvider(
         return true
     }
 
-    /** Ends a repeating task — continuous Read Text/Simple Color, or Light Level — if one is
+    /** Ends a repeating task — continuous Simple Color, or Light Level — if one is
      *  running, and says so. For buttons that take the user elsewhere (More, the model picker):
      *  the loop mustn't carry on behind them. Returns whether anything was stopped. */
     fun stopRepeatingTask(): Boolean {
@@ -204,7 +197,7 @@ class MlkitButtonProvider(
      *  until the user has tapped something. Mirrors [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController.seedDefaultPrompt]
      *  for the VLM catalog's own "last prompt" tracking. */
     fun resetRepeatToDefault(prefs: PreferencesManager) {
-        lastRepeatableAction = { selectSingleShot(Mode.LABEL, prefs) }
+        lastRepeatableAction = { selectSingleShot(Mode.SEGMENT, prefs) }
     }
 
     private fun speak(text: String) {
@@ -232,12 +225,6 @@ class MlkitButtonProvider(
         isBusy = true
         var toneJob: Job? = null
         try {
-            // ML Kit's models are Play Services modules downloaded on demand — check before
-            // capturing at all, so a not-ready module doesn't cost the user a capture (and its
-            // acknowledge sound) for an attempt that's going to fail anyway. isReady() owns the
-            // "please wait" announcement and starts the download.
-            if (mode == Mode.TEXT && !OfflineTextRecognizer.isReady(context, prefs.ocrLanguage)) return
-            if (mode == Mode.LABEL && !OfflineImageLabeler.isReady(context)) return
             // Immediate feedback that the tap registered — binding a cold camera can itself take a
             // second or two before the shutter click fires. Skipped in continuous mode: the camera
             // stays bound for the whole mode there (see isContinuousActive), so there's no such gap
@@ -248,14 +235,13 @@ class MlkitButtonProvider(
             val allowFlash = if (continuousEnabled) !continuousFlashUsed else true
             if (continuousEnabled) continuousFlashUsed = true
             val bitmap = try {
-                capture(MAX_CAPTURE_DIMENSION, mode == Mode.TEXT, allowFlash, true) {
+                capture(MAX_CAPTURE_DIMENSION, false, allowFlash, true) {
                     // Fires the instant the shutter sound plays (see
                     // CameraController.capturePhotoInternal), not after the whole capture — image
                     // readout/decode/scale/file-write shouldn't delay the "still working" cue.
-                    // Detect Objects runs the image labeler, Identify Objects and Colors the slow
-                    // segmentation model, Read Text the OCR models; only Simple Color skips it.
-                    // Not in continuous Read Text, where a tone every few seconds would be noise.
-                    if (mode == Mode.LABEL || mode == Mode.SEGMENT_COLOR || (mode == Mode.TEXT && !continuousEnabled)) {
+                    // "Object Detection"/"Object and Color Detection" run the slow segmentation model;
+                    // only the near-instant colour modes skip it.
+                    if (mode == Mode.SEGMENT || mode == Mode.SEGMENT_COLOR) {
                         toneJob = coroutineScope.launch(Dispatchers.IO) {
                             ProcessingSoundPlayer.loopClockWaitingTone(context)
                         }
@@ -268,26 +254,18 @@ class MlkitButtonProvider(
                 return
             }
             when (mode) {
-                Mode.TEXT -> {
-                    val text = OfflineTextRecognizer.recognizeText(context, bitmap, prefs.ocrLanguage)
-                    toneJob?.cancel()
-                    if (text != null) {
-                        if (continuousEnabled) speakIfChanged(lastTextText, text) { lastTextText = it }
-                        else { speak(text); lastTextText = text }
-                    }
-                }
-                // Single-shot only — LABEL/SEGMENT_COLOR's long-press doesn't start continuous mode
-                // (see isContinuousActive's doc), so continuousEnabled is always false by the time
-                // either of these runs; nothing here needs the speakIfChanged dedup path.
-                Mode.LABEL -> {
-                    val text = summarizeLabels(bitmap)
+                // Single-shot only — SEGMENT/SEGMENT_COLOR's long-press no longer starts continuous
+                // mode (see isContinuousActive's doc), so continuousEnabled is always false by the
+                // time either of these runs; nothing here needs the speakIfChanged dedup path.
+                Mode.SEGMENT -> {
+                    val text = summarizeInstances(context, bitmap, withColors = false)
                     // Stop the tone the instant there's something to say, not after — otherwise a
                     // tone dispatched a moment earlier can land right on top of the announcement.
                     toneJob?.cancel()
                     speak(text)
                 }
                 Mode.SEGMENT_COLOR -> {
-                    val text = summarizeInstances(context, bitmap)
+                    val text = summarizeInstances(context, bitmap, withColors = true)
                     toneJob?.cancel()
                     speak(text)
                 }
@@ -313,30 +291,16 @@ class MlkitButtonProvider(
         AccessibilityUtils.announceToTalkBack(context, "Please wait for the current analysis to finish.")
     }
 
-    /** "Detect Objects": [OfflineImageLabeler]'s labels for [bitmap], each hedged by its own
-     *  confidence via [DetectionPhrasing.describeDetection], the same way the segmentation buttons
-     *  phrase theirs. */
-    private suspend fun summarizeLabels(bitmap: Bitmap): String {
-        val labels = try {
-            OfflineImageLabeler.label(bitmap)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (e: Exception) {
-            return "Object detection failed."
-        }
-        if (labels.isEmpty()) return "No objects recognized."
-        return labels.joinToString(", ") { DetectionPhrasing.describeDetection(it.confidence, it.text.lowercase()) }
-    }
-
     /**
-     * Runs [OfflineSegmentationDetector] on [bitmap] and builds the sentence spoken for "Identify
-     * Objects and Colors": each instance with its top-2 dominant colors via
-     * [DetectedInstance.namedDominantColors] — the same HSV-based naming [OfflineColorDetector]
-     * itself uses, applied to this instance's own mask. Each instance's own confidence is hedged
-     * into its phrasing by [DetectionPhrasing.describeDetection] rather than spoken plainly
-     * regardless of how sure the model actually is.
+     * Runs [OfflineSegmentationDetector] on [bitmap] and builds the sentence spoken for "Detect
+     * Objects"/"Object and Color Detection". [withColors] adds each instance's top-2 dominant
+     * colors via [DetectedInstance.namedDominantColors] — the same HSV-based naming
+     * [OfflineColorDetector] itself uses internally, just applied to this instance's own mask
+     * instead of ML Kit's separate subject-segmentation step. Each instance's
+     * own confidence is hedged into its phrasing by [DetectionPhrasing.describeDetection] rather
+     * than spoken plainly regardless of how sure the model actually is.
      */
-    private suspend fun summarizeInstances(context: Context, bitmap: Bitmap): String {
+    private suspend fun summarizeInstances(context: Context, bitmap: Bitmap, withColors: Boolean): String {
         val instances = withContext(Dispatchers.Default) {
             OfflineSegmentationDetector.detect(context, bitmap)
         }
@@ -345,8 +309,10 @@ class MlkitButtonProvider(
         // lambda, so a withContext call inside it doesn't compile.
         val parts = mutableListOf<String>()
         for (instance in instances) {
-            val colors = withContext(Dispatchers.Default) { instance.namedDominantColors(bitmap) }
-            val colorPhrase = colors.joinToString(" and ")
+            val colorPhrase = if (!withColors) "" else {
+                val colors = withContext(Dispatchers.Default) { instance.namedDominantColors(bitmap) }
+                colors.joinToString(" and ")
+            }
             parts.add(DetectionPhrasing.describeDetection(instance.confidence, instance.label, colorPhrase))
         }
         return parts.joinToString(", ")
@@ -401,56 +367,12 @@ class MlkitButtonProvider(
         }
     }
 
-    /** "Read Document": same "capture here, read there" shape as [launchSegmentationExplore] —
-     *  see [ReadDocumentActivity]'s doc for what happens once it's open, including which OCR
-     *  language it reads with. [prefs] is only for the OCR-module readiness check below. */
-    private fun launchReadDocument(prefs: PreferencesManager) {
-        if (isBusy) {
-            announceBusy()
-            return
-        }
-        val capture = capturePhoto
-        isBusy = true
-        coroutineScope.launch {
-            try {
-                // Same "check before capturing" reasoning as Mode.TEXT in captureAndRun.
-                if (!OfflineTextRecognizer.isReady(context, prefs.ocrLanguage)) return@launch
-                ProcessingSoundPlayer.playCaptureAcknowledge(context)
-                val bitmap = try {
-                    // No tone starts here — ReadDocumentActivity owns its own "waiting for the
-                    // model" cue, started once the captured image is actually received there.
-                    // A text task, so 1080p (highRes = true) — see MlkitButtonProvider's doc.
-                    // correctOrientation = false — Read Document is Explore's text counterpart and
-                    // sends the image to the model exactly as taken, same reasoning as
-                    // launchSegmentationExplore above.
-                    capture(MAX_CAPTURE_DIMENSION, true, true, false) {}
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    if (e !is CameraPermissionDeniedException) AccessibilityUtils.announceToTalkBack(context, "Could not capture photo.")
-                    return@launch
-                }
-                val uri = withContext(Dispatchers.IO) {
-                    val file = File(context.cacheDir, "read_document_${System.currentTimeMillis()}.jpg")
-                    FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.JPEG, 90, it) }
-                    Uri.fromFile(file)
-                }
-                context.startActivity(
-                    Intent(context, ReadDocumentActivity::class.java)
-                        .putExtra("IMAGE_URI", uri.toString())
-                )
-            } finally {
-                isBusy = false
-            }
-        }
-    }
-
     /**
      * "Scan Barcode": opens [BarcodeScanActivity], which does the whole job itself — it keeps a
      * live camera stream running until a barcode turns up, rather than taking a photo per attempt
      * (see that class's doc for why). So on a live-camera host this button is a plain launch with
-     * nothing to capture first, unlike [launchSegmentationExplore]/[launchReadDocument] which hand
-     * their screens an already-taken photo.
+     * nothing to capture first, unlike [launchSegmentationExplore] which hands
+     * its screen an already-taken photo.
      *
      * A file-based host (Media Describer) has no live feed to stream, so a continuous scan is
      * impossible there — but the cell is not left dead either: it runs a one-shot detect against
@@ -472,7 +394,6 @@ class MlkitButtonProvider(
         ProcessingSoundPlayer.playCaptureAcknowledge(context)
         coroutineScope.launch {
             try {
-                if (!OfflineBarcodeScanner.isReady(context)) return@launch
                 val bitmap = try {
                     capture(MAX_CAPTURE_DIMENSION, false, true, true) {}
                 } catch (e: CancellationException) {
@@ -560,9 +481,9 @@ class MlkitButtonProvider(
             listOf(
                 GridCell(
                     label = "Detect Objects",
-                    contentDescription = "Detect Objects. Names what's in view — objects, animals, food, places — from over 400 kinds of thing, without saying where they are.",
+                    contentDescription = "Detect Objects. Names the objects in view, using a dedicated on-device detector.",
                     icon = GridIcon.DETECT_OBJECTS,
-                    onClick = { selectSingleShot(Mode.LABEL, ctx.prefs) }
+                    onClick = { selectSingleShot(Mode.SEGMENT, ctx.prefs) }
                 ),
                 GridCell(
                     label = "Identify Objects and Colors",
@@ -577,21 +498,6 @@ class MlkitButtonProvider(
                     onClick = { launchSegmentationExplore() }
                 ),
                 GridCell(
-                    label = "Read Text",
-                    contentDescription = "Read text in view. Tap to analyze once, hold to keep watching continuously.",
-                    icon = GridIcon.READ_TEXT,
-                    onClick = { selectSingleShot(Mode.TEXT, ctx.prefs) },
-                    onLongClick = { selectContinuous(Mode.TEXT) }
-                )
-            ),
-            listOf(
-                GridCell(
-                    label = "Read Document",
-                    contentDescription = "Read a document by touch. Opens a full-screen view — move your finger over a paragraph to hear it read aloud, or tap once for more options.",
-                    icon = GridIcon.READ_DOCUMENT,
-                    onClick = { launchReadDocument(ctx.prefs) }
-                ),
-                GridCell(
                     label = "Light Level Meter",
                     contentDescription = when {
                         !hasLiveCamera -> "Light level meter. Not available here — needs a live camera."
@@ -601,7 +507,9 @@ class MlkitButtonProvider(
                     icon = GridIcon.LIGHT_METER,
                     enabled = hasLiveCamera,
                     onClick = { toggleLight() }
-                ),
+                )
+            ),
+            listOf(
                 GridCell(
                     label = "Simple Color Detection",
                     contentDescription = if (hasLiveCamera) {
@@ -625,7 +533,9 @@ class MlkitButtonProvider(
                     },
                     icon = GridIcon.SCAN_BARCODE,
                     onClick = { launchBarcodeScan() }
-                )
+                ),
+                null,
+                null
             ),
             listOf(null, null, null, null)
         )
