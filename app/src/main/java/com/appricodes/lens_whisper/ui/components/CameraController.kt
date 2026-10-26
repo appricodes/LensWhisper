@@ -64,7 +64,7 @@ data class CapturedFrame(val bitmap: Bitmap, val uri: Uri)
  *   shutter does. There is consequently no auto-off timer to get wrong and no way to leave a torch
  *   burning.
  * - **A continuous analysis feed** ([setAnalysisFrameSink]) is the one thing that does hold the
- *   camera open, because MLKit's light-level and continuous modes genuinely need a live stream.
+ *   camera open, because Basic Tasks' light-level and continuous modes genuinely need a live stream.
  *   It is bound only while such a mode is running and dropped the moment it stops.
  *
  * [rebind] is the single place that decides what is bound: whatever the current combination of
@@ -85,7 +85,7 @@ class CameraController(
     private var analysisFrameSink: ((Bitmap) -> Unit)? = null
     private var captureSessionDepth = 0
     // Held on the controller, not set once on the use case, because [rebind] can replace the
-    // ImageCapture mid-session (e.g. MLKit's light mode starting while a Story burst runs) and a
+    // ImageCapture mid-session (e.g. Basic Tasks' light mode starting while a Story burst runs) and a
     // fresh use case would silently come back with the flash off.
     private var captureFlashEnabled = false
     // Same reasoning as captureFlashEnabled — which resolution the current capture session wants,
@@ -227,7 +227,7 @@ class CameraController(
                         captureCorrectOrientation = true
                         // Releases right away — rebind() recomputes from captureSessionDepth/
                         // analysisFrameSink, so this naturally leaves a continuous mode's live feed
-                        // (Light Level, MLKit's continuous polling) bound if one is holding the
+                        // (Light Level, Basic Tasks' continuous polling) bound if one is holding the
                         // camera open on purpose, and only tears down the just-finished capture use
                         // case.
                         rebind()
@@ -304,7 +304,7 @@ class CameraController(
 
         if (sink != null) {
             // This analysis stream is only ever bound for Light Level (see onAnalysisFrame in
-            // MlkitButtonProvider — the only caller of setAnalysisFrameSink with a non-null sink),
+            // BasicTasksButtonProvider — the only caller of setAnalysisFrameSink with a non-null sink),
             // which only needs a coarse average brightness, not detail — requesting the smallest
             // resolution the camera supports here means less data to convert to a Bitmap per frame,
             // on top of OfflineLightDetector's own further downscale before it does any math.
@@ -411,13 +411,13 @@ class CameraController(
             // rotation — CameraX's own un-corrected default — when the caller opted out; see
             // correctOrientation's doc) right before capture, not just once at bind time: the
             // ImageCapture use case is reused across repeated captures within one session (Story's
-            // burst, MLKit's continuous polling, or two differently-flagged buttons in a row that
+            // burst, Basic Tasks' continuous polling, or two differently-flagged buttons in a row that
             // happen to share a binding signature) whenever nothing else about the binding changed,
             // so a stale value from an earlier, differently-flagged capture on the same instance
             // must never leak into this one.
             capture.targetRotation = if (captureCorrectOrientation) rotationTracker.surfaceRotation else currentDisplayRotation(context)
             // The single choke point every capture path in the app goes through (single shot,
-            // Story frames, every MLKit/segmentation mode, Explore) — playing the shutter click
+            // Story frames, every Basic Tasks mode, Explore) — playing the shutter click
             // here, right before the capture command itself is issued, means no call site has to
             // remember to trigger it itself. Deliberately *before* takePicture(), not in
             // onCaptureSuccess below: a real shutter sound marks the moment of exposure, not the

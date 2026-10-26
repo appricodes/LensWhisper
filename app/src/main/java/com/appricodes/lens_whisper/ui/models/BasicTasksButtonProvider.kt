@@ -43,7 +43,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
 
 /**
  * "Basic Models"' button set (the on-screen label; [PreferencesManager.selectedModelId] is still
- * the literal string `"mlkit"` — see [ModelManagementActivity] for why the visible name changed):
+ * the literal string `"basic_tasks"` — see [ModelManagementActivity] for why the visible name changed):
  * Detect Objects/Object and Color Detection/Explore (all three backed by the bundled YOLOv8-seg
  * detector, see [OfflineSegmentationDetector]) plus Scan Barcode, Light Level and Simple Color.
  * Unlike the prompt-based [OfflineVlmButtonProvider]/[LocalServerButtonProvider], these buttons
@@ -52,15 +52,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * [com.appricodes.lens_whisper.inference.runSelectedModelAnalysis] — so this class owns its own
  * small bit of session state (active mode, continuous flag, last-spoken text per mode, [isBusy])
  * instead of going through the shared
- * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController]. The old ML Kit
- * object/color detectors this grid used to expose directly (`OfflineObjectDetector`, and
- * [OfflineColorDetector]'s own `detect`, which used ML Kit Subject Segmentation + Image Labeling)
- * were dropped once the segmentation-based Detect Objects/Object and Color Detection buttons took
- * over their slots — genuinely superseded, not worth carrying forward unused
- * (`OfflineObjectDetector.kt` and `OfflineColorDetector.detect` were both deleted outright, 2026-08-27,
- * along with the play-services-mlkit-subject-segmentation and ML Kit image-labeling dependencies
- * that `detect` was their only consumer of; [OfflineColorDetector.namedDominantColors] in the same
- * file is still very much alive).
+ * [com.appricodes.lens_whisper.ui.analysis.AnalysisSessionController].
  *
  * [capturePhoto] is always a real capture function — CameraActivity's live-sensor one or
  * MediaDescriberScreen's file/frame one (see `MediaDescriberScreen.captureFileFrame`) — every host
@@ -96,7 +88,7 @@ private const val SIMPLE_COLOR_CROP_SIZE = 50
  * camera-specific beyond [capturePhoto] itself, so they work unchanged against whichever bitmap a
  * file-based host's own `capturePhoto` hands back.
  */
-class MlkitButtonProvider(
+class BasicTasksButtonProvider(
     private val context: Context,
     private val coroutineScope: CoroutineScope,
     private val capturePhoto: suspend (maxDim: Int, highRes: Boolean, allowFlash: Boolean, correctOrientation: Boolean, onShutter: () -> Unit) -> Bitmap,
@@ -180,7 +172,7 @@ class MlkitButtonProvider(
         if (activeMode == Mode.LIGHT) OfflineLightDetector.stop()
     }
 
-    /** Wires the volume-key/on-screen "Repeat" action for MLKit: re-runs the last single-shot mode
+    /** Wires the volume-key/on-screen "Repeat" action for Basic Tasks: re-runs the last single-shot mode
      *  on a freshly captured photo — not just re-speaking the previous result against the old one,
      *  which is stale by the time the user asks to repeat it. */
     fun repeatLastAction() {
@@ -295,9 +287,8 @@ class MlkitButtonProvider(
      * Runs [OfflineSegmentationDetector] on [bitmap] and builds the sentence spoken for "Detect
      * Objects"/"Object and Color Detection". [withColors] adds each instance's top-2 dominant
      * colors via [DetectedInstance.namedDominantColors] — the same HSV-based naming
-     * [OfflineColorDetector] itself uses internally, just applied to this instance's own mask
-     * instead of ML Kit's separate subject-segmentation step. Each instance's
-     * own confidence is hedged into its phrasing by [DetectionPhrasing.describeDetection] rather
+     * [OfflineColorDetector] itself uses internally, just applied to this instance's own mask.
+     * Each instance's own confidence is hedged into its phrasing by [DetectionPhrasing.describeDetection] rather
      * than spoken plainly regardless of how sure the model actually is.
      */
     private suspend fun summarizeInstances(context: Context, bitmap: Bitmap, withColors: Boolean): String {

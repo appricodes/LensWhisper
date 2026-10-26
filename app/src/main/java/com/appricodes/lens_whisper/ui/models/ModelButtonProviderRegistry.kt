@@ -9,18 +9,18 @@ import com.appricodes.lens_whisper.network.LocalServerFeature
  * [OfflineModelInfo] the host needs for download/memory gating and to populate
  * [ModelButtonContext.selectedOfflineModel].
  *
- * [mlkitProvider] is supplied by the host (not constructed here) because it's the one stateful
+ * [basicTasksProvider] is supplied by the host (not constructed here) because it's the one stateful
  * provider — it must keep its identity across recompositions so its active-mode/continuous-mode
- * state survives while MLKit stays selected. [OfflineVlmButtonProvider]/[LocalServerButtonProvider]
+ * state survives while Basic Tasks stays selected. [OfflineVlmButtonProvider]/[LocalServerButtonProvider]
  * are stateless singletons.
  */
 object ModelButtonProviderRegistry {
     fun forSelectedModel(
         selectedModelId: String,
-        mlkitProvider: MlkitButtonProvider,
+        basicTasksProvider: BasicTasksButtonProvider,
         offlineModels: List<OfflineModelInfo>
     ): Pair<ModelButtonProvider, OfflineModelInfo?> = when (selectedModelId) {
-        "mlkit" -> mlkitProvider to null
+        "basic_tasks" -> basicTasksProvider to null
         LocalServerFeature.MODEL_ID -> LocalServerButtonProvider to null
         else -> {
             val model = offlineModels.find { it.id == selectedModelId }

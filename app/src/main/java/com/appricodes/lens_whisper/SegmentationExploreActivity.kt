@@ -100,7 +100,7 @@ import java.io.FileOutputStream
 private const val MAX_CAPTURE_DIMENSION = 2500
 
 /**
- * The mask-based "Explore" screen — launched by [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider]
+ * The mask-based "Explore" screen — launched by [com.appricodes.lens_whisper.ui.models.BasicTasksButtonProvider]
  * (Basic Tasks' "Explore Photo by Touch") and by [com.appricodes.lens_whisper.CameraActivity] itself
  * (the on-device VLM catalog's "Explore and Describe", in describe-mode below). Grounded in
  * [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector]'s exact per-pixel masks, so a
@@ -248,7 +248,7 @@ private fun SegmentationExploreScreen(
     var isLoading by remember { mutableStateOf(true) }
     var bitmap by remember { mutableStateOf<Bitmap?>(null) }
     // The current photo's own cache file, for "Share photo" — the initial one is already a cache
-    // file (see MlkitButtonProvider.launchSegmentationExplore's Uri.fromFile), and "Capture new
+    // file (see BasicTasksButtonProvider.launchSegmentationExplore's Uri.fromFile), and "Capture new
     // photo" below writes a fresh one the same way.
     var currentPhotoFile by remember { mutableStateOf(imageUri?.path?.let { File(it) }) }
     // describeMode's high-res source file for SegmentationIsolation — see CameraActivity's

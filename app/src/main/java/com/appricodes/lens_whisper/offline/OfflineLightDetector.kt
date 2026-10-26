@@ -109,13 +109,13 @@ object OfflineLightDetector {
         player.start()
     }
 
-    /** Call once when Light Level mode starts (see `MlkitButtonProvider.toggleLight`) — until this
+    /** Call once when Light Level mode starts (see `BasicTasksButtonProvider.toggleLight`) — until this
      *  runs, [detectAndPlayTone] deliberately won't start the playback chain on its own. */
     fun start() {
         active = true
     }
 
-    /** Call once when Light Level mode stops (see `MlkitButtonProvider.toggleLight`/
+    /** Call once when Light Level mode stops (see `BasicTasksButtonProvider.toggleLight`/
      *  `stopActiveMode`/`stopContinuous`) — halts the playback chain and silences whatever note is
      *  currently sounding, rather than letting it (and the notes after it) keep playing unattended. */
     fun stop() {

@@ -14,10 +14,10 @@ import android.os.PowerManager
  * to cool it down. [com.appricodes.lens_whisper.inference.AnalysisRouter] checks this before every
  * on-device analysis, the same way it already checks the model is downloaded and an image exists.
  *
- * **Deliberately does not touch the MLKit-based tools** (object/text/colour detection, the light
- * meter — see [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider]). Those never route
+ * **Deliberately does not touch the Basic Tasks tools** (object/text/colour detection, the light
+ * meter — see [com.appricodes.lens_whisper.ui.models.BasicTasksButtonProvider]). Those never route
  * through [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] or this guard at all —
- * each single-shot MLKit call is milliseconds of work, not remotely comparable to a VLM generating
+ * each single-shot Basic Tasks call is milliseconds of work, not remotely comparable to a VLM generating
  * a whole response token by token, and blocking them too would leave a user with no working tool at
  * exactly the moment their phone is uncomfortably hot.
  *
@@ -72,7 +72,7 @@ object ThermalGuard {
     }
 
     /** Shown to the user (and read aloud, via the app's existing "ERROR: ..." handling) when
-     *  analysis is refused for being too hot. Explicitly reassures that the lighter MLKit tools
+     *  analysis is refused for being too hot. Explicitly reassures that the lighter Basic Tasks tools
      *  still work, since the phone being hot is otherwise an alarming thing to be told mid-task. */
     const val HOT_MESSAGE =
         "Your phone feels hot right now, so on-device AI analysis is paused until it cools down a " +

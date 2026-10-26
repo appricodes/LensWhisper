@@ -45,7 +45,7 @@ class OfflineModelsRepository(private val context: Context) {
                 stream.readBytes().toString(Charsets.UTF_8)
             }
             val array = JSONObject(jsonString).getJSONArray("models")
-            // Smallest first — the model picker/management screen list MLKit, then these (in this
+            // Smallest first — the model picker/management screen list Basic Tasks, then these (in this
             // order), then the online model last, so on-device size is what orders this segment.
             (0 until array.length()).mapNotNull { i ->
                 val obj = array.getJSONObject(i)
@@ -116,7 +116,7 @@ class OfflineModelsRepository(private val context: Context) {
             modelsDir(context)?.let { File(it, fileName).delete() }
         }
         val selected = prefs.selectedModelId
-        if (selected in RETIRED_MODEL_IDS) prefs.selectedModelId = "mlkit"
+        if (selected in RETIRED_MODEL_IDS) prefs.selectedModelId = "basic_tasks"
     }
 
     companion object {

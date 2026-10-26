@@ -291,10 +291,10 @@ class AnalysisSessionController(
     private val repository by lazy { OfflineModelsRepository(context.applicationContext) }
     private val speechRecognizer by lazy { SpeechRecognizer.createSpeechRecognizer(context) }
 
-    /** True for the on-device VLM catalog (Gemma4/InternVL3.5/Qwen-VL/...). Not MLKit (which never
-     *  routes through here — see `MlkitButtonProvider`) and not the Local Server. */
+    /** True for the on-device VLM catalog (Gemma4/InternVL3.5/Qwen-VL/...). Not Basic Tasks (which never
+     *  routes through here — see `BasicTasksButtonProvider`) and not the Local Server. */
     private fun isOfflineVlmSelected(): Boolean =
-        prefs.selectedModelId != "mlkit" && prefs.selectedModelId != LocalServerFeature.MODEL_ID
+        prefs.selectedModelId != "basic_tasks" && prefs.selectedModelId != LocalServerFeature.MODEL_ID
 
     /** True when the selected on-device model only understands English (see
      *  [OfflineModelInfo.multilingual]) — its voice questions are then recognized as English
@@ -319,7 +319,7 @@ class AnalysisSessionController(
      *  [com.appricodes.lens_whisper.inference.OfflineInferenceEngine] — before any capture/detect/
      *  isolate work starts, so a refusal doesn't burn a shutter+segmentation cycle for nothing. True
      *  (and surfaces [showThermalWarning]) refuses; false lets the caller proceed. Never blocks the
-     *  Local Server branch (nothing runs on this phone for that path) or MLKit (which never reaches
+     *  Local Server branch (nothing runs on this phone for that path) or Basic Tasks (which never reaches
      *  this controller's analysis methods at all) — same exclusion [com.appricodes.lens_whisper.inference.AnalysisRouter]'s
      *  own, deeper check already applies, kept in sync here rather than trusting only that backstop. */
     private fun blockedByHeat(): Boolean {
@@ -534,7 +534,7 @@ class AnalysisSessionController(
             // bundle.localServerCallStreaming; now it always does, whenever that streaming call is
             // offered at all (see CapturedBundle's own doc for when it isn't). The *Streaming
             // functions on LocalServerEngine already always sent `streaming: true` on their own —
-            // this only changes which of the two Android ever chooses to call. MLKit never reaches
+            // this only changes which of the two Android ever chooses to call. Basic Tasks never reaches
             // either branch (see isOfflineVlmSelected).
             //
             // Wrapped in its own try/catch: unlike runSelectedModelAnalysis (which reports setup
@@ -816,7 +816,7 @@ class AnalysisSessionController(
     /**
      * If [model] isn't downloaded yet, opens the download-size prompt instead of running
      * [action], and auto-resumes [action] once that model finishes downloading (observed via
-     * [ObserveDownloads]). No-op passthrough for MLKit/Local Server (`model == null`). If [model] is
+     * [ObserveDownloads]). No-op passthrough for Basic Tasks/Local Server (`model == null`). If [model] is
      * *already* downloading right now (e.g. the system's download manager resumed it after the app
      * was closed mid-download, and then one of that model's buttons was tapped),
      * shows a "still downloading, wait or pick another model" notice instead of the download
@@ -846,7 +846,7 @@ class AnalysisSessionController(
 
     /** The one gate every model-specific button (prompt tap, Explore, Repeat) runs through. Now
      *  that nothing is metered or paid for, the only thing left to gate on is whether an on-device
-     *  catalog model has actually been downloaded; MLKit and the Local Server go straight through. */
+     *  catalog model has actually been downloaded; Basic Tasks and the Local Server go straight through. */
     fun gateForSelectedModel(selectedModelId: String, selectedOfflineModel: OfflineModelInfo?, action: () -> Unit) {
         if (selectedOfflineModel != null) checkDownloadedOrRedirect(selectedOfflineModel, action) else action()
     }

@@ -44,7 +44,7 @@ data class ScannedBarcode(
  *   the frame's luminance plane, synchronously; **the caller owns closing the `ImageProxy`**
  *   afterwards.
  * - [scan] (`Bitmap`-backed) is the one-shot path for a host that has an image but no live feed —
- *   Media Describer's file/frame mode (see [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider]).
+ *   Media Describer's file/frame mode (see [com.appricodes.lens_whisper.ui.models.BasicTasksButtonProvider]).
  */
 object OfflineBarcodeScanner {
 

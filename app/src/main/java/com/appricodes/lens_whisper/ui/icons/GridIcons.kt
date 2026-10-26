@@ -35,7 +35,7 @@ private const val STROKE_FRACTION = 1.7f / 24f
 
 /**
  * Draws [icon] in [tint] - hand-drawn rather than pulled from a Material icon library,
- * deliberately: this app has a history of trimming APK weight (see the removed ML Kit and
+ * deliberately: this app has a history of trimming APK weight (see the removed
  * play-services-auth dependencies in app/build.gradle.kts), material-icons-core turns out to cover
  * almost none of this button set's vocabulary (TV, palette, touch-ripple, sun, teardrop, ...), and
  * material-icons-extended - the only Material set broad enough to - is several MB for the couple

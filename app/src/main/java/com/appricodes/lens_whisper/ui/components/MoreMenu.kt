@@ -38,8 +38,8 @@ import com.appricodes.lens_whisper.utils.AccessibilityUtils
  * meaningful (and only passed true) from the Video/Image describer, which has no camera itself.
  *
  * [selectedModelId]/[onModelDeleted] drive the delete entry: shown only when the selected model
- * is a downloaded on-device catalog model (never for "mlkit"/"local_server", which have nothing
- * to delete). Deleting falls back the caller to `"mlkit"` via [onModelDeleted], since (unlike
+ * is a downloaded on-device catalog model (never for "basic_tasks"/"local_server", which have nothing
+ * to delete). Deleting falls back the caller to `"basic_tasks"` via [onModelDeleted], since (unlike
  * `ModelManagementActivity`, which only lets you delete a model you're *not* currently on) this
  * entry only ever appears for the *selected* model.
  */
@@ -60,7 +60,7 @@ fun MoreMenu(
     var showLocalServerInfo by remember { mutableStateOf(false) }
 
     val selectedOfflineModel = remember(selectedModelId) {
-        if (selectedModelId == null || selectedModelId == "mlkit" || selectedModelId == LocalServerFeature.MODEL_ID) null
+        if (selectedModelId == null || selectedModelId == "basic_tasks" || selectedModelId == LocalServerFeature.MODEL_ID) null
         else repository.loadModels().find { it.id == selectedModelId }?.takeIf { repository.isDownloaded(it) }
     }
 
@@ -146,7 +146,7 @@ fun MoreMenu(
                 TextButton(onClick = {
                     if (prefs.selectedModelId == selectedOfflineModel.id) OfflineInferenceEngine.release()
                     repository.deleteDownload(selectedOfflineModel)
-                    prefs.selectedModelId = "mlkit"
+                    prefs.selectedModelId = "basic_tasks"
                     confirmDeleteVisible = false
                     onModelDeleted()
                 }) { Text("Delete") }

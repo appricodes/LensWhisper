@@ -75,7 +75,7 @@ import kotlinx.coroutines.launch
  * CameraX `ImageAnalysis` stream — see [BarcodeScanCamera]) wins clearly and is what this
  * implements: no shutter click and no flash burst once per second for as long as the user is
  * hunting for the label, no camera open/close cycle per attempt, a hit the instant the barcode
- * crosses the frame instead of up to a second later, and it is the access pattern ML Kit's barcode
+ * crosses the frame instead of up to a second later, and it is the access pattern a barcode scanner's
  * detector is designed around. The 720p resolution from the original sketch is kept.
  *
  * **What leaves the device.** A 2D code (QR, Data Matrix, Aztec, PDF417) carries its own payload,
@@ -95,7 +95,7 @@ import kotlinx.coroutines.launch
  * Can also be opened with a barcode already in hand (the `BARCODE_VALUE`/`BARCODE_FORMAT`/
  * `BARCODE_IS_2D` extras), which is how Media Describer's file mode reaches this screen: that host
  * has a still image and no live camera, so it runs a one-shot detect of its own and jumps straight
- * to the result — see [com.appricodes.lens_whisper.ui.models.MlkitButtonProvider].
+ * to the result — see [com.appricodes.lens_whisper.ui.models.BasicTasksButtonProvider].
  */
 class BarcodeScanActivity : ComponentActivity() {
 

@@ -56,7 +56,7 @@ fun ModelTopBar(
     onModelSelected: (String) -> Unit,
     showMoreMenuOpenCameraOption: Boolean = false,
     showMoreMenuVolumeKeyToggle: Boolean = false,
-    showMlkitOption: Boolean = true,
+    showBasicTasksOption: Boolean = true,
     showModelSelector: Boolean = true,
     showMoreButton: Boolean = true,
     /** Ends any repeating task (continuous mode, Light Level) — called by More and the model
@@ -87,7 +87,7 @@ fun ModelTopBar(
 
     fun refresh() {
         selectedModelName = when (currentSelectedModelId) {
-            "mlkit" -> "Basic tasks"
+            "basic_tasks" -> "Basic tasks"
             LocalServerFeature.MODEL_ID -> "Local Server"
             else -> offlineModelsRepository.loadModels().find { it.id == currentSelectedModelId }?.displayName ?: "No Model Selected"
         }
@@ -129,7 +129,7 @@ fun ModelTopBar(
                 selectedModelId = selectedModelId,
                 onModelSelected = { SpeechOutput.stop(context); onModelSelected(it); refresh() },
                 onOpenModelManager = { context.startActivity(Intent(context, ModelManagementActivity::class.java)) },
-                showMlkitOption = showMlkitOption
+                showBasicTasksOption = showBasicTasksOption
             )
         }
 
@@ -186,7 +186,7 @@ fun ModelTopBar(
                 prefs = prefs,
                 showOpenCameraOption = showMoreMenuOpenCameraOption,
                 selectedModelId = selectedModelId,
-                onModelDeleted = { onModelSelected("mlkit"); refresh() },
+                onModelDeleted = { onModelSelected("basic_tasks"); refresh() },
                 showVolumeKeyToggle = showMoreMenuVolumeKeyToggle
             )
         }
@@ -201,7 +201,7 @@ fun ModelTopBar(
  *
  * That seed only runs once, on first composition; it does not track later changes to the
  * preference. `ModelManagementActivity` (reached via this same top bar's "Manage Advanced Models")
- * writes `prefs.selectedModelId` directly — switching models, or falling back to `"mlkit"` when
+ * writes `prefs.selectedModelId` directly — switching models, or falling back to `"basic_tasks"` when
  * the currently-selected model gets deleted — while the calling screen is merely paused, not
  * destroyed, underneath it. Without this, returning to that screen leaves its `selectedModelId`
  * stale: the top bar's own [ModelTopBar] ON_RESUME `refresh()` above only recomputes the display

@@ -32,7 +32,7 @@ suspend fun runSelectedModelAnalysis(
     // Checked before anything else: if the phone is too hot, no on-device model should run
     // regardless of which one is selected or whether it's even downloaded — see ThermalGuard.
     // Never blocks the Local Server branch above (nothing runs on this phone for that path) or
-    // MLKit (which never reaches this function at all).
+    // Basic Tasks (which never reaches this function at all).
     ThermalGuard.blockingMessageOrNull(context)?.let { return "ERROR: $it" }
 
     val repository = OfflineModelsRepository(context)
@@ -75,8 +75,8 @@ private fun buildOfflinePrompt(prefs: PreferencesManager, model: OfflineModelInf
 
 /**
  * Streaming counterpart to [runSelectedModelAnalysis] - on-device models only (the Local Server
- * streams through its own path; MLKit never routes through here at all). Callers gate on
- * `prefs.selectedModelId` not being "mlkit"/"local_server" *before* calling this (see
+ * streams through its own path; Basic Tasks never routes through here at all). Callers gate on
+ * `prefs.selectedModelId` not being "basic_tasks"/"local_server" *before* calling this (see
  * `AnalysisSessionController.isOfflineVlmSelected`) — unlike the non-streaming function above, this
  * one throws on any setup problem (model missing, not downloaded, no images, device too hot)
  * rather than returning an "ERROR: ..." string, since a `Flow` has no natural place to encode that.

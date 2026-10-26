@@ -19,7 +19,7 @@ import com.appricodes.lens_whisper.ui.icons.GridIcon
  * Image" and "Explore and Describe" — a *different*, segmentation-based Explore (see
  * [com.appricodes.lens_whisper.SegmentationExploreActivity]'s describe-mode), not the dropped
  * grid-JSON one; both reuse [com.appricodes.lens_whisper.offline.OfflineSegmentationDetector] the
- * same way `MlkitButtonProvider`'s buttons do, feeding the isolated result to the selected on-device
+ * same way `BasicTasksButtonProvider`'s buttons do, feeding the isolated result to the selected on-device
  * model rather than just naming/coloring it. Long-pressing a custom slot starts voice recognition
  * targeting it — what's said becomes the slot's prompt (and runs immediately); silence clears it
  * back to "Custom N". Tapping a slot with a recorded prompt reruns it on a freshly captured image;

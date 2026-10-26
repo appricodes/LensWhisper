@@ -338,7 +338,7 @@ object OfflineInferenceEngine {
     private fun switchToBasicIfSelected(context: Context, modelId: String): Boolean {
         val prefs = PreferencesManager(context)
         if (prefs.selectedModelId != modelId) return false
-        prefs.selectedModelId = "mlkit"
+        prefs.selectedModelId = "basic_tasks"
         Log.i(TAG, "Switched to Basic tasks after $modelId failed to load")
         return true
     }
@@ -936,7 +936,7 @@ object OfflineInferenceEngine {
     }.flowOn(Dispatchers.IO)
 
     /** Releases the loaded model's resources — e.g. when the app backgrounds
-     *  ([registerMemoryPressureMonitor]) or the user switches to "mlkit"/Local Server, neither of
+     *  ([registerMemoryPressureMonitor]) or the user switches to "basic_tasks"/Local Server, neither of
      *  which needs an on-device engine resident. Not itself suspending (so it can be called from
      *  the non-suspend [onTrimMemory] callback below); fire-and-forget onto [engineScope]/[mutex]
      *  instead — see [releaseSuspending] for exactly what releasing does in each state. */

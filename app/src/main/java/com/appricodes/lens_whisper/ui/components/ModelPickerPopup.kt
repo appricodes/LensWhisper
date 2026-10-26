@@ -22,7 +22,7 @@ import kotlinx.coroutines.launch
 
 /**
  * Inline quick-switch dropdown anchored to [ModelTopBar]'s model name - replaces the old direct
- * navigation to `ModelManagementActivity` on tap. Lists MLKit and every catalog model (plus the
+ * navigation to `ModelManagementActivity` on tap. Lists Basic Tasks and every catalog model (plus the
  * Local Server, when [LocalServerFeature] is switched on, which it is not);
  * `ModelManagementActivity` remains the separate "manage downloads" destination (full
  * descriptions, delete, image-size setting) reached via this popup's "Manage models…" item.
@@ -42,12 +42,12 @@ fun ModelPickerPopup(
     /** Hides the Basic Tasks entry — currently unused (Basic Tasks is offered everywhere, including
      *  file-based screens, now that its buttons work from a loaded file/frame too), kept as an
      *  escape hatch rather than removed outright. */
-    showMlkitOption: Boolean = true
+    showBasicTasksOption: Boolean = true
 ) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val repository = remember { OfflineModelsRepository(context) }
-    // Repository already returns these smallest-first; this popup lists MLKit, then these
+    // Repository already returns these smallest-first; this popup lists Basic Tasks, then these
     // (small -> large), then Online last — same order as `ModelManagementActivity`.
     val offlineModels = remember { repository.loadModels() }
     var showLocalServerInfo by remember { mutableStateOf(false) }
@@ -63,13 +63,13 @@ fun ModelPickerPopup(
     }
 
     DropdownMenu(expanded = expanded, onDismissRequest = onDismiss) {
-        if (showMlkitOption) {
+        if (showBasicTasksOption) {
             DropdownMenuItem(
-                text = { Text("Basic tasks" + if (selectedModelId == "mlkit") " ✓" else "") },
-                // MLKit doesn't use OfflineInferenceEngine at all — whatever on-device VLM was
+                text = { Text("Basic tasks" + if (selectedModelId == "basic_tasks") " ✓" else "") },
+                // Basic Tasks doesn't use OfflineInferenceEngine at all — whatever on-device VLM was
                 // loaded has nothing left to do once this is selected, so free it right away
                 // rather than leaving it resident until something else happens to release it.
-                onClick = { onDismiss(); OfflineInferenceEngine.release(); onModelSelected("mlkit") }
+                onClick = { onDismiss(); OfflineInferenceEngine.release(); onModelSelected("basic_tasks") }
             )
         }
         offlineModels.forEach { model ->

@@ -134,13 +134,13 @@ class PreferencesManager(val context: Context) {
 		get() = standardPrefs.getBoolean("vibration_enabled", true)
 		set(value) = standardPrefs.edit().putBoolean("vibration_enabled", value).apply()
 
-	/** "mlkit", "local_server", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id].
+	/** "basic_tasks", "local_server", or an [com.appricodes.lens_whisper.domain.OfflineModelInfo.id].
 	 *  (The former "online" value belonged to a hosted backend that no longer exists.)
 	 *
 	 *  Read through [LocalServerFeature.sanitizeSelectedModelId] so a "local_server" selection
 	 *  stored by an older build can't keep selecting a model the user can no longer see. */
 	var selectedModelId: String
-		get() = LocalServerFeature.sanitizeSelectedModelId(standardPrefs.getString("selected_model_id", "mlkit") ?: "mlkit")
+		get() = LocalServerFeature.sanitizeSelectedModelId(standardPrefs.getString("selected_model_id", "basic_tasks") ?: "basic_tasks")
 		set(value) = standardPrefs.edit().putString("selected_model_id", value).apply()
 
 	/** How hard the model is asked to reason before answering — see

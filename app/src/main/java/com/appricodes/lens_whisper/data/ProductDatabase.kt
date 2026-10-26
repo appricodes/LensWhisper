@@ -82,7 +82,7 @@ object ProductDatabase {
             val code = barcode.trim()
             if (code.isEmpty() || !code.all { it.isDigit() }) return@withContext null
             val database = openIfPresent(context) ?: return@withContext null
-            // ML Kit reports a UPC-A barcode as 12 digits, while Open Food Facts commonly files the
+            // Some scanners report a UPC-A barcode as 12 digits, while Open Food Facts commonly files the
             // same product under its 13-digit EAN form (the same digits with a leading 0) — and the
             // reverse for a scanned EAN-13 that starts with 0. Try the code as scanned first, then
             // its other form.

@@ -46,7 +46,7 @@ class ModelLoadFailureDeviceTest {
 
     @After
     fun cleanUp() {
-        prefs.selectedModelId = "mlkit"
+        prefs.selectedModelId = "basic_tasks"
         OfflineModelsRepository.modelsDir(context)?.listFiles()?.filter { it.name.startsWith("loadtest_") }?.forEach { it.delete() }
     }
 
@@ -58,7 +58,7 @@ class ModelLoadFailureDeviceTest {
         val failure = failureFor(huge.id)
         assertTrue(failure.message, "isn't enough free memory" in failure.message)
         assertTrue(failure.switchedToBasic)
-        assertEquals("mlkit", prefs.selectedModelId)
+        assertEquals("basic_tasks", prefs.selectedModelId)
         assertNull(prefs.modelLoadInProgress)
     }
 
@@ -74,7 +74,7 @@ class ModelLoadFailureDeviceTest {
         ).awaitAll()
         val state = OfflineInferenceEngine.loadState.value
         assertTrue("$state", state is LoadState.Failed && state.modelId == huge.id && state.switchedToBasic)
-        assertEquals("mlkit", prefs.selectedModelId)
+        assertEquals("basic_tasks", prefs.selectedModelId)
     }
 
     @Test
@@ -86,7 +86,7 @@ class ModelLoadFailureDeviceTest {
         OfflineInferenceEngine.preload(context, broken)
         val failure = failureFor(broken.id)
         assertTrue(failure.switchedToBasic)
-        assertEquals("mlkit", prefs.selectedModelId)
+        assertEquals("basic_tasks", prefs.selectedModelId)
         assertNull(prefs.modelLoadInProgress)
 
         // Nothing of it stayed behind: a second model's load starts (and fails on its own) instead
@@ -97,6 +97,6 @@ class ModelLoadFailureDeviceTest {
         OfflineInferenceEngine.preload(context, second)
         val secondFailure = failureFor(second.id)
         assertFalse(secondFailure.message, "still loading" in secondFailure.message)
-        assertEquals("mlkit", prefs.selectedModelId)
+        assertEquals("basic_tasks", prefs.selectedModelId)
     }
 }

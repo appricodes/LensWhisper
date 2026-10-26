@@ -31,7 +31,7 @@ private const val TAG = "BarcodeScanCamera"
  *  markedly cheaper per frame than 1080p when every frame is being analyzed. */
 private val SCAN_RESOLUTION = Size(1280, 720)
 
-/** Floor on how often a frame is actually handed to ML Kit. `STRATEGY_KEEP_ONLY_LATEST` plus the
+/** Floor on how often a frame is actually handed to the decoder. `STRATEGY_KEEP_ONLY_LATEST` plus the
  *  detector's own latency already throttles this most of the way; this only stops a fast device
  *  from spending every drop of CPU (and battery, and heat — see [com.appricodes.lens_whisper.utils.ThermalGuard])
  *  on a scan that will not find anything new 8 milliseconds later. Well under the 1-second poll
@@ -47,7 +47,7 @@ private const val MIN_SCAN_INTERVAL_MS = 200L
  * `ImageAnalysis`. Two concrete incompatibilities, not just tidiness:
  * - Its analyzer closes the `ImageProxy` in a `finally` immediately after calling the sink. That is
  *   correct for the light meter (whose sink synchronously copies the Y plane out) and wrong here:
- *   ML Kit's `process()` is asynchronous and needs the underlying `Image` to stay valid until it
+ *   An asynchronous decoder and needs the underlying `Image` to stay valid until it
  *   completes.
  * - Its `rebind()` keys on `boundSignature = "$wantCapture|${sink != null}|..."`, which encodes
  *   neither *which kind* of sink is attached nor the analysis resolution (hardcoded to 32x32 for

@@ -67,7 +67,7 @@ import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
 import com.appricodes.lens_whisper.ui.components.ResyncSelectedModelOnResume
 import com.appricodes.lens_whisper.ui.icons.GridIcon
-import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
+import com.appricodes.lens_whisper.ui.models.BasicTasksButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.ui.theme.LensWhisperTheme
@@ -238,10 +238,10 @@ private fun CameraScreen(
 
     var flashEnabled by remember { mutableStateOf(prefs.flashEnabled) }
 
-    val mlkitProvider = remember {
-        MlkitButtonProvider(
+    val basicTasksProvider = remember {
+        BasicTasksButtonProvider(
             context, coroutineScope,
-            // allowFlash ANDs with the user's own setting rather than overriding it — MlkitButtonProvider
+            // allowFlash ANDs with the user's own setting rather than overriding it — BasicTasksButtonProvider
             // uses it to force the flash off after a continuous run's first frame; every other
             // caller always passes true, letting prefs.flashEnabled decide as normal.
             capturePhoto = { maxDim, highRes, allowFlash, correctOrientation, onShutter ->
@@ -251,7 +251,7 @@ private fun CameraScreen(
             }
         )
     }
-    mlkitProvider.ObserveContinuousLoop(prefs)
+    basicTasksProvider.ObserveContinuousLoop(prefs)
 
     var selectedModelId by remember { mutableStateOf(prefs.selectedModelId) }
     // See ResyncSelectedModelOnResume's own doc — without this, switching or deleting the selected
@@ -260,7 +260,7 @@ private fun CameraScreen(
     // preload effect) stuck on whatever was selected when this screen was first composed.
     ResyncSelectedModelOnResume(prefs) { selectedModelId = it }
     val (provider, selectedOfflineModel) = remember(selectedModelId) {
-        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
+        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, basicTasksProvider, offlineModels)
     }
     var volumeShortcutsEnabled by remember { mutableStateOf(prefs.volumeShortcutsEnabled) }
 
@@ -270,23 +270,23 @@ private fun CameraScreen(
     // Keyed on isLightActive, NOT on onAnalysisFrame: that property builds a fresh lambda on every
     // read, so using it as a key restarts this effect on every recomposition and rebinds the camera
     // in a loop.
-    LaunchedEffect(mlkitProvider.isLightActive) {
+    LaunchedEffect(basicTasksProvider.isLightActive) {
         // False only when Light Level just asked for the camera and was refused — leave the mode
         // rather than sit in it with no frames arriving.
-        if (!cameraController.setAnalysisFrameSink(lifecycleOwner, mlkitProvider.onAnalysisFrame)) {
-            mlkitProvider.stopActiveMode()
+        if (!cameraController.setAnalysisFrameSink(lifecycleOwner, basicTasksProvider.onAnalysisFrame)) {
+            basicTasksProvider.stopActiveMode()
         }
         activeCameraState = cameraController.activeCamera
     }
 
     // Continuous Objects/Text/Colour polls every couple of seconds; hold one session open for the
     // whole mode rather than reopening the camera on every tick.
-    LaunchedEffect(mlkitProvider.isContinuousActive) {
-        if (mlkitProvider.isContinuousActive) {
+    LaunchedEffect(basicTasksProvider.isContinuousActive) {
+        if (basicTasksProvider.isContinuousActive) {
             try {
                 cameraController.withCaptureSession(lifecycleOwner, prefs.flashEnabled) { awaitCancellation() }
             } catch (e: CameraPermissionDeniedException) {
-                mlkitProvider.stopActiveMode()
+                basicTasksProvider.stopActiveMode()
             }
         }
     }
@@ -294,14 +294,14 @@ private fun CameraScreen(
     AppLifecycleCameraHandler(
         context = context,
         lifecycleOwner = lifecycleOwner,
-        onPauseTasks = { mlkitProvider.stopContinuous() }
+        onPauseTasks = { basicTasksProvider.stopContinuous() }
     )
 
     // releaseAllCameras (above, on pause) unbinds use cases but leaves this controller's analyzer
     // executor thread alive; that only goes away with the screen itself.
     DisposableEffect(cameraController) { onDispose { cameraController.shutdown() } }
 
-    CameraExposureFlashHandler(activeLightMode = mlkitProvider.isLightActive, activeCamera = activeCameraState)
+    CameraExposureFlashHandler(activeLightMode = basicTasksProvider.isLightActive, activeCamera = activeCameraState)
 
     suspend fun captureSingleShot(config: PromptConfig): CapturedBundle? {
         requireCamera()
@@ -506,7 +506,7 @@ private fun CameraScreen(
         customPromptTitles = controller.customPromptTitles,
         onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
         onRepeat = {
-            if (selectedModelId == "mlkit") mlkitProvider.repeatLastAction()
+            if (selectedModelId == "basic_tasks") basicTasksProvider.repeatLastAction()
             else gate { controller.onRepeat(selectedModelId, captureFrames) }
         },
         onDescribeTv = { gate { coroutineScope.launch { runDescribeTv() } } },
@@ -521,7 +521,7 @@ private fun CameraScreen(
     // model, not whatever was selected the first time this composable ran.
     LaunchedEffect(selectedModelId) {
         onVoiceTriggerReady {
-            if (selectedModelId != "mlkit") {
+            if (selectedModelId != "basic_tasks") {
                 gate { controller.startVoiceRecognition(captureFrames = captureFrames) }
             }
         }
@@ -534,8 +534,8 @@ private fun CameraScreen(
         // pointing at null ("No previous action to repeat") or a stale prompt left over from
         // whichever model was selected before switching. Switching the physical camera (front/
         // back) never touches selectedModelId, so it deliberately does NOT reset this.
-        if (selectedModelId == "mlkit") {
-            mlkitProvider.resetRepeatToDefault(prefs)
+        if (selectedModelId == "basic_tasks") {
+            basicTasksProvider.resetRepeatToDefault(prefs)
         } else {
             settings.prompts.find { it.id == "brief_narration" }?.let { controller.seedDefaultPrompt(it) }
         }
@@ -544,7 +544,7 @@ private fun CameraScreen(
     var lastExitBackPressAt by remember { mutableStateOf(0L) }
     val activity = context as? Activity
     BackHandler {
-        if (selectedModelId == "mlkit" && mlkitProvider.stopActiveMode()) {
+        if (selectedModelId == "basic_tasks" && basicTasksProvider.stopActiveMode()) {
             AccessibilityUtils.announceToTalkBack(context, "Stopped.")
         } else {
             val now = System.currentTimeMillis()
@@ -564,12 +564,12 @@ private fun CameraScreen(
             controller = controller,
             selectedModelId = selectedModelId,
             onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id },
-            onStopRepeatingTask = { mlkitProvider.stopRepeatingTask() }
+            onStopRepeatingTask = { basicTasksProvider.stopRepeatingTask() }
         )
 
         val hasFlash = cameraController.hasFlashUnitForLens()
         val flashLabel = if (flashEnabled) "Flash: On" else "Flash: Off"
-        val micSupported = selectedModelId != "mlkit"
+        val micSupported = selectedModelId != "basic_tasks"
         val bottomRow = listOf(
             GridCell(
                 label = if (volumeShortcutsEnabled) "Vol Keys: On" else "Vol Keys: Off",
@@ -603,7 +603,7 @@ private fun CameraScreen(
                     else "$flashLabel. Double tap to toggle."
                 },
                 icon = if (flashEnabled) GridIcon.FLASH_ON else GridIcon.FLASH_OFF,
-                enabled = hasFlash && !mlkitProvider.isLightActive,
+                enabled = hasFlash && !basicTasksProvider.isLightActive,
                 onClick = {
                     val newState = !flashEnabled
                     flashEnabled = newState
@@ -643,7 +643,7 @@ private fun CameraScreen(
     // selection changes), rather than only lazily loading it the first time a button is pressed —
     // preload() is a quick no-op if it's already loaded (and joins a load already in progress), so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
-    // announcement. Not applicable to "mlkit" (Basic Models needs no in-memory model) or the Local
+    // announcement. Not applicable to "basic_tasks" (Basic Models needs no in-memory model) or the Local
     // Server (nothing here to preload — it runs on a separate machine) — switching to either now
     // releases whatever on-device engine was loaded, instead of leaving a 1-3GB+ model resident in
     // memory for the rest of the session with nothing left that will ever close it (confirmed
@@ -666,7 +666,7 @@ private fun CameraScreen(
     LaunchedEffect(selectedModelId) {
         controller.stopProcessingChime()
         controller.cancelActiveAnalysisAndJoin()
-        if (selectedModelId != "mlkit" && selectedModelId != LocalServerFeature.MODEL_ID) {
+        if (selectedModelId != "basic_tasks" && selectedModelId != LocalServerFeature.MODEL_ID) {
             offlineModels.find { it.id == selectedModelId }?.let { OfflineInferenceEngine.preload(context, it) }
         } else {
             OfflineInferenceEngine.releaseSuspending()

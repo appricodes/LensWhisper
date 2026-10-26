@@ -26,10 +26,13 @@ object LocalServerFeature {
 
     const val MODEL_ID = "local_server"
 
-    /** The model id to actually use — falls back to MLKit when a stored `"local_server"` selection
+    /** The model id to actually use — falls back to Basic Tasks when a stored `"local_server"` selection
      *  outlives the feature being switched off. */
-    fun sanitizeSelectedModelId(storedId: String): String =
-        if (storedId == MODEL_ID && !ENABLED) "mlkit" else storedId
+    fun sanitizeSelectedModelId(storedId: String): String = when {
+        storedId == MODEL_ID && !ENABLED -> "basic_tasks"
+        storedId == "mlkit" -> "basic_tasks" // the id older builds stored for Basic tasks
+        else -> storedId
+    }
 
     fun isSelectable(modelId: String): Boolean = modelId != MODEL_ID || ENABLED
 }

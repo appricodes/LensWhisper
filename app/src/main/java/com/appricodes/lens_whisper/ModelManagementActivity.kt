@@ -64,7 +64,7 @@ import com.appricodes.lens_whisper.utils.DeviceMemoryDetector
 import com.appricodes.lens_whisper.utils.OfflineImageSize
 import kotlinx.coroutines.launch
 
-/** Lets the user pick MLKit or an on-device catalog model (and, while
+/** Lets the user pick Basic Tasks or an on-device catalog model (and, while
  *  [LocalServerFeature] is switched on - it is not - the Local Server). */
 class ModelManagementActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -92,7 +92,7 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
     val repository = remember { OfflineModelsRepository(context) }
-    // Smallest-first, matching ModelPickerPopup - listed below MLKit.
+    // Smallest-first, matching ModelPickerPopup - listed below Basic Tasks.
     val offlineModels = remember { repository.loadModels() }
 
     var selectedId by remember { mutableStateOf(prefs.selectedModelId) }
@@ -111,10 +111,10 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
 
     val activeDownload = downloadState as? ModelDownloadState.Downloading
 
-    fun selectMlkit() {
+    fun selectBasicTasks() {
         SpeechOutput.stop(context)
-        prefs.selectedModelId = "mlkit"
-        selectedId = "mlkit"
+        prefs.selectedModelId = "basic_tasks"
+        selectedId = "basic_tasks"
         OfflineInferenceEngine.release()
         AccessibilityUtils.announceToTalkBack(context, "Basic tasks selected.")
     }
@@ -174,9 +174,9 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
             }
         }
 
-        // Order: MLKit (always available, no download) -> on-device catalog models, smallest to
+        // Order: Basic Tasks (always available, no download) -> on-device catalog models, smallest to
         // largest.
-        MlkitCard(isSelected = selectedId == "mlkit", onSelect = { selectMlkit() })
+        BasicTasksCard(isSelected = selectedId == "basic_tasks", onSelect = { selectBasicTasks() })
 
         // isDownloaded hits the filesystem (File.exists()/.length()), so it's memoized on
         // (model.id, downloadedVersion) rather than recomputed on every recomposition. It used
@@ -274,12 +274,12 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                 Button(onClick = {
                     val freedBytes = pending.sizeBytes
                     if (prefs.selectedModelId == pending.id) {
-                        // Falls back to MLKit, same as deleting the selected model via the More
+                        // Falls back to Basic Tasks, same as deleting the selected model via the More
                         // menu on the Camera screen — there's nothing sensible to keep it
                         // selected as once its file is gone.
                         OfflineInferenceEngine.release()
-                        prefs.selectedModelId = "mlkit"
-                        selectedId = "mlkit"
+                        prefs.selectedModelId = "basic_tasks"
+                        selectedId = "basic_tasks"
                     }
                     repository.deleteDownload(pending)
                     downloadedVersion++
@@ -322,8 +322,8 @@ private fun ModelManagementScreen(prefs: PreferencesManager, onClose: () -> Unit
                     coroutineScope.launch {
                         if (downloadedModels.any { it.id == prefs.selectedModelId }) {
                             OfflineInferenceEngine.release()
-                            prefs.selectedModelId = "mlkit"
-                            selectedId = "mlkit"
+                            prefs.selectedModelId = "basic_tasks"
+                            selectedId = "basic_tasks"
                         }
                         downloadedModels.forEach { repository.deleteDownload(it) }
                         downloadedVersion++
@@ -370,7 +370,7 @@ private fun SelectedLabel(name: String) {
 private fun Modifier.mergedInfoBlock(): Modifier = this.semantics(mergeDescendants = true) {}
 
 @Composable
-private fun MlkitCard(isSelected: Boolean, onSelect: () -> Unit) {
+private fun BasicTasksCard(isSelected: Boolean, onSelect: () -> Unit) {
     ModelCard {
         Column(modifier = Modifier.mergedInfoBlock(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(text = "Basic tasks", fontSize = 20.sp, fontWeight = FontWeight.Bold, modifier = Modifier.semantics { heading() })
@@ -451,7 +451,7 @@ private fun OfflineModelCard(
             if (isDownloaded) {
                 if (isSelected) SelectedLabel(model.displayName) else Button(onClick = onSelect) { Text("Select") }
                 // Deleting the currently-selected model is allowed — the caller falls back the
-                // selection to MLKit afterward (see ModelManagementScreen's delete handler).
+                // selection to Basic Tasks afterward (see ModelManagementScreen's delete handler).
                 OutlinedButton(onClick = onDelete) { Text("Delete") }
             } else {
                 Button(onClick = onDownload, enabled = !downloadingOtherModel && !isDownloadingThis) { Text("Download") }

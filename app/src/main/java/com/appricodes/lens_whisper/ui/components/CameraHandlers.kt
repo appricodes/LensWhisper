@@ -19,7 +19,7 @@ import androidx.lifecycle.LifecycleOwner
  * since [CameraController] only binds for the duration of a capture or a live analysis feed,
  * there is nothing to restore — the next button press opens the camera itself.
  *
- * [onPauseTasks] is where the screen stops anything that was holding the camera open (MLKit's
+ * [onPauseTasks] is where the screen stops anything that was holding the camera open (Basic Tasks'
  * continuous/light modes), and it runs *before* the release so those stop cleanly rather than
  * having the feed pulled out from under them.
  */
@@ -45,7 +45,7 @@ fun AppLifecycleCameraHandler(
 }
 
 /**
- * Applies MLKit Light Level mode's exposure setup to the live analysis feed. Only meaningful while
+ * Applies Basic Tasks Light Level mode's exposure setup to the live analysis feed. Only meaningful while
  * that mode holds the camera open — [activeCamera] is null the rest of the time, which is now the
  * normal case, and this then does nothing.
  */

@@ -53,7 +53,7 @@ import com.appricodes.lens_whisper.ui.components.ModelLoadingObserver
 import com.appricodes.lens_whisper.ui.components.ModelTopBar
 import com.appricodes.lens_whisper.ui.components.ResyncSelectedModelOnResume
 import com.appricodes.lens_whisper.ui.icons.GridIcon
-import com.appricodes.lens_whisper.ui.models.MlkitButtonProvider
+import com.appricodes.lens_whisper.ui.models.BasicTasksButtonProvider
 import com.appricodes.lens_whisper.ui.models.ModelButtonContext
 import com.appricodes.lens_whisper.ui.models.ModelButtonProviderRegistry
 import com.appricodes.lens_whisper.utils.AccessibilityUtils
@@ -82,7 +82,7 @@ private const val MAX_FILE_IMAGE_DIM = 4000
  * button work here too, sourcing from the already-loaded image or the current video frame in
  * place of a fresh camera photo (see [captureFileFrame]/`captureFrames`/`captureMaxResPairFromFile`
  * below) — except Light Level Meter and Simple Color Detection, which stay camera-only (see
- * [MlkitButtonProvider]'s `hasLiveCamera`). The bottom row shows video transport controls +
+ * [BasicTasksButtonProvider]'s `hasLiveCamera`). The bottom row shows video transport controls +
  * Microphone instead of camera-switch/flash (there's no live camera here, and those two stay
  * unavailable in file mode by simply never being offered — see [buildBottomRow]). The button grid
  * is fully transparent — the user watches the media undisturbed; touching the screen lets TalkBack
@@ -227,19 +227,19 @@ fun MediaDescriberScreen(
             frames
         }
 
-    // MlkitButtonProvider's own capturePhoto shape — (maxDim, highRes, onShutter) -> Bitmap — asks
+    // BasicTasksButtonProvider's own capturePhoto shape — (maxDim, highRes, onShutter) -> Bitmap — asks
     // only for "hand me a bitmap", so the exact same shape a live camera satisfies with a fresh
     // capture is satisfied here with the already-loaded image or the current video frame instead;
-    // every button MlkitButtonProvider builds around it (Detect Objects, Identify Objects and
+    // every button BasicTasksButtonProvider builds around it (Detect Objects, Identify Objects and
     // Colors, Explore Photo by Touch, Read Text, Read Document) then needs no changes of its own to
     // work from a file. `highRes` is ignored — there's no separate higher-fidelity source to ask
-    // for here, unlike a live camera's sensor (see MlkitButtonProvider's own doc) — the file/frame's
+    // for here, unlike a live camera's sensor (see BasicTasksButtonProvider's own doc) — the file/frame's
     // own resolution, capped at maxDim, is already the best available. Throws (rather than
     // returning null) when there's genuinely nothing to capture, matching capturePhoto's own
-    // non-nullable Bitmap contract — MlkitButtonProvider already treats any thrown exception here as
+    // non-nullable Bitmap contract — BasicTasksButtonProvider already treats any thrown exception here as
     // "Could not capture photo."
     // allowFlash is meaningless here — no live sensor/flash to fire in file mode — so it's just
-    // ignored; see MlkitButtonProvider's doc for what it's for on CameraActivity's own capturePhoto.
+    // ignored; see BasicTasksButtonProvider's doc for what it's for on CameraActivity's own capturePhoto.
     // correctOrientation is likewise ignored — there's no live sensor to correct from in file mode,
     // and a loaded photo/video frame is already handed to the model exactly as decoded (see this
     // screen's own image-loading doc for why that's the right behavior here regardless).
@@ -261,10 +261,10 @@ fun MediaDescriberScreen(
         withContext(Dispatchers.Default) { ImageScaling.scaleToMax(source, maxDim) }
     }
 
-    val mlkitProvider = remember {
-        MlkitButtonProvider(context, coroutineScope, capturePhoto = captureFileFrame, hasLiveCamera = false)
+    val basicTasksProvider = remember {
+        BasicTasksButtonProvider(context, coroutineScope, capturePhoto = captureFileFrame, hasLiveCamera = false)
     }
-    mlkitProvider.ObserveContinuousLoop(prefs)
+    basicTasksProvider.ObserveContinuousLoop(prefs)
     // Mirrors CameraActivity's identical pairing of ObserveContinuousLoop with a pause handler —
     // continuous Read Text must stop polling once this screen backgrounds, same as it does there.
     // Reusing the "camera" handler here is harmless despite this screen having no camera of its own
@@ -273,11 +273,11 @@ fun MediaDescriberScreen(
     AppLifecycleCameraHandler(
         context = context,
         lifecycleOwner = lifecycleOwner,
-        onPauseTasks = { mlkitProvider.stopContinuous() }
+        onPauseTasks = { basicTasksProvider.stopContinuous() }
     )
 
     val (provider, selectedOfflineModel) = remember(selectedModelId) {
-        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, mlkitProvider, offlineModels)
+        ModelButtonProviderRegistry.forSelectedModel(selectedModelId, basicTasksProvider, offlineModels)
     }
     fun gate(action: () -> Unit) = controller.gateForSelectedModel(selectedModelId, selectedOfflineModel, action)
 
@@ -423,11 +423,11 @@ fun MediaDescriberScreen(
         customPromptTexts = controller.customPromptTexts,
         customPromptTitles = controller.customPromptTitles,
         onRunPrompt = { config, label -> gate { controller.runAnalysis(config, label, captureFrames) } },
-        // Basic Tasks (mlkit) tracks its own repeat target (MlkitButtonProvider.lastRepeatableAction,
+        // Basic Tasks (basic_tasks) tracks its own repeat target (BasicTasksButtonProvider.lastRepeatableAction,
         // set by selectSingleShot — its buttons never go through onRunPrompt/controller.lastPrompt
         // at all), same branching as CameraActivity's identical onRepeat.
         onRepeat = {
-            if (selectedModelId == "mlkit") mlkitProvider.repeatLastAction()
+            if (selectedModelId == "basic_tasks") basicTasksProvider.repeatLastAction()
             else gate { controller.onRepeat(selectedModelId, captureFrames) }
         },
         onDescribeTv = { gate { coroutineScope.launch { runDescribeTvFromFile() } } },
@@ -453,8 +453,8 @@ fun MediaDescriberScreen(
 
         // Seeds a sensible Repeat/headset-shortcut default on every model switch (and on the very
         // first composition, i.e. opening a file fresh) — see the identical note in CameraActivity.
-        if (selectedModelId == "mlkit") {
-            mlkitProvider.resetRepeatToDefault(prefs)
+        if (selectedModelId == "basic_tasks") {
+            basicTasksProvider.resetRepeatToDefault(prefs)
         } else {
             settings.prompts.find { it.id == "brief_narration" }?.let { controller.seedDefaultPrompt(it) }
         }
@@ -496,7 +496,7 @@ fun MediaDescriberScreen(
                 onModelSelected = { id -> prefs.selectedModelId = id; selectedModelId = id },
                 showMoreMenuOpenCameraOption = true,
                 showMoreMenuVolumeKeyToggle = true,
-                onStopRepeatingTask = { mlkitProvider.stopRepeatingTask() },
+                onStopRepeatingTask = { basicTasksProvider.stopRepeatingTask() },
                 backgroundColor = Color.Black.copy(alpha = 0.55f)
             )
             ActionButtonGrid(rows = provider.rows(ctx) + listOf(bottomRow), transparent = true, modifier = Modifier.weight(1f))
@@ -525,7 +525,7 @@ fun MediaDescriberScreen(
     // selection changes), rather than only lazily loading it the first time a button is pressed —
     // preload() is a quick no-op if it's already loaded (and joins a load already in progress), so this is cheap to re-run.
     // ModelLoadingObserver above turns this into both the visual dialog and the spoken
-    // announcement. Not applicable to "mlkit" (Basic Tasks needs no in-memory model) or the Local
+    // announcement. Not applicable to "basic_tasks" (Basic Tasks needs no in-memory model) or the Local
     // Server (nothing here to preload — it runs on a separate machine) — switching to either now
     // releases whatever on-device engine was loaded, see CameraActivity's identical LaunchedEffect
     // for why (OfflineInferenceEngine.release's doc has the on-device-confirmed OOM story).
@@ -539,7 +539,7 @@ fun MediaDescriberScreen(
     LaunchedEffect(selectedModelId) {
         controller.stopProcessingChime()
         controller.cancelActiveAnalysisAndJoin()
-        if (selectedModelId != "mlkit" && selectedModelId != LocalServerFeature.MODEL_ID) {
+        if (selectedModelId != "basic_tasks" && selectedModelId != LocalServerFeature.MODEL_ID) {
             offlineModels.find { it.id == selectedModelId }?.let { OfflineInferenceEngine.preload(context, it) }
         } else {
             OfflineInferenceEngine.releaseSuspending()
