@@ -16,7 +16,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.onClick
+import androidx.compose.ui.semantics.onLongClick
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.appricodes.lens_whisper.ui.icons.GridIcon
@@ -39,6 +43,8 @@ data class GridCell(
     val label: String,
     val contentDescription: String = label,
     val enabled: Boolean = true,
+    /** Draw greyed-out but stay tappable (the tap should explain why it does nothing). */
+    val dimmed: Boolean = false,
     val icon: GridIcon? = null,
     val onClick: (() -> Unit)? = null,
     val onLongClick: (() -> Unit)? = null,
@@ -80,11 +86,23 @@ fun ActionButtonGrid(
                             onLongClick = cell.onLongClick?.let { longClick -> { SpeechOutput.stop(context); longClick() } }
                         )
                         else -> cellModifier
-                    }.clearAndSetSemantics { contentDescription = cell.contentDescription }
+                    }.clearAndSetSemantics {
+                        contentDescription = cell.contentDescription
+                        // clearAndSetSemantics wipes the click semantics combinedClickable adds, which
+                        // left every cell invisible to accessibility-service based UI testers (Play
+                        // review flagged "unresponsive buttons"). Re-declare them explicitly.
+                        if (cell.customModifier == null && cell.enabled && (cell.onClick != null || cell.onLongClick != null)) {
+                            role = Role.Button
+                            onClick {
+                                SpeechOutput.stop(context); cell.onClick?.invoke(); true
+                            }
+                            cell.onLongClick?.let { lc -> onLongClick { SpeechOutput.stop(context); lc(); true } }
+                        }
+                    }
 
                     Box(modifier = finalModifier, contentAlignment = Alignment.Center) {
                         if (!transparent) {
-                            val tint = if (cell.enabled) Color.White else Color.Gray
+                            val tint = if (cell.enabled && !cell.dimmed) Color.White else Color.Gray
                             if (cell.icon != null) {
                                 GridIconGlyph(icon = cell.icon, tint = tint, modifier = Modifier.size(ICON_SIZE))
                             } else {

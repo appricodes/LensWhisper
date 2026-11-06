@@ -615,8 +615,13 @@ private fun CameraScreen(
                 label = "Microphone",
                 contentDescription = if (micSupported) "Microphone. Ask a question about what the camera sees." else "Microphone. Not available — Basic Models doesn't support custom questions.",
                 icon = GridIcon.MICROPHONE,
-                enabled = micSupported,
-                onClick = { gate { controller.startVoiceRecognition(captureFrames = captureFrames) } }
+                dimmed = !micSupported,
+                onClick = {
+                    if (!micSupported) {
+                        AccessibilityUtils.announceToTalkBack(context, "Microphone is not available in Basic tasks. Choose another model to ask questions.")
+                        Toast.makeText(context, "Microphone is not available in Basic tasks", Toast.LENGTH_SHORT).show()
+                    } else gate { controller.startVoiceRecognition(captureFrames = captureFrames) }
+                }
             )
         )
 
