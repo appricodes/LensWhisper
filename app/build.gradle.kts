@@ -40,8 +40,8 @@ android {
         applicationId = "com.appricodes.lens_whisper"
         minSdk = 26
         targetSdk = 36
-        versionCode = 17
-        versionName = "1.16"
+        versionCode = 18
+        versionName = "1.17"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
@@ -92,6 +92,8 @@ dependencies {
     implementation(libs.androidx.camera.camera2)
     implementation(libs.androidx.camera.lifecycle)
     implementation(libs.androidx.camera.view)
+    // camera-view drags in appcompat 1.1.0 -> fragment 1.1.0, which Play flags as outdated.
+    implementation("androidx.fragment:fragment:1.8.9")
     implementation(libs.androidx.media)
 
     // (EncryptedSharedPreferences used to live here. Its only two consumers were the signed-in
