@@ -19,3 +19,13 @@
 # If you keep the line number information, uncomment this to
 # hide the original source file name.
 #-renamesourcefileattribute SourceFile
+# Native libraries look up Java classes/methods/fields by name through JNI — R8 must not rename
+# or strip anything they (or the JNI callbacks defined by them) touch.
+-keep class com.google.ai.edge.litertlm.** { *; }
+-keep interface com.google.ai.edge.litertlm.** { *; }
+-keep class com.google.ai.edge.litert.** { *; }
+-keep class org.tensorflow.lite.** { *; }
+-keep class ai.onnxruntime.** { *; }
+-keep class zxingcpp.** { *; }
+-keepclasseswithmembernames class * { native <methods>; }
+-dontwarn com.google.ai.edge.**
