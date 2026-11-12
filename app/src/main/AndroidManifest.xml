@@ -98,6 +98,12 @@
             android:theme="@style/Theme.LensWhisper" />
 
         <activity
+            android:name=".ReliefExploreActivity"
+            android:exported="false"
+            android:label="Feel Image Relief"
+            android:theme="@style/Theme.LensWhisper" />
+
+        <activity
             android:name=".BarcodeScanActivity"
             android:exported="false"
             android:label="Scan Barcode"

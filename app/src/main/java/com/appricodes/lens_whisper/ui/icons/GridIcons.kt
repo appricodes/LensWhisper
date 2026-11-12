@@ -23,7 +23,7 @@ import androidx.compose.ui.graphics.drawscope.Stroke
  */
 enum class GridIcon {
     DETECT_OBJECTS, IDENTIFY_OBJECTS_COLORS, EXPLORE,
-    LIGHT_METER, SIMPLE_COLOR, SCAN_BARCODE,
+    LIGHT_METER, SIMPLE_COLOR, SCAN_BARCODE, RELIEF,
     BRIEF_NARRATION, DETAILED_SCENE, PEOPLE_OUTFIT, DESCRIBE_TV, OBJECTS, CUSTOM_PROMPT,
     VOLUME_KEYS, SWITCH_CAMERA, FLASH_ON, FLASH_OFF, MICROPHONE,
     REWIND, PLAY, PAUSE, FAST_FORWARD
@@ -180,6 +180,24 @@ private fun DrawScope.drawGridIcon(icon: GridIcon, tint: Color) {
         GridIcon.SCAN_BARCODE -> {
             viewfinderCorners(tint, stroke)
             barcodeBars(tint, strokeWidth)
+        }
+
+        // A bump-and-hollow profile line over a flat baseline, with a fingertip dot resting on
+        // the bump: "feel the shape of the picture".
+        GridIcon.RELIEF -> {
+            val profile = Path().apply {
+                fun c(x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float) {
+                    val p1 = pt(x1, y1); val p2 = pt(x2, y2); val p3 = pt(x3, y3)
+                    cubicTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y)
+                }
+                moveTo(pt(2f, 15f).x, pt(2f, 15f).y)
+                c(5f, 15f, 5.5f, 7f, 8.3f, 7f)      // up the bump
+                c(11f, 7f, 11.5f, 19f, 15.5f, 19f)  // down into the hollow
+                c(19f, 19f, 19.5f, 15f, 22f, 15f)   // back to level
+            }
+            drawPath(profile, tint, style = stroke)
+            strokeLine(tint, strokeWidth, 2f, 21.5f, 22f, 21.5f, alpha = 0.5f)
+            drawCircle(tint, radius = len(1.8f), center = pt(8.3f, 4f))
         }
 
         GridIcon.BRIEF_NARRATION -> {

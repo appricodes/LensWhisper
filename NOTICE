@@ -21,5 +21,15 @@ app/src/main/assets/models/yolov8m_seg_int8.tflite
         from ultralytics import YOLO
         YOLO("yolov8m-seg.pt").export(format="tflite", int8=True, data="coco128-seg.yaml")
 
+app/src/main/assets/models/depth_anything_v2_small_wi8.tflite
+    Depth Anything V2 Small (https://huggingface.co/depth-anything/Depth-Anything-V2-Small),
+    licensed under Apache-2.0. Taken from Qualcomm AI Hub's float TFLite export
+    (https://huggingface.co/qualcomm/Depth-Anything-V2, release v0.66.0), then weight-only
+    int8-quantized with Google's ai-edge-quantizer:
+        from ai_edge_quantizer import quantizer, recipe
+        q = quantizer.Quantizer("depth_anything_v2.tflite")
+        q.load_quantization_recipe(recipe.dynamic_wi8_afp32())
+        q.quantize().export_model("depth_anything_v2_small_wi8.tflite")
+
 The on-device vision-language models (Gemma 4, InternVL3.5, Qwen2-VL) are not part of this repository;
 the app downloads them from Hugging Face at the user's request, each under its own licence.

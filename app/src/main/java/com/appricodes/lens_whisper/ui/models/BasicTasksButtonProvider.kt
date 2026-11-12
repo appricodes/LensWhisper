@@ -11,6 +11,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import com.appricodes.lens_whisper.BarcodeScanActivity
+import com.appricodes.lens_whisper.ReliefExploreActivity
 import com.appricodes.lens_whisper.SegmentationExploreActivity
 import com.appricodes.lens_whisper.data.PreferencesManager
 import com.appricodes.lens_whisper.offline.DetectedInstance
@@ -320,7 +321,17 @@ class BasicTasksButtonProvider(
      * both from here and from the on-device VLM catalog's "Explore and Describe" (the older,
      * VLM-driven grid-JSON Explore was removed 2026-09-01).
      */
-    private fun launchSegmentationExplore() {
+    private fun launchSegmentationExplore() = launchWithCapturedPhoto(SegmentationExploreActivity::class.java, correctOrientation = false)
+
+    /**
+     * "Feel Image Relief": the same capture-and-hand-over as [launchSegmentationExplore], opening
+     * [ReliefExploreActivity] instead, which estimates depth and plays local relief as vibration.
+     * correctOrientation = true here — the depth model does noticeably worse on a sideways scene,
+     * and the relief screen rotates picture and map together for display itself.
+     */
+    private fun launchReliefExplore() = launchWithCapturedPhoto(ReliefExploreActivity::class.java, correctOrientation = true)
+
+    private fun launchWithCapturedPhoto(target: Class<*>, correctOrientation: Boolean) {
         if (isBusy) {
             announceBusy()
             return
@@ -336,7 +347,7 @@ class BasicTasksButtonProvider(
                     // Not a text task, so the usual 720p (highRes = false). correctOrientation =
                     // false — Explore sends the image to the model exactly as taken, see
                     // capturePhoto's own doc.
-                    capture(MAX_CAPTURE_DIMENSION, false, true, false) {}
+                    capture(MAX_CAPTURE_DIMENSION, false, true, correctOrientation) {}
                 } catch (e: CancellationException) {
                     throw e
                 } catch (e: Exception) {
@@ -349,7 +360,7 @@ class BasicTasksButtonProvider(
                     Uri.fromFile(file)
                 }
                 context.startActivity(
-                    Intent(context, SegmentationExploreActivity::class.java)
+                    Intent(context, target)
                         .putExtra("IMAGE_URI", uri.toString())
                 )
             } finally {
@@ -525,7 +536,12 @@ class BasicTasksButtonProvider(
                     icon = GridIcon.SCAN_BARCODE,
                     onClick = { launchBarcodeScan() }
                 ),
-                null,
+                GridCell(
+                    label = "Feel Image Relief",
+                    contentDescription = "Feel image relief. Opens the picture full screen and estimates its bumps and hollows — move your finger over it: stronger vibration means raised, weaker means recessed.",
+                    icon = GridIcon.RELIEF,
+                    onClick = { launchReliefExplore() }
+                ),
                 null
             ),
             listOf(null, null, null, null)
