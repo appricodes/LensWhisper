@@ -20,6 +20,10 @@ import androidx.camera.core.Camera
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.semantics.clearAndSetSemantics
+import androidx.compose.runtime.collectAsState
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
@@ -575,6 +579,7 @@ private fun CameraScreen(
                 label = if (volumeShortcutsEnabled) "Vol Keys: On" else "Vol Keys: Off",
                 contentDescription = "Volume key shortcuts are ${if (volumeShortcutsEnabled) "on" else "off"}. Double tap to toggle.",
                 icon = GridIcon.VOLUME_KEYS,
+                dimmed = !volumeShortcutsEnabled,
                 onClick = {
                     val newState = !volumeShortcutsEnabled
                     prefs.volumeShortcutsEnabled = newState
@@ -636,6 +641,7 @@ private fun CameraScreen(
         val lastRow = allRows.takeLast(1)
 
         ActionButtonGrid(rows = mainRows, modifier = Modifier.weight(mainRows.size.toFloat()))
+        SpokenCaption()
         DisclaimerSummaryStrip(onClick = { showDisclaimerReadOnly = true })
         ActionButtonGrid(rows = lastRow, modifier = Modifier.weight(lastRow.size.toFloat()))
     }
@@ -709,5 +715,28 @@ private fun DisclaimerSummaryStrip(onClick: () -> Unit) {
             .background(Color(0xFF2A2A2A))
             .clickable { SpeechOutput.stop(context); onClick() }
             .padding(horizontal = 12.dp, vertical = 8.dp)
+    )
+}
+
+/**
+ * Visible copy of whatever the app last said (see [SpeechOutput.lastSpoken]), so a sighted person
+ * sees each button respond. Hidden from accessibility services: it has already been spoken, and
+ * exposing it would make TalkBack read it a second time.
+ */
+@Composable
+private fun SpokenCaption() {
+    val text by SpeechOutput.lastSpoken.collectAsState()
+    Text(
+        text = text,
+        color = Color.White,
+        fontSize = 15.sp,
+        textAlign = TextAlign.Center,
+        maxLines = 3,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .heightIn(min = 48.dp)
+            .padding(horizontal = 12.dp, vertical = 6.dp)
+            .clearAndSetSemantics { }
     )
 }

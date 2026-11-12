@@ -58,9 +58,17 @@ object SpeechOutput {
     private val playing = HashSet<String>()
     private val speaking = MutableStateFlow(false)
 
+    /**
+     * The last thing the app said, mirrored on screen as a caption so every button gives visible
+     * feedback too — Play's reviewers (sound off, no TalkBack, no camera feed) twice rejected the
+     * app as having "unresponsive buttons" because the only response was spoken.
+     */
+    val lastSpoken = MutableStateFlow("")
+
     /** Says [text] after whatever is already being said. */
     fun speak(context: Context, text: String) {
         if (text.isBlank()) return
+        lastSpoken.value = text
         val engine = PreferencesManager(context).speechEngine
         if (engine == TALKBACK) {
             announceThroughTalkBack(context, text)
